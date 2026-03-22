@@ -1,19 +1,17 @@
 // Core entry point — wires together all subsystems
+// Registers on window.__tpl for IIFE-based loading (WKWebView doesn't support file:// ESM)
 
-export { IS_MAC, IS_NODE, platform } from './platform/index.js'
-export { Plugin } from './plugin/plugin.js'
-export type { PluginManifest, LoadingStrategy } from './plugin/manifest.js'
-export { PluginManager } from './plugin/manager.js'
-export { PluginSettings } from './plugin/settings.js'
-export { EventBus } from './plugin/events.js'
-export { editor } from './editor/api.js'
-export { HotkeyManager } from './hotkey/manager.js'
-
-import { platform } from './platform/index.js'
+import { IS_MAC, IS_NODE, platform } from './platform/index.js'
+import { Plugin } from './plugin/plugin.js'
+import type { PluginManifest, LoadingStrategy } from './plugin/manifest.js'
 import { PluginManager } from './plugin/manager.js'
+import { PluginSettings } from './plugin/settings.js'
 import { EventBus } from './plugin/events.js'
-import { HotkeyManager } from './hotkey/manager.js'
 import { editor } from './editor/api.js'
+import { HotkeyManager } from './hotkey/manager.js'
+
+export { IS_MAC, IS_NODE, platform, Plugin, PluginManager, PluginSettings, EventBus, editor, HotkeyManager }
+export type { PluginManifest, LoadingStrategy }
 
 export interface TplApp {
   platform: typeof platform
@@ -33,7 +31,10 @@ export function getApp(): TplApp {
 export async function bootstrap(): Promise<TplApp> {
   if (_app) return _app
 
-  console.log('[tpl] bootstrapping core...')
+  const TAG = '[tpl:core]'
+  console.log(TAG, 'bootstrapping...')
+  console.log(TAG, 'platform:', IS_MAC ? 'macOS (WKWebView)' : 'Win/Linux (Electron)')
+  console.log(TAG, 'pluginsDir:', platform.pluginsDir)
 
   const events = new EventBus()
   const hotkeys = new HotkeyManager()
@@ -44,6 +45,19 @@ export async function bootstrap(): Promise<TplApp> {
   // Scan and load startup plugins
   await plugins.scanAndLoad()
 
-  console.log('[tpl] core ready')
+  console.log(TAG, 'ready — loaded plugins:', plugins.getManifests().map(m => m.id))
   return _app
+}
+
+// Register on window for IIFE access
+// Plugins access core via window.__tpl.core
+const coreExports = {
+  IS_MAC, IS_NODE, platform, Plugin, PluginManager, PluginSettings,
+  EventBus, editor, HotkeyManager, getApp, bootstrap,
+}
+;(window as any).__tpl = {
+  ...((window as any).__tpl || {}),
+  bootstrap,
+  getApp,
+  core: coreExports,
 }

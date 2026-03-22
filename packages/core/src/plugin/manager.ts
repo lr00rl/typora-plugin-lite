@@ -116,22 +116,44 @@ export class PluginManager {
     }
   }
 
-  /** Dynamically import and instantiate a plugin. */
+  /**
+   * Load a plugin by injecting a <script> tag.
+   * The plugin script registers its class on window.__tpl.pluginClasses[id].
+   * WKWebView blocks file:// ESM import(), so we use <script> injection.
+   */
   async loadPlugin(id: string): Promise<void> {
     const entry = this.plugins.get(id)
     if (!entry || entry.loaded || entry.loading) return
 
     entry.loading = true
+    const TAG = '[tpl:manager]'
     const mainFile = entry.manifest.main ?? 'main.js'
-    const pluginUrl = `${this.platform.pluginsDir}/plugins/${id}/${mainFile}`
+
+    // Build file:// URL with %20 for spaces
+    const pluginPath = `${this.platform.pluginsDir}/plugins/${id}/${mainFile}`
+    const pluginUrl = 'file://' + pluginPath.replace(/ /g, '%20')
 
     try {
-      console.log(`[tpl] loading plugin: ${id}`)
-      const mod = await import(/* webpackIgnore: true */ pluginUrl)
-      const PluginClass = mod.default ?? mod[Object.keys(mod)[0]]
+      console.log(TAG, `loading plugin: ${id} from ${pluginUrl}`)
+
+      // Load via <script> tag
+      await new Promise<void>((resolve, reject) => {
+        const s = document.createElement('script')
+        s.src = pluginUrl
+        s.onload = () => resolve()
+        s.onerror = (e) => reject(new Error(`Failed to load script: ${pluginUrl}`))
+        document.head.appendChild(s)
+      })
+
+      // Plugin IIFE should have registered its class on window.__tpl.pluginClasses
+      const registry = (window as any).__tpl?.pluginClasses
+      const PluginClass = registry?.[id]
 
       if (!PluginClass || typeof PluginClass !== 'function') {
-        throw new Error(`Plugin ${id} does not export a class`)
+        throw new Error(
+          `Plugin ${id} script loaded but class not registered. ` +
+          `Expected window.__tpl.pluginClasses["${id}"] to be set.`
+        )
       }
 
       const instance: Plugin = new PluginClass()
@@ -143,9 +165,9 @@ export class PluginManager {
       entry.instance = instance
       entry.loaded = true
       this.events.emit('plugin:loaded', id)
-      console.log(`[tpl] plugin loaded: ${id}`)
+      console.log(TAG, `plugin loaded: ${id}`)
     } catch (err) {
-      console.error(`[tpl] failed to load plugin ${id}:`, err)
+      console.error(TAG, `failed to load plugin ${id}:`, err)
     } finally {
       entry.loading = false
     }

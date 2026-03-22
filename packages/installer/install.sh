@@ -43,7 +43,7 @@ check_typora() {
 script_tag() {
   local escaped_dir
   escaped_dir=$(printf '%s' "$PLUGINS_DIR" | sed 's/ /%20/g')
-  echo "<script src=\"file://${escaped_dir}/loader.js\" type=\"module\"></script>"
+  echo "<script src=\"file://${escaped_dir}/loader.js\"></script>"
 }
 
 inject_script() {
