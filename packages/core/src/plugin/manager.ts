@@ -199,4 +199,14 @@ export class PluginManager {
   isLoaded(id: string): boolean {
     return this.plugins.get(id)?.loaded ?? false
   }
+
+  /** Enable (load) a plugin by id. */
+  async enablePlugin(id: string): Promise<void> {
+    await this.loadPlugin(id)
+  }
+
+  /** Disable (unload) a plugin by id. */
+  disablePlugin(id: string): void {
+    this.unloadPlugin(id)
+  }
 }
