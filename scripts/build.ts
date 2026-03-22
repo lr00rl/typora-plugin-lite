@@ -1,5 +1,5 @@
 import * as esbuild from 'esbuild'
-import { readdirSync, existsSync } from 'node:fs'
+import { readdirSync, existsSync, copyFileSync, mkdirSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
 const ROOT = resolve(import.meta.dirname, '..')
@@ -108,6 +108,15 @@ async function build() {
       esbuild.build(coreConfig),
       ...pluginConfigs.map(c => esbuild.build(c)),
     ])
+    // Copy plugin manifests to dist
+    for (const p of pluginEntries) {
+      const src = join(PLUGINS_DIR, p.name, 'manifest.json')
+      if (existsSync(src)) {
+        const destDir = join(DIST, 'plugins', p.name)
+        mkdirSync(destDir, { recursive: true })
+        copyFileSync(src, join(destDir, 'manifest.json'))
+      }
+    }
     console.log(`Built loader + core + ${pluginEntries.length} plugins`)
   }
 }
