@@ -24,10 +24,32 @@ function normalizeHotkey(key: string): string {
       if (p === 'mod') return IS_MAC ? 'meta' : 'ctrl'
       if (p === 'cmd' || p === 'command') return 'meta'
       if (p === 'option') return 'alt'
+      // Normalize key name aliases (e.g. "ArrowUp" → "up")
+      if (p === 'arrowup') return 'up'
+      if (p === 'arrowdown') return 'down'
+      if (p === 'arrowleft') return 'left'
+      if (p === 'arrowright') return 'right'
       return p
     })
     .sort()
     .join('+')
+}
+
+/**
+ * Map KeyboardEvent.key values to canonical names.
+ * e.key returns things like " " for space, "ArrowUp" for up arrow, etc.
+ */
+const KEY_NAME_MAP: Record<string, string> = {
+  ' ': 'space',
+  'arrowup': 'up',
+  'arrowdown': 'down',
+  'arrowleft': 'left',
+  'arrowright': 'right',
+  'escape': 'escape',
+  'enter': 'enter',
+  'backspace': 'backspace',
+  'delete': 'delete',
+  'tab': 'tab',
 }
 
 /** Build the normalized key from a KeyboardEvent. */
@@ -39,8 +61,9 @@ function eventToNormalized(e: KeyboardEvent): string {
   if (e.shiftKey) parts.push('shift')
 
   // Exclude modifier-only keys
-  const keyName = e.key.toLowerCase()
-  if (!['meta', 'control', 'alt', 'shift'].includes(keyName)) {
+  const rawKey = e.key.toLowerCase()
+  if (!['meta', 'control', 'alt', 'shift'].includes(rawKey)) {
+    const keyName = KEY_NAME_MAP[rawKey] ?? rawKey
     parts.push(keyName)
   }
 
@@ -70,6 +93,10 @@ export class HotkeyManager {
 
   private handleKeydown = (e: KeyboardEvent): void => {
     const normalized = eventToNormalized(e)
+    // Debug: log key combos with modifiers to help diagnose issues
+    if (e.metaKey || e.ctrlKey) {
+      console.debug('[tpl:hotkey]', `key="${e.key}" normalized="${normalized}"`, this.bindings.has(normalized) ? '→ MATCH' : '')
+    }
     const binding = this.bindings.get(normalized)
     if (binding) {
       e.preventDefault()

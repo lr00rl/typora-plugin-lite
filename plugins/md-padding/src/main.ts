@@ -3,6 +3,7 @@ import { padMarkdown } from './pangu.js'
 
 export default class MdPaddingPlugin extends Plugin {
   onload(): void {
+    console.log('[tpl:md-padding] onload, registering Mod+Shift+Space')
     this.registerHotkey('Mod+Shift+Space', () => this.formatDocument())
 
     this.registerCommand({
@@ -13,14 +14,25 @@ export default class MdPaddingPlugin extends Plugin {
   }
 
   private formatDocument(): void {
-    const markdown = editor.getMarkdown()
-    const formatted = padMarkdown(markdown)
+    console.log('[tpl:md-padding] formatDocument triggered')
+    try {
+      const markdown = editor.getMarkdown()
+      if (!markdown) {
+        this.showNotice('Cannot read document content')
+        console.warn('[tpl:md-padding] getMarkdown returned empty')
+        return
+      }
+      const formatted = padMarkdown(markdown)
 
-    if (formatted !== markdown) {
-      editor.setMarkdown(formatted)
-      this.showNotice('Pangu spacing applied')
-    } else {
-      this.showNotice('No changes needed')
+      if (formatted !== markdown) {
+        editor.setMarkdown(formatted)
+        this.showNotice('Pangu spacing applied')
+      } else {
+        this.showNotice('No changes needed')
+      }
+    } catch (err) {
+      console.error('[tpl:md-padding] format error:', err)
+      this.showNotice('Format error — check console')
     }
   }
 }

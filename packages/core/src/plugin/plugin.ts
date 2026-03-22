@@ -95,5 +95,30 @@ export abstract class Plugin<T extends Record<string, unknown> = Record<string, 
 
   showNotice(msg: string, duration = 3000): void {
     this.app.events.emit('ui:notice', { msg, duration, pluginId: this.manifest.id })
+    // Direct DOM toast as fallback (until UI runtime is built in Phase 2)
+    const toast = document.createElement('div')
+    toast.textContent = msg
+    Object.assign(toast.style, {
+      position: 'fixed',
+      bottom: '20px',
+      left: '50%',
+      transform: 'translateX(-50%)',
+      padding: '8px 20px',
+      background: 'rgba(0,0,0,0.75)',
+      color: '#fff',
+      borderRadius: '6px',
+      fontSize: '13px',
+      fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
+      zIndex: '99999',
+      transition: 'opacity 0.3s',
+      opacity: '0',
+      pointerEvents: 'none',
+    })
+    document.body.appendChild(toast)
+    requestAnimationFrame(() => { toast.style.opacity = '1' })
+    setTimeout(() => {
+      toast.style.opacity = '0'
+      setTimeout(() => toast.remove(), 300)
+    }, duration)
   }
 }

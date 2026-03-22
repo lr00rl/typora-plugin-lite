@@ -47,8 +47,42 @@ export async function bootstrap(): Promise<TplApp> {
   // Scan and load startup plugins
   await plugins.scanAndLoad()
 
-  console.log(TAG, 'ready — loaded plugins:', plugins.getManifests().map(m => m.id))
+  const loadedIds = plugins.getManifests().filter(m => plugins.isLoaded(m.id)).map(m => m.id)
+  console.log(TAG, 'ready — loaded plugins:', loadedIds)
+
+  // Visual feedback: brief toast so user knows tpl loaded
+  showLoadedToast(loadedIds.length)
+
   return _app
+}
+
+/** Show a brief visual toast indicating tpl loaded successfully. */
+function showLoadedToast(pluginCount: number): void {
+  const toast = document.createElement('div')
+  toast.textContent = `tpl: ${pluginCount} plugin${pluginCount !== 1 ? 's' : ''} loaded`
+  Object.assign(toast.style, {
+    position: 'fixed',
+    bottom: '20px',
+    right: '20px',
+    padding: '8px 16px',
+    background: 'rgba(0,0,0,0.7)',
+    color: '#fff',
+    borderRadius: '6px',
+    fontSize: '13px',
+    fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
+    zIndex: '99999',
+    transition: 'opacity 0.3s',
+    opacity: '0',
+    pointerEvents: 'none',
+  })
+  document.body.appendChild(toast)
+  // Fade in
+  requestAnimationFrame(() => { toast.style.opacity = '1' })
+  // Fade out and remove after 3s
+  setTimeout(() => {
+    toast.style.opacity = '0'
+    setTimeout(() => toast.remove(), 300)
+  }, 3000)
 }
 
 // Register on window for IIFE access

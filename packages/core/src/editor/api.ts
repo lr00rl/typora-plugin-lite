@@ -11,19 +11,34 @@ export const editor = {
   /** Get the current markdown content of the document. */
   getMarkdown(): string {
     const ed = getEditor()
-    if (ed) return ed.getMarkdown()
+    if (ed?.getMarkdown) {
+      return ed.getMarkdown()
+    }
     // Fallback: try nodeMap
-    return ed?.nodeMap?.toMark?.() ?? ''
+    if (ed?.nodeMap?.toMark) {
+      return ed.nodeMap.toMark()
+    }
+    console.warn('[tpl:editor] getMarkdown: no editor or method available', {
+      hasFile: !!(window as any).File,
+      hasEditor: !!ed,
+      editorKeys: ed ? Object.keys(ed).slice(0, 10) : [],
+    })
+    return ''
   },
 
   /**
    * Replace the entire document markdown content.
-   * Uses File.reloadContent which handles undo history.
+   * Uses File.reloadContent(markdown, skipUndo, delayRefresh, fromDiskChange, skipStore).
+   * Signature from typora-community-plugin types.
    */
   setMarkdown(content: string): void {
     const f = (window as any).File
     if (f?.reloadContent) {
-      f.reloadContent(content, { skipStore: false })
+      // reloadContent(md, skipUndo=false, delayRefresh=true, fromDiskChange=false, skipStore=true)
+      // Match typora-community-plugin's proven call pattern
+      f.reloadContent(content, false, true, false, true)
+    } else {
+      console.warn('[tpl:editor] File.reloadContent not available')
     }
   },
 
