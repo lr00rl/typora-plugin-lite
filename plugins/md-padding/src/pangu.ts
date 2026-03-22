@@ -104,7 +104,8 @@ export function padMarkdown(markdown: string): string {
  */
 function spacingLineProtected(line: string): string {
   // Match inline code, images, links, and auto-links — order matters (images before links)
-  const PROTECTED = /(`[^`]*`|!\[[^\]]*\]\([^)]*\)|\[[^\]]*\]\([^)]*\)|<https?:\/\/[^>]+>)/g
+  const PROTECTED =
+    /(`[^`]*`|!\[[^\]]*\]\((?:[^()]*|\([^()]*\))*\)|\[[^\]]*\]\((?:[^()]*|\([^()]*\))*\)|<https?:\/\/[^>]+>)/g
 
   const tokens: string[] = []
   let lastIndex = 0

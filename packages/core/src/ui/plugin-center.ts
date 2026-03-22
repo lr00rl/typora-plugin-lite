@@ -127,7 +127,6 @@ export class PluginCenterPanel {
     if (loading.hotkey?.length) {
       return loading.hotkey.map(k => this.formatHotkey(k)).join(' / ')
     }
-    if (loading.command?.length) return loading.command.join(', ')
     if (loading.event?.length) return loading.event.join(', ')
     return ''
   }

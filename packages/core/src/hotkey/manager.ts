@@ -97,9 +97,10 @@ export class HotkeyManager {
     const target = e.target as HTMLElement | null
     if (target) {
       const tag = target.tagName
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+      const insideWrite = !!target.closest('#write')
+      if ((tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') && !insideWrite) return
       // Allow contenteditable only for #write (Typora's main editor)
-      if (target.isContentEditable && target.id !== 'write' && !target.closest('#write')) return
+      if (target.isContentEditable && target.id !== 'write' && !insideWrite) return
     }
 
     const normalized = eventToNormalized(e)

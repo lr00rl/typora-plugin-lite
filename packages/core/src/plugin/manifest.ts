@@ -7,8 +7,6 @@ export interface LoadingStrategy {
   startup?: boolean
   /** Load on first matching event */
   event?: string[]
-  /** Load on command palette invocation */
-  command?: string[]
   /** Load on first keypress of hotkey */
   hotkey?: string[]
 }

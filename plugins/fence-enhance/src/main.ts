@@ -53,9 +53,16 @@ const CSS = `
 
 export default class FenceEnhancePlugin extends Plugin {
   private observer: MutationObserver | null = null
+  private copyButtons = new Set<HTMLElement>()
 
   onload(): void {
     this.registerCss(CSS)
+    this.addDisposable(() => {
+      for (const btn of this.copyButtons) {
+        btn.remove()
+      }
+      this.copyButtons.clear()
+    })
 
     // Process existing fences
     this.processAllFences()
@@ -100,6 +107,7 @@ export default class FenceEnhancePlugin extends Plugin {
       this.copyFenceContent(fence, btn)
     })
     fence.appendChild(btn)
+    this.copyButtons.add(btn)
   }
 
   private copyFenceContent(fence: HTMLElement, btn: HTMLElement): void {
@@ -117,8 +125,10 @@ export default class FenceEnhancePlugin extends Plugin {
         .join('\n')
     } else {
       // Fallback
-      const codeEl = fence.querySelector('code') ?? fence.querySelector('pre')
-      text = codeEl?.textContent ?? fence.textContent ?? ''
+      const clone = fence.cloneNode(true) as HTMLElement
+      clone.querySelectorAll('.tpl-fence-copy').forEach(btn => btn.remove())
+      const codeEl = clone.querySelector('code') ?? clone.querySelector('pre')
+      text = codeEl?.textContent ?? clone.textContent ?? ''
     }
 
     navigator.clipboard.writeText(text.trimEnd()).then(() => {

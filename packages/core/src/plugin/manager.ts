@@ -90,8 +90,9 @@ export class PluginManager {
     if (loading.event?.length) {
       for (const event of loading.event) {
         const lazyHandler = (...args: unknown[]) => {
-          this.events.off(event, lazyHandler)
-          this.loadPlugin(manifest.id).then(() => {
+          this.loadPlugin(manifest.id).then((loaded) => {
+            if (!loaded) return
+            this.events.off(event, lazyHandler)
             // Replay the triggering event after load
             this.events.emit(event, ...args)
           })
@@ -100,25 +101,13 @@ export class PluginManager {
       }
     }
 
-    // Command-based lazy loading
-    if (loading.command?.length) {
-      for (const cmd of loading.command) {
-        const lazyHandler = () => {
-          this.events.off(`command:execute:${cmd}`, lazyHandler)
-          this.loadPlugin(manifest.id).then(() => {
-            this.events.emit(`command:execute:${cmd}`)
-          })
-        }
-        this.events.on(`command:execute:${cmd}`, lazyHandler)
-      }
-    }
-
     // Hotkey-based lazy loading
     if (loading.hotkey?.length) {
       for (const key of loading.hotkey) {
         const lazyHandler = () => {
-          this.hotkeys.unregister(key)
-          this.loadPlugin(manifest.id).then(() => {
+          this.loadPlugin(manifest.id).then((loaded) => {
+            if (!loaded) return
+            this.hotkeys.unregister(key)
             // The plugin's onload will re-register the hotkey with its real handler
           })
         }
@@ -132,9 +121,11 @@ export class PluginManager {
    * The plugin script registers its class on window.__tpl.pluginClasses[id].
    * WKWebView blocks file:// ESM import(), so we use <script> injection.
    */
-  async loadPlugin(id: string): Promise<void> {
+  async loadPlugin(id: string): Promise<boolean> {
     const entry = this.plugins.get(id)
-    if (!entry || entry.loaded || entry.loading) return
+    if (!entry) return false
+    if (entry.loaded) return true
+    if (entry.loading) return false
 
     entry.loading = true
     const TAG = '[tpl:manager]'
@@ -177,8 +168,10 @@ export class PluginManager {
       entry.loaded = true
       this.events.emit('plugin:loaded', id)
       console.log(TAG, `plugin loaded: ${id}`)
+      return true
     } catch (err) {
       console.error(TAG, `failed to load plugin ${id}:`, err)
+      return false
     } finally {
       entry.loading = false
     }
