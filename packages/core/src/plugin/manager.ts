@@ -129,9 +129,9 @@ export class PluginManager {
     const TAG = '[tpl:manager]'
     const mainFile = entry.manifest.main ?? 'main.js'
 
-    // Build file:// URL with %20 for spaces
-    const pluginPath = `${this.platform.pluginsDir}/plugins/${id}/${mainFile}`
-    const pluginUrl = 'file://' + pluginPath.replace(/ /g, '%20')
+    // Use baseUrl (the file:// URL set by loader) for script tag src
+    // This is a relative-to-HTML URL that WKWebView trusts
+    const pluginUrl = `${this.platform.baseUrl}/plugins/${id}/${mainFile}`
 
     try {
       console.log(TAG, `loading plugin: ${id} from ${pluginUrl}`)

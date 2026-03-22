@@ -34,7 +34,9 @@ export async function bootstrap(): Promise<TplApp> {
   const TAG = '[tpl:core]'
   console.log(TAG, 'bootstrapping...')
   console.log(TAG, 'platform:', IS_MAC ? 'macOS (WKWebView)' : 'Win/Linux (Electron)')
+  console.log(TAG, 'baseUrl:', platform.baseUrl)
   console.log(TAG, 'pluginsDir:', platform.pluginsDir)
+  console.log(TAG, 'dataDir:', platform.dataDir)
 
   const events = new EventBus()
   const hotkeys = new HotkeyManager()

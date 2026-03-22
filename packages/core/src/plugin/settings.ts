@@ -1,6 +1,7 @@
 /**
  * Per-plugin JSON-backed settings.
- * Stored at <pluginsDir>/data/<pluginId>/settings.json
+ * Stored at <dataDir>/<pluginId>/settings.json
+ * (dataDir is in ~/Library/... so it survives Typora updates)
  */
 
 import type { Platform } from '../platform/index.js'
@@ -16,7 +17,7 @@ export class PluginSettings<T extends Record<string, unknown> = Record<string, u
   ) {
     this.data = { ...defaults }
     this.filePath = platform.path.join(
-      platform.pluginsDir, 'data', pluginId, 'settings.json',
+      platform.dataDir, pluginId, 'settings.json',
     )
   }
 
