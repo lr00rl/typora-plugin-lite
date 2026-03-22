@@ -60,8 +60,6 @@ export class DarwinFS implements IFileSystem {
   }
 
   writeText(filepath: string, text: string): Promise<void> {
-    // Use heredoc-style to handle multi-line text safely
-    const escaped = text.replace(/\\/g, '\\\\').replace(/'/g, "'\\''")
     return shell.run(`printf '%s' ${shell.escape(text)} > ${shell.escape(filepath)}`) as Promise<any>
   }
 

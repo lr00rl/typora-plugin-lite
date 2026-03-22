@@ -6,9 +6,11 @@
   "scripts": {
     "build": "tsx scripts/build.ts",
     "build:watch": "tsx scripts/build.ts --watch",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@types/node": "^25.5.0",
     "esbuild": "^0.25.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"

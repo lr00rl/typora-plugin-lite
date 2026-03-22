@@ -24,14 +24,13 @@ interface FileConstructorExtensions {
   filePath?: string
   useCRLF?: boolean
   option: { headingStyle: number }
-  reloadContent: (value: string, options?: {
-    skipUndo?: boolean
-    delayRefresh?: boolean
-    fromDiskChange?: boolean
-    skipChangeCount?: boolean
-    onInit?: boolean
-    skipStore?: boolean
-  }) => void
+  reloadContent: (
+    value: string,
+    skipUndo?: boolean,
+    delayRefresh?: boolean,
+    fromDiskChange?: boolean,
+    skipStore?: boolean,
+  ) => void
   isLinux: boolean
   isMac: boolean
   isMacNode: boolean

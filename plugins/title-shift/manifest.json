@@ -6,6 +6,6 @@
   "main": "main.js",
   "loading": {
     "startup": false,
-    "command": ["title-shift:increase", "title-shift:decrease"]
+    "hotkey": ["Mod+Shift+Up", "Mod+Shift+Down"]
   }
 }

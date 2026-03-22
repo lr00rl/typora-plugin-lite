@@ -92,11 +92,17 @@ export class HotkeyManager {
   }
 
   private handleKeydown = (e: KeyboardEvent): void => {
-    const normalized = eventToNormalized(e)
-    // Debug: log key combos with modifiers to help diagnose issues
-    if (e.metaKey || e.ctrlKey) {
-      console.debug('[tpl:hotkey]', `key="${e.key}" normalized="${normalized}"`, this.bindings.has(normalized) ? '→ MATCH' : '')
+    // Skip when focus is in native input/textarea or contenteditable elements
+    // that aren't the main Typora #write area, to avoid stealing native shortcuts
+    const target = e.target as HTMLElement | null
+    if (target) {
+      const tag = target.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+      // Allow contenteditable only for #write (Typora's main editor)
+      if (target.isContentEditable && target.id !== 'write' && !target.closest('#write')) return
     }
+
+    const normalized = eventToNormalized(e)
     const binding = this.bindings.get(normalized)
     if (binding) {
       e.preventDefault()

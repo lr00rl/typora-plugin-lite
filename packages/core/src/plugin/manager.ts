@@ -39,7 +39,7 @@ export class PluginManager {
 
   /** Scan plugins directory for manifest.json files, register lazy triggers, then load startup plugins. */
   async scanAndLoad(): Promise<void> {
-    const pluginsDir = this.platform.path.join(this.platform.pluginsDir, 'plugins')
+    const pluginsDir = this.platform.pluginsDir
     let dirs: string[]
     try {
       dirs = await this.platform.fs.list(pluginsDir)
@@ -70,6 +70,17 @@ export class PluginManager {
 
   /** Register a plugin manifest and set up lazy loading triggers. */
   private registerPlugin(manifest: PluginManifest): void {
+    // Validate required fields
+    if (!manifest.id || !manifest.name || !manifest.version || !manifest.loading) {
+      console.error(`[tpl] invalid manifest: missing required fields (id, name, version, loading)`, manifest)
+      return
+    }
+    // Reject duplicate IDs
+    if (this.plugins.has(manifest.id)) {
+      console.error(`[tpl] duplicate plugin id "${manifest.id}", skipping`)
+      return
+    }
+
     const entry: PluginEntry = { manifest, instance: null, loaded: false, loading: false }
     this.plugins.set(manifest.id, entry)
 

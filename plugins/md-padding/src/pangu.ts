@@ -62,7 +62,6 @@ export function padMarkdown(markdown: string): string {
   const result: string[] = []
   let inFencedBlock = false
   let inFrontmatter = false
-  let frontmatterEnded = false
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
@@ -76,7 +75,6 @@ export function padMarkdown(markdown: string): string {
     if (inFrontmatter) {
       if (line.trim() === '---') {
         inFrontmatter = false
-        frontmatterEnded = true
       }
       result.push(line)
       continue
@@ -101,17 +99,33 @@ export function padMarkdown(markdown: string): string {
 }
 
 /**
- * Apply spacing to a line while protecting inline code (`...`) and links [...](...)
+ * Apply spacing to a line while protecting inline code, links, and images.
+ * Protected tokens: `code`, [text](url), ![alt](url), <url>
  */
 function spacingLineProtected(line: string): string {
-  // Split by inline code spans and process only outside parts
-  const parts = line.split(/(`[^`]*`)/)
-  return parts
-    .map((part, i) => {
-      // Odd indices are inline code — leave unchanged
-      if (i % 2 === 1) return part
-      // Even indices are regular text — apply pangu spacing
-      return spacingLine(part)
-    })
-    .join('')
+  // Match inline code, images, links, and auto-links — order matters (images before links)
+  const PROTECTED = /(`[^`]*`|!\[[^\]]*\]\([^)]*\)|\[[^\]]*\]\([^)]*\)|<https?:\/\/[^>]+>)/g
+
+  const tokens: string[] = []
+  let lastIndex = 0
+  const result: string[] = []
+
+  let match: RegExpExecArray | null
+  while ((match = PROTECTED.exec(line)) !== null) {
+    // Process text before this token
+    if (match.index > lastIndex) {
+      result.push(spacingLine(line.slice(lastIndex, match.index)))
+    }
+    // Preserve the protected token as-is
+    tokens.push(match[0])
+    result.push(match[0])
+    lastIndex = PROTECTED.lastIndex
+  }
+
+  // Process remaining text after last token
+  if (lastIndex < line.length) {
+    result.push(spacingLine(line.slice(lastIndex)))
+  }
+
+  return result.join('')
 }

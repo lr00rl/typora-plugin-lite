@@ -50,6 +50,6 @@ export class PluginSettings<T extends Record<string, unknown> = Record<string, u
   }
 
   getAll(): Readonly<T> {
-    return this.data
+    return structuredClone(this.data)
   }
 }

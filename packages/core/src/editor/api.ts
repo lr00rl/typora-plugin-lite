@@ -32,10 +32,8 @@ export const editor = {
    * Signature from typora-community-plugin types.
    */
   setMarkdown(content: string): void {
-    const f = (window as any).File
+    const f = window.File
     if (f?.reloadContent) {
-      // reloadContent(md, skipUndo=false, delayRefresh=true, fromDiskChange=false, skipStore=true)
-      // Match typora-community-plugin's proven call pattern
       f.reloadContent(content, false, true, false, true)
     } else {
       console.warn('[tpl:editor] File.reloadContent not available')
@@ -74,15 +72,21 @@ export const editor = {
     return getEditor()?.library?.watchedFolder
   },
 
-  /** Open a file by path. */
-  openFile(filepath: string): Promise<void> {
-    return new Promise<void>((resolve) => {
+  /** Open a file by path. Times out after 10s if callback not invoked. */
+  openFile(filepath: string, timeout = 10_000): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
       const lib = getEditor()?.library
-      if (lib?.openFile) {
-        lib.openFile(filepath, resolve)
-      } else {
-        resolve()
+      if (!lib?.openFile) {
+        reject(new Error('[tpl:editor] library.openFile not available'))
+        return
       }
+      const timer = setTimeout(() => {
+        reject(new Error(`[tpl:editor] openFile timed out for: ${filepath}`))
+      }, timeout)
+      lib.openFile(filepath, () => {
+        clearTimeout(timer)
+        resolve()
+      })
     })
   },
 
