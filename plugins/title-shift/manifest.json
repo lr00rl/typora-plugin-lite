@@ -1,0 +1,11 @@
+{
+  "id": "title-shift",
+  "name": "Title Shift",
+  "version": "0.1.0",
+  "description": "Increase or decrease heading levels",
+  "main": "main.js",
+  "loading": {
+    "startup": false,
+    "command": ["title-shift:increase", "title-shift:decrease"]
+  }
+}

@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.DS_Store
+
+# Reference/learning projects (not part of tpl)
+typora_plugin/
+typora-community-plugin/
+typora-copilot/
+awesome_repos_and_analysis.md

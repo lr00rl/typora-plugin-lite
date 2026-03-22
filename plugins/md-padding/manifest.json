@@ -1,0 +1,10 @@
+{
+  "id": "md-padding",
+  "name": "Markdown Padding",
+  "version": "0.1.0",
+  "description": "Auto-insert spaces between CJK and half-width characters (pangu spacing)",
+  "main": "main.js",
+  "loading": {
+    "startup": true
+  }
+}
