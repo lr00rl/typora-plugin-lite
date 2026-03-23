@@ -1,0 +1,10 @@
+{
+  "name": "@typora-plugin-lite/plugin-fuzzy-search",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/main.ts",
+  "dependencies": {
+    "@typora-plugin-lite/core": "workspace:*"
+  }
+}

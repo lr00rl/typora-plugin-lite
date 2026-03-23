@@ -108,7 +108,8 @@ export class PluginManager {
           this.loadPlugin(manifest.id).then((loaded) => {
             if (!loaded) return
             this.hotkeys.unregister(key)
-            // The plugin's onload will re-register the hotkey with its real handler
+            // Re-fire the hotkey so the plugin's own handler (registered in onload) runs
+            this.hotkeys.trigger(key)
           })
         }
         this.hotkeys.register(key, lazyHandler)

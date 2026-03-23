@@ -116,6 +116,19 @@ export class HotkeyManager {
     }
   }
 
+  /** Programmatically fire a hotkey binding (used after lazy loading). */
+  trigger(key: string): void {
+    const normalized = normalizeHotkey(key)
+    const binding = this.bindings.get(normalized)
+    if (binding) {
+      try {
+        binding.callback()
+      } catch (err) {
+        console.error(`[tpl] hotkey trigger error for "${binding.key}":`, err)
+      }
+    }
+  }
+
   /** Tear down the global listener. */
   destroy(): void {
     document.removeEventListener('keydown', this.handleKeydown, true)
