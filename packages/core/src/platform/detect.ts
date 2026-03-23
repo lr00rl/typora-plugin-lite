@@ -29,16 +29,18 @@ export function getBaseUrl(): string {
 }
 
 /**
- * Get the filesystem path to the tpl directory.
- * On macOS: derived from baseUrl (strip file:// prefix, decode %20).
+ * Get the filesystem path to the plugins directory.
+ * On macOS: derived from baseUrl → /path/to/tpl/plugins.
  * On Win/Linux: use _options.userPath + /plugins.
+ * Both platforms return the directory that contains plugin subdirectories.
  */
 export function getPluginsDir(): string {
   if (IS_MAC) {
     const baseUrl = getBaseUrl()
     if (baseUrl) {
-      // Convert file:///path/to/tpl → /path/to/tpl
-      return decodeURIComponent(baseUrl.replace(/^file:\/\//, ''))
+      // Convert file:///path/to/tpl → /path/to/tpl/plugins
+      const tplDir = decodeURIComponent(baseUrl.replace(/^file:\/\//, ''))
+      return `${tplDir}/plugins`
     }
     return ''
   }

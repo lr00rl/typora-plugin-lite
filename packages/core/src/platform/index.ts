@@ -21,7 +21,7 @@ export interface Platform {
   fs: IFileSystem
   shell: IShell
   path: IPath
-  /** Filesystem path to TypeMark/tpl/ (where loader/core/plugins live) */
+  /** Filesystem path to the plugins directory (contains plugin subdirectories) */
   pluginsDir: string
   /** URL form of pluginsDir (for <script> tag injection) */
   baseUrl: string
