@@ -53,11 +53,20 @@ export function getPluginsDir(): string {
  * Settings, caches, indices go here.
  */
 export function getDataDir(): string {
+  const userPath = (window as any)._options?.userPath ?? ''
   if (IS_MAC) {
     const home = getHomedir()
-    return `${home}/Library/Application Support/abnerworks.Typora/plugins/data`
+    if (userPath && home && userPath !== home) {
+      return `${userPath}/plugins/data`
+    }
+    if (home) {
+      return `${home}/Library/Application Support/abnerworks.Typora/plugins/data`
+    }
+    if (userPath) {
+      return `${userPath}/plugins/data`
+    }
+    return '/tmp/Library/Application Support/abnerworks.Typora/plugins/data'
   }
-  const userPath = (window as any)._options?.userPath ?? ''
   return userPath ? `${userPath}/plugins/data` : ''
 }
 
@@ -65,6 +74,19 @@ export function getHomedir(): string {
   if (IS_NODE) {
     const os = window.reqnode?.('os') as any
     return os?.homedir?.() ?? ''
+  }
+  const candidates = [
+    (window as any).File?.getMountFolder?.(),
+    (window as any).File?.bundle?.filePath,
+    (window as any).File?.filePath,
+    (window as any).File?.editor?.library?.watchedFolder,
+    (window as any)._options?.mountFolder,
+    (window as any)._options?.userPath,
+  ].filter((value): value is string => typeof value === 'string' && !!value)
+
+  for (const candidate of candidates) {
+    const match = candidate.match(/^(\/Users\/[^/]+)/)
+    if (match) return match[1]
   }
   // macOS: derive from baseUrl path
   const baseUrl = getBaseUrl()

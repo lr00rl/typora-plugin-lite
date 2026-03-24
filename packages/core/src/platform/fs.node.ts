@@ -4,6 +4,7 @@
  */
 
 import type { IFileSystem, FileStats, WalkOptions } from './filesystem.js'
+const TAG = '[tpl:fs:node]'
 
 export class NodeFS implements IFileSystem {
   private get _fs() {
@@ -45,6 +46,7 @@ export class NodeFS implements IFileSystem {
     const maxFiles = opts.maxFiles ?? 5000
     const results: string[] = []
     const path = window.reqnode!('path') as typeof import('node:path')
+    console.log(TAG, 'walkDir:start', { dirpath, exts, ignore: [...ignoreSet], maxDepth, maxFiles })
 
     const walk = async (dir: string, depth: number): Promise<void> => {
       if (depth > maxDepth || results.length >= maxFiles) return
@@ -67,6 +69,7 @@ export class NodeFS implements IFileSystem {
     }
 
     await walk(dirpath, 0)
+    console.log(TAG, 'walkDir:done', { dirpath, count: results.length, sample: results.slice(0, 20) })
     return results
   }
 

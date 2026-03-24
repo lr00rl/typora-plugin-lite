@@ -6,6 +6,14 @@ interface FileEntry {
   basename: string
 }
 
+interface LibraryIndexStats {
+  totalNodes: number
+  dirCount: number
+  fileCount: number
+  fetchedDirCount: number
+  unfetchedDirs: string[]
+}
+
 const MD_EXTS = ['.md', '.markdown']
 const MD_EXT_SET = new Set(MD_EXTS)
 const MAX_MRU = 30
@@ -13,6 +21,8 @@ const HOTKEY = 'Mod+.'
 const DEBOUNCE_MS = 150
 const INDEX_TTL_MS = 60_000
 const IGNORED_DIRS = ['.git', 'node_modules', '.obsidian', '.trash', '.Trash', '_archive']
+const TAG = '[tpl:quick-open]'
+const DEBUG_SAMPLE_LIMIT = 20
 
 // ---------------------------------------------------------------------------
 // FZF-inspired scoring (ported from fzf.nvim behavior)
@@ -192,25 +202,112 @@ export default class QuickOpenPlugin extends Plugin {
   private overlay: HTMLElement | null = null
   private inputEl: HTMLInputElement | null = null
   private listEl: HTMLElement | null = null
-  /** All searchable files (MRU + siblings + vault index) */
+  /** All searchable files (MRU + current dir + workspace index) */
   private allFiles: FileEntry[] = []
   private filtered: FileEntry[] = []
   private selectedIdx = 0
   private modalCleanups: Array<() => void> = []
   private debounceTimer: ReturnType<typeof setTimeout> | null = null
+  private currentQuery = ''
 
   /** Cached full vault index */
   private vaultIndex: FileEntry[] = []
   private vaultIndexRoot = ''
   private vaultIndexTime = 0
   private indexing = false
+  private fzfChecked = false
+  private fzfPath: string | null = null
 
   onload(): void {
+    this.log('onload', { hotkey: HOTKEY, dataDir: platform.dataDir })
     this.registerHotkey(HOTKEY, () => this.open())
   }
 
   onunload(): void {
+    this.log('onunload', {
+      indexedFiles: this.vaultIndex.length,
+      vaultIndexRoot: this.vaultIndexRoot,
+      currentQuery: this.currentQuery,
+    })
     this.close()
+  }
+
+  private log(...args: unknown[]): void {
+    console.log(TAG, ...args)
+  }
+
+  private warn(...args: unknown[]): void {
+    console.warn(TAG, ...args)
+  }
+
+  private getDebugDir(): string {
+    return platform.path.join(platform.dataDir, 'debug')
+  }
+
+  private getDebugStatePath(): string {
+    return platform.path.join(this.getDebugDir(), 'fuzzy-search-state.json')
+  }
+
+  private getDebugIndexPath(): string {
+    return platform.path.join(this.getDebugDir(), 'fuzzy-search-index.json')
+  }
+
+  private async persistDebugDump(reason: string, extra: Record<string, unknown> = {}): Promise<void> {
+    try {
+      const debugDir = this.getDebugDir()
+      const statePath = this.getDebugStatePath()
+      const indexPath = this.getDebugIndexPath()
+      await platform.fs.mkdir(debugDir)
+
+      const state = {
+        reason,
+        timestamp: new Date().toISOString(),
+        dataDir: platform.dataDir,
+        debugDir,
+        rootDir: this.getRootDir(),
+        currentDir: this.getCurrentDir(),
+        query: this.inputEl?.value ?? this.currentQuery,
+        allFilesCount: this.allFiles.length,
+        filteredCount: this.filtered.length,
+        vaultIndexCount: this.vaultIndex.length,
+        vaultIndexRoot: this.vaultIndexRoot,
+        vaultIndexTime: this.vaultIndexTime ? new Date(this.vaultIndexTime).toISOString() : null,
+        allFilesSample: this.allFiles.slice(0, DEBUG_SAMPLE_LIMIT),
+        filteredSample: this.filtered.slice(0, DEBUG_SAMPLE_LIMIT),
+        extra,
+      }
+      const indexDump = {
+        reason,
+        timestamp: state.timestamp,
+        rootDir: this.vaultIndexRoot || this.getRootDir(),
+        count: this.vaultIndex.length,
+        files: this.vaultIndex.map(file => ({
+          absPath: file.absPath,
+          relPath: file.relPath,
+          basename: file.basename,
+        })),
+      }
+
+      await Promise.all([
+        platform.fs.writeText(statePath, JSON.stringify(state, null, 2) + '\n'),
+        platform.fs.writeText(indexPath, JSON.stringify(indexDump, null, 2) + '\n'),
+      ])
+      this.log('debug dump written', { reason, statePath, indexPath, count: this.vaultIndex.length })
+    } catch (err) {
+      this.warn('failed to write debug dump', { reason, err })
+    }
+  }
+
+  private async ensureFzfInfo(): Promise<void> {
+    if (this.fzfChecked) return
+    this.fzfChecked = true
+    try {
+      const out = (await platform.shell.run('command -v fzf || which fzf || true', { timeout: 3000 })).trim()
+      this.fzfPath = out || null
+      this.log('fzf detection', { found: !!this.fzfPath, path: this.fzfPath })
+    } catch (err) {
+      this.warn('fzf detection failed', err)
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -241,8 +338,268 @@ export default class QuickOpenPlugin extends Plugin {
     return filePath ? platform.path.dirname(filePath) : ''
   }
 
+  private getWorkspaceCandidates(): Record<string, string> {
+    const win = window as any
+    return {
+      fileGetMountFolder: win.File?.getMountFolder?.() ?? '',
+      editorWatchedFolder: editor.getWatchedFolder() ?? '',
+      optionsMountFolder: win._options?.mountFolder ?? '',
+      currentDir: this.getCurrentDir(),
+      filePath: editor.getFilePath(),
+    }
+  }
+
+  private getWorkspaceRoot(): string {
+    const candidates = this.getWorkspaceCandidates()
+    const mountFolder =
+      candidates.fileGetMountFolder
+      || candidates.editorWatchedFolder
+      || candidates.optionsMountFolder
+      || ''
+    return typeof mountFolder === 'string' && mountFolder ? mountFolder : ''
+  }
+
   private getRootDir(): string {
-    return editor.getWatchedFolder() ?? this.getCurrentDir()
+    return this.getWorkspaceRoot() || this.getCurrentDir()
+  }
+
+  private getLibraryRootEntity(): TyporaFileEntity | null {
+    const root = (window as any).File?.editor?.library?.root
+    return root && typeof root.path === 'string' ? root as TyporaFileEntity : null
+  }
+
+  private flattenTyporaEntityPayload(
+    payload: unknown,
+    root: string,
+    acc: Map<string, FileEntry>,
+    stats?: { callbackCount: number; nodeCount: number; dirCount: number; fileCount: number },
+    visited = new Set<string>(),
+  ): void {
+    if (!payload) return
+
+    if (Array.isArray(payload)) {
+      for (const item of payload) this.flattenTyporaEntityPayload(item, root, acc, stats, visited)
+      return
+    }
+
+    if (typeof payload !== 'object') return
+    const node = payload as Partial<TyporaFileEntity>
+    if (!node.path || typeof node.path !== 'string' || visited.has(node.path)) return
+    visited.add(node.path)
+    if (stats) stats.nodeCount += 1
+
+    if (node.isDirectory) {
+      if (stats) stats.dirCount += 1
+      const subdir = Array.isArray(node.subdir) ? node.subdir : []
+      const content = Array.isArray(node.content) ? node.content : []
+      for (const child of [...subdir, ...content]) {
+        this.flattenTyporaEntityPayload(child, root, acc, stats, visited)
+      }
+      return
+    }
+
+    if (!node.isFile) return
+    if (stats) stats.fileCount += 1
+    const basename = typeof node.name === 'string' && node.name
+      ? node.name
+      : platform.path.basename(node.path)
+    const ext = platform.path.extname(basename).toLowerCase()
+    if (!MD_EXT_SET.has(ext)) return
+    acc.set(node.path, {
+      absPath: node.path,
+      relPath: toRelPath(node.path, root),
+      basename,
+    })
+  }
+
+  private inspectLibraryTree(root: string, maxDepth = 20): LibraryIndexStats {
+    const rootEntity = this.getLibraryRootEntity()
+    const stats: LibraryIndexStats = {
+      totalNodes: 0,
+      dirCount: 0,
+      fileCount: 0,
+      fetchedDirCount: 0,
+      unfetchedDirs: [],
+    }
+    if (!rootEntity) return stats
+
+    const visited = new Set<string>()
+    const walk = (node: TyporaFileEntity, depth: number): void => {
+      if (!node?.path || visited.has(node.path) || depth > maxDepth) return
+      visited.add(node.path)
+      stats.totalNodes += 1
+
+      if (node.isDirectory) {
+        stats.dirCount += 1
+        if (node.fetched) {
+          stats.fetchedDirCount += 1
+        } else {
+          stats.unfetchedDirs.push(toRelPath(node.path, root))
+        }
+        const children = [...(node.subdir ?? []), ...(node.content ?? [])]
+        for (const child of children) walk(child, depth + 1)
+        return
+      }
+
+      if (node.isFile) stats.fileCount += 1
+    }
+
+    walk(rootEntity, 0)
+    return stats
+  }
+
+  private collectVaultIndexFromLibrary(root: string, maxDepth = 20, maxFiles = 5000): FileEntry[] {
+    const rootEntity = this.getLibraryRootEntity()
+    if (!rootEntity) {
+      this.log('libraryIndex:no-root-entity')
+      return []
+    }
+
+    const visited = new Set<string>()
+    const files: FileEntry[] = []
+    const stats = this.inspectLibraryTree(root, maxDepth)
+    const walk = (node: TyporaFileEntity, depth: number): void => {
+      if (!node?.path || visited.has(node.path) || files.length >= maxFiles || depth > maxDepth) return
+      visited.add(node.path)
+
+      if (node.isDirectory) {
+        if (IGNORED_DIRS.includes(node.name) || node.name.startsWith('.')) return
+        const children = [...(node.subdir ?? []), ...(node.content ?? [])]
+        for (const child of children) {
+          if (files.length >= maxFiles) break
+          walk(child, depth + 1)
+        }
+        return
+      }
+
+      if (!node.isFile) return
+      const ext = platform.path.extname(node.name || node.path).toLowerCase()
+      if (!MD_EXT_SET.has(ext)) return
+      files.push({
+        absPath: node.path,
+        relPath: toRelPath(node.path, root),
+        basename: node.name || platform.path.basename(node.path),
+      })
+    }
+
+    this.log('libraryIndex:start', {
+      root,
+      entityPath: rootEntity.path,
+      entityName: rootEntity.name,
+      fetched: rootEntity.fetched ?? null,
+      subdirCount: rootEntity.subdir?.length ?? 0,
+      contentCount: rootEntity.content?.length ?? 0,
+      maxDepth,
+      maxFiles,
+      treeStats: {
+        totalNodes: stats.totalNodes,
+        dirCount: stats.dirCount,
+        fileCount: stats.fileCount,
+        fetchedDirCount: stats.fetchedDirCount,
+        unfetchedDirCount: stats.unfetchedDirs.length,
+        unfetchedDirsSample: stats.unfetchedDirs.slice(0, DEBUG_SAMPLE_LIMIT),
+      },
+    })
+    walk(rootEntity, 0)
+    this.log('libraryIndex:done', {
+      root,
+      count: files.length,
+      sample: files.slice(0, DEBUG_SAMPLE_LIMIT).map(file => file.relPath),
+      treeStats: {
+        totalNodes: stats.totalNodes,
+        dirCount: stats.dirCount,
+        fileCount: stats.fileCount,
+        fetchedDirCount: stats.fetchedDirCount,
+        unfetchedDirCount: stats.unfetchedDirs.length,
+      },
+    })
+    return files
+  }
+
+  private collectVaultIndexFromBridge(root: string, maxFiles = 5000, hardTimeoutMs = 5000): Promise<FileEntry[]> {
+    return new Promise(resolve => {
+      const bridge = window.bridge
+      if (!bridge?.callHandler) {
+        this.log('bridgeIndex:unavailable')
+        resolve([])
+        return
+      }
+
+      const entries = new Map<string, FileEntry>()
+      const stats = { callbackCount: 0, nodeCount: 0, dirCount: 0, fileCount: 0 }
+      let idleTimer: ReturnType<typeof setTimeout> | null = null
+      let hardTimer: ReturnType<typeof setTimeout> | null = null
+      let settled = false
+      const finish = (reason: string): void => {
+        if (settled) return
+        settled = true
+        if (idleTimer) clearTimeout(idleTimer)
+        if (hardTimer) clearTimeout(hardTimer)
+        const files = [...entries.values()].slice(0, maxFiles)
+        this.log('bridgeIndex:done', {
+          root,
+          reason,
+          callbackCount: stats.callbackCount,
+          nodeCount: stats.nodeCount,
+          dirCount: stats.dirCount,
+          fileCount: stats.fileCount,
+          count: files.length,
+          sample: files.slice(0, DEBUG_SAMPLE_LIMIT).map(file => file.relPath),
+        })
+        resolve(files)
+      }
+      const bumpIdleTimer = (): void => {
+        if (idleTimer) clearTimeout(idleTimer)
+        idleTimer = setTimeout(() => finish('idle-timeout'), 250)
+      }
+
+      this.log('bridgeIndex:start', { root, hardTimeoutMs, maxFiles })
+      try {
+        bridge.callHandler('library.fetchAllDocs', root)
+        this.log('bridgeIndex:fetchAllDocs-dispatched', { root })
+      } catch (err) {
+        this.warn('bridgeIndex:fetchAllDocs-failed', { root, err })
+      }
+
+      hardTimer = setTimeout(() => finish('hard-timeout'), hardTimeoutMs)
+
+      try {
+        bridge.callHandler('library.listDocsUnder', root, (payload: unknown) => {
+          stats.callbackCount += 1
+          this.log('bridgeIndex:callback', {
+            root,
+            callbackCount: stats.callbackCount,
+            payloadType: Array.isArray(payload) ? 'array' : typeof payload,
+            path: (payload as any)?.path ?? null,
+            name: (payload as any)?.name ?? null,
+            fetched: (payload as any)?.fetched ?? null,
+            subdirCount: Array.isArray((payload as any)?.subdir) ? (payload as any).subdir.length : null,
+            contentCount: Array.isArray((payload as any)?.content) ? (payload as any).content.length : null,
+          })
+          this.flattenTyporaEntityPayload(payload, root, entries, stats)
+          if (entries.size >= maxFiles) {
+            finish('max-files')
+            return
+          }
+          bumpIdleTimer()
+        })
+      } catch (err) {
+        this.warn('bridgeIndex:failed', { root, err })
+        finish('bridge-error')
+      }
+    })
+  }
+
+  private mergeFileEntries(primary: FileEntry[], secondary: FileEntry[]): FileEntry[] {
+    const merged = new Map<string, FileEntry>()
+    for (const entry of [...primary, ...secondary]) merged.set(entry.absPath, entry)
+    return [...merged.values()]
+  }
+
+  private setFooter(fileCount: number, root: string, status = ''): void {
+    const parts = [`${fileCount} 个文件`, root || '(无)']
+    if (status) parts.push(status)
+    this.updateFooter(parts.join('  ·  '))
   }
 
   // -------------------------------------------------------------------------
@@ -253,11 +610,15 @@ export default class QuickOpenPlugin extends Plugin {
   private async loadFiles(): Promise<void> {
     const root = this.getRootDir()
     const currentDir = this.getCurrentDir()
+    const candidates = this.getWorkspaceCandidates()
     const seen = new Set<string>()
     const quickFiles: FileEntry[] = []
+    this.log('loadFiles:start', { root, currentDir, candidates, cacheRoot: this.vaultIndexRoot, cacheCount: this.vaultIndex.length })
+    await this.ensureFzfInfo()
 
     // Phase 1a: MRU entries
     const mru = this.getMru()
+    this.log('loadFiles:mru', { count: mru.length, sample: mru.slice(0, DEBUG_SAMPLE_LIMIT) })
     for (const absPath of mru) {
       if (seen.has(absPath)) continue
       seen.add(absPath)
@@ -272,6 +633,7 @@ export default class QuickOpenPlugin extends Plugin {
     if (currentDir) {
       try {
         const entries = await platform.fs.list(currentDir)
+        this.log('loadFiles:currentDirList', { currentDir, count: entries.length, sample: entries.slice(0, DEBUG_SAMPLE_LIMIT) })
         for (const name of entries) {
           if (name.startsWith('.')) continue
           const ext = platform.path.extname(name).toLowerCase()
@@ -286,16 +648,33 @@ export default class QuickOpenPlugin extends Plugin {
           })
         }
       } catch (err) {
-        console.warn('[tpl:quick-open] failed to list current dir:', err)
+        this.warn('failed to list current dir', { currentDir, err })
       }
     }
 
     this.allFiles = quickFiles
-    this.updateFooter(`${quickFiles.length} 个文件  ·  ${root || currentDir || '(无)'}`)
+    this.log('loadFiles:phase1-complete', {
+      root,
+      currentDir,
+      quickFileCount: quickFiles.length,
+      quickFilesSample: quickFiles.slice(0, DEBUG_SAMPLE_LIMIT).map(f => f.relPath),
+    })
+    this.setFooter(quickFiles.length, root || currentDir, root ? '正在索引整个文件夹…' : '')
+    await this.persistDebugDump('phase1-loaded', {
+      root,
+      currentDir,
+      quickFileCount: quickFiles.length,
+      quickFilesSample: quickFiles.slice(0, DEBUG_SAMPLE_LIMIT).map(f => f.relPath),
+      candidates,
+      fzfPath: this.fzfPath,
+    })
 
     // Phase 2: async vault-wide scan
     if (root) {
+      this.log('loadFiles:phase2-dispatch', { root, alreadySeen: seen.size })
       this.loadVaultIndex(root, seen)
+    } else {
+      this.warn('loadFiles:no-root', { currentDir, candidates })
     }
   }
 
@@ -306,32 +685,77 @@ export default class QuickOpenPlugin extends Plugin {
       this.vaultIndexRoot === root &&
       Date.now() - this.vaultIndexTime < INDEX_TTL_MS
     ) {
+      this.log('loadVaultIndex:cache-hit', {
+        root,
+        ageMs: Date.now() - this.vaultIndexTime,
+        count: this.vaultIndex.length,
+      })
       this.mergeVaultIndex(alreadySeen)
       return
     }
 
-    if (this.indexing) return
+    if (this.indexing) {
+      this.log('loadVaultIndex:skip-already-indexing', { root, currentRoot: this.vaultIndexRoot })
+      return
+    }
     this.indexing = true
+    const startedAt = Date.now()
+    this.setFooter(this.allFiles.length, root, '正在索引整个文件夹…')
+    this.log('loadVaultIndex:start', {
+      root,
+      ignoredDirs: IGNORED_DIRS,
+      maxDepth: 20,
+      maxFiles: 5000,
+    })
 
     try {
-      const paths = await platform.fs.walkDir(root, {
-        exts: MD_EXTS,
-        ignore: IGNORED_DIRS,
-        maxDepth: 20,
-        maxFiles: 5000,
+      const libraryEntries = this.collectVaultIndexFromLibrary(root, 20, 5000)
+      const bridgeEntries = await this.collectVaultIndexFromBridge(root, 5000)
+      const typoraEntries = this.mergeFileEntries(libraryEntries, bridgeEntries)
+      this.log('loadVaultIndex:typora-sources', {
+        root,
+        libraryCount: libraryEntries.length,
+        bridgeCount: bridgeEntries.length,
+        mergedCount: typoraEntries.length,
       })
+      if (typoraEntries.length > 0) {
+        this.vaultIndex = typoraEntries
+      } else {
+        this.log('loadVaultIndex:typora-empty-fallback-shell', { root })
+        const paths = await platform.fs.walkDir(root, {
+          exts: MD_EXTS,
+          ignore: IGNORED_DIRS,
+          maxDepth: 20,
+          maxFiles: 5000,
+        })
+        this.vaultIndex = paths.map(absPath => ({
+          absPath,
+          relPath: toRelPath(absPath, root),
+          basename: platform.path.basename(absPath),
+        }))
+      }
 
-      this.vaultIndex = paths.map(absPath => ({
-        absPath,
-        relPath: toRelPath(absPath, root),
-        basename: platform.path.basename(absPath),
-      }))
       this.vaultIndexRoot = root
       this.vaultIndexTime = Date.now()
+      this.log('loadVaultIndex:done', {
+        root,
+        durationMs: Date.now() - startedAt,
+        count: this.vaultIndex.length,
+        sample: this.vaultIndex.slice(0, DEBUG_SAMPLE_LIMIT).map(f => f.relPath),
+      })
+      await this.persistDebugDump('vault-indexed', {
+        root,
+        durationMs: Date.now() - startedAt,
+        count: this.vaultIndex.length,
+      })
 
       this.mergeVaultIndex(alreadySeen)
     } catch (err) {
-      console.warn('[tpl:quick-open] vault index failed:', err)
+      this.warn('vault index failed', { root, err })
+      await this.persistDebugDump('vault-index-failed', {
+        root,
+        error: err instanceof Error ? err.message : String(err),
+      })
     } finally {
       this.indexing = false
     }
@@ -347,12 +771,24 @@ export default class QuickOpenPlugin extends Plugin {
     }
     if (newEntries.length > 0) {
       this.allFiles = [...this.allFiles, ...newEntries]
-      const root = this.getRootDir()
-      this.updateFooter(`${this.allFiles.length} 个文件  ·  ${root || '(无)'}`)
-      // Re-render if user hasn't typed anything yet
-      if (this.inputEl && !this.inputEl.value.trim()) {
-        this.renderList('')
-      }
+    }
+
+    const root = this.getRootDir()
+    this.log('mergeVaultIndex', {
+      root,
+      newEntries: newEntries.length,
+      totalFiles: this.allFiles.length,
+      sample: newEntries.slice(0, DEBUG_SAMPLE_LIMIT).map(f => f.relPath),
+    })
+    this.setFooter(this.allFiles.length, root, '')
+    void this.persistDebugDump('vault-index-merged', {
+      root,
+      newEntries: newEntries.length,
+      totalFiles: this.allFiles.length,
+    })
+
+    if (this.overlay) {
+      this.renderList(this.inputEl?.value ?? this.currentQuery)
     }
   }
 
@@ -360,7 +796,16 @@ export default class QuickOpenPlugin extends Plugin {
   // Modal open / close
   // -------------------------------------------------------------------------
   private async open(): Promise<void> {
-    if (this.overlay) { this.close(); return }
+    if (this.overlay) {
+      this.log('open:overlay-exists-toggle-close')
+      this.close()
+      return
+    }
+    this.log('open:start', {
+      filePath: editor.getFilePath(),
+      fileName: editor.getFileName(),
+      watchedFolder: editor.getWatchedFolder(),
+    })
     this.buildModal()
     await this.loadFiles()
     if (this.overlay) {
@@ -369,6 +814,11 @@ export default class QuickOpenPlugin extends Plugin {
   }
 
   private close(): void {
+    this.log('close', {
+      currentQuery: this.currentQuery,
+      filteredCount: this.filtered.length,
+      allFilesCount: this.allFiles.length,
+    })
     if (this.debounceTimer) clearTimeout(this.debounceTimer)
     for (const fn of this.modalCleanups) fn()
     this.modalCleanups = []
@@ -378,12 +828,14 @@ export default class QuickOpenPlugin extends Plugin {
     this.listEl = null
     this.filtered = []
     this.selectedIdx = 0
+    this.currentQuery = ''
   }
 
   // -------------------------------------------------------------------------
   // Build DOM
   // -------------------------------------------------------------------------
   private buildModal(): void {
+    this.log('buildModal')
     if (!document.getElementById('tpl-qo-style')) {
       const style = document.createElement('style')
       style.id = 'tpl-qo-style'
@@ -409,7 +861,7 @@ export default class QuickOpenPlugin extends Plugin {
     const input = document.createElement('input')
     input.id = 'tpl-qo-input'
     input.type = 'text'
-    input.placeholder = '输入文件名搜索...'
+    input.placeholder = '搜索整个文件夹中的 Markdown 文件...'
     input.autocomplete = 'off'
     input.spellcheck = false
     inputRow.appendChild(icon)
@@ -433,6 +885,7 @@ export default class QuickOpenPlugin extends Plugin {
     this.listEl = list
 
     const onInput = () => {
+      this.log('input', { value: input.value, length: input.value.length, indexedFiles: this.allFiles.length })
       if (this.debounceTimer) clearTimeout(this.debounceTimer)
       this.debounceTimer = setTimeout(() => this.renderList(input.value), DEBOUNCE_MS)
     }
@@ -464,6 +917,7 @@ export default class QuickOpenPlugin extends Plugin {
   private renderList(query: string): void {
     const list = this.listEl
     if (!list) return
+    this.currentQuery = query
     list.innerHTML = ''
 
     if (!this.allFiles.length) {
@@ -479,6 +933,18 @@ export default class QuickOpenPlugin extends Plugin {
         .sort((a, b) => b.s - a.s)
         .slice(0, 50)
       this.filtered = results.map(x => x.f)
+      this.log('renderList:query', {
+        query,
+        indexedFiles: this.allFiles.length,
+        resultCount: this.filtered.length,
+        topResults: this.filtered.slice(0, 10).map(f => f.relPath),
+        fzfPath: this.fzfPath,
+      })
+      void this.persistDebugDump('render-query', {
+        query,
+        resultCount: this.filtered.length,
+        topResults: this.filtered.slice(0, 10).map(f => f.relPath),
+      })
 
       if (!this.filtered.length) {
         list.appendChild(this.makeStatus('没有匹配的文件'))
@@ -520,6 +986,17 @@ export default class QuickOpenPlugin extends Plugin {
         .slice(0, 15)
 
       this.filtered = [...mruFiles, ...siblingFiles, ...otherFiles]
+      this.log('renderList:default', {
+        indexedFiles: this.allFiles.length,
+        mruCount: mruFiles.length,
+        siblingCount: siblingFiles.length,
+        otherCount: otherFiles.length,
+      })
+      void this.persistDebugDump('render-default', {
+        mruCount: mruFiles.length,
+        siblingCount: siblingFiles.length,
+        otherCount: otherFiles.length,
+      })
       this.selectedIdx = 0
 
       let idx = 0
@@ -601,9 +1078,11 @@ export default class QuickOpenPlugin extends Plugin {
   private openSelected(): void {
     const f = this.filtered[this.selectedIdx]
     if (!f) return
+    this.log('openSelected', { index: this.selectedIdx, file: f })
     this.close()
     this.recordOpen(f.absPath).catch(() => {})
     editor.openFile(f.absPath).catch(err => {
+      this.warn('openSelected failed', { file: f.absPath, err })
       this.showNotice(`打开文件失败: ${err.message}`)
     })
   }

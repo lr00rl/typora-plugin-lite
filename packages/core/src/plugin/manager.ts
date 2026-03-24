@@ -40,9 +40,11 @@ export class PluginManager {
   /** Scan plugins directory for manifest.json files, register lazy triggers, then load startup plugins. */
   async scanAndLoad(): Promise<void> {
     const pluginsDir = this.platform.pluginsDir
+    console.log('[tpl:manager]', 'scan:start', { pluginsDir })
     let dirs: string[]
     try {
       dirs = await this.platform.fs.list(pluginsDir)
+      console.log('[tpl:manager]', 'scan:dirs', { count: dirs.length, dirs })
     } catch {
       console.warn('[tpl] plugins directory not found, skipping scan')
       return
@@ -53,6 +55,7 @@ export class PluginManager {
       try {
         const manifestPath = this.platform.path.join(pluginsDir, dir, 'manifest.json')
         const exists = await this.platform.fs.exists(manifestPath)
+        console.log('[tpl:manager]', 'scan:manifest-check', { dir, manifestPath, exists })
         if (!exists) continue
         const text = await this.platform.fs.readText(manifestPath)
         const manifest: PluginManifest = JSON.parse(text)
@@ -65,6 +68,7 @@ export class PluginManager {
     // Load startup plugins
     const startupPlugins = [...this.plugins.entries()]
       .filter(([, entry]) => entry.manifest.loading.startup)
+    console.log('[tpl:manager]', 'scan:startup-plugins', { ids: startupPlugins.map(([id]) => id) })
     await Promise.all(startupPlugins.map(([id]) => this.loadPlugin(id)))
   }
 
@@ -83,13 +87,21 @@ export class PluginManager {
 
     const entry: PluginEntry = { manifest, instance: null, loaded: false, loading: false }
     this.plugins.set(manifest.id, entry)
-
     const { loading } = manifest
+    console.log('[tpl:manager]', 'register', {
+      id: manifest.id,
+      name: manifest.name,
+      startup: !!loading.startup,
+      hotkey: loading.hotkey ?? [],
+      event: loading.event ?? [],
+    })
 
     // Event-based lazy loading
     if (loading.event?.length) {
       for (const event of loading.event) {
+        console.log('[tpl:manager]', 'register:event-trigger', { id: manifest.id, event })
         const lazyHandler = (...args: unknown[]) => {
+          console.log('[tpl:manager]', 'event-triggered', { id: manifest.id, event, args })
           this.loadPlugin(manifest.id).then((loaded) => {
             if (!loaded) return
             this.events.off(event, lazyHandler)
@@ -104,7 +116,9 @@ export class PluginManager {
     // Hotkey-based lazy loading
     if (loading.hotkey?.length) {
       for (const key of loading.hotkey) {
+        console.log('[tpl:manager]', 'register:hotkey-trigger', { id: manifest.id, key })
         const lazyHandler = () => {
+          console.log('[tpl:manager]', 'hotkey-triggered', { id: manifest.id, key })
           this.loadPlugin(manifest.id).then((loaded) => {
             if (!loaded) return
             // Plugin's onload() already called registerHotkey() which overwrote
@@ -124,9 +138,18 @@ export class PluginManager {
    */
   async loadPlugin(id: string): Promise<boolean> {
     const entry = this.plugins.get(id)
-    if (!entry) return false
-    if (entry.loaded) return true
-    if (entry.loading) return false
+    if (!entry) {
+      console.warn('[tpl:manager]', 'loadPlugin:missing-entry', { id })
+      return false
+    }
+    if (entry.loaded) {
+      console.log('[tpl:manager]', 'loadPlugin:already-loaded', { id })
+      return true
+    }
+    if (entry.loading) {
+      console.log('[tpl:manager]', 'loadPlugin:already-loading', { id })
+      return false
+    }
 
     entry.loading = true
     const TAG = '[tpl:manager]'
@@ -137,7 +160,11 @@ export class PluginManager {
     const pluginUrl = `${this.platform.baseUrl}/plugins/${id}/${mainFile}`
 
     try {
-      console.log(TAG, `loading plugin: ${id} from ${pluginUrl}`)
+      console.log(TAG, 'load:start', {
+        id,
+        pluginUrl,
+        manifest: entry.manifest,
+      })
 
       // Load via <script> tag
       await new Promise<void>((resolve, reject) => {
@@ -151,6 +178,11 @@ export class PluginManager {
       // Plugin IIFE should have registered its class on window.__tpl.pluginClasses
       const registry = (window as any).__tpl?.pluginClasses
       const PluginClass = registry?.[id]
+      console.log(TAG, 'load:registry-check', {
+        id,
+        registryKeys: registry ? Object.keys(registry) : [],
+        pluginClassType: typeof PluginClass,
+      })
 
       if (!PluginClass || typeof PluginClass !== 'function') {
         throw new Error(
@@ -168,7 +200,7 @@ export class PluginManager {
       entry.instance = instance
       entry.loaded = true
       this.events.emit('plugin:loaded', id)
-      console.log(TAG, `plugin loaded: ${id}`)
+      console.log(TAG, 'load:done', { id })
       return true
     } catch (err) {
       console.error(TAG, `failed to load plugin ${id}:`, err)
@@ -181,13 +213,16 @@ export class PluginManager {
   /** Unload a specific plugin. */
   unloadPlugin(id: string): void {
     const entry = this.plugins.get(id)
-    if (!entry?.instance) return
+    if (!entry?.instance) {
+      console.log('[tpl:manager]', 'unloadPlugin:skip-no-instance', { id })
+      return
+    }
 
     entry.instance._destroy()
     entry.instance = null
     entry.loaded = false
     this.events.emit('plugin:unloaded', id)
-    console.log(`[tpl] plugin unloaded: ${id}`)
+    console.log('[tpl:manager]', 'unload:done', { id })
   }
 
   /** Get a loaded plugin instance. */
@@ -207,11 +242,13 @@ export class PluginManager {
 
   /** Enable (load) a plugin by id. */
   async enablePlugin(id: string): Promise<void> {
+    console.log('[tpl:manager]', 'enablePlugin', { id })
     await this.loadPlugin(id)
   }
 
   /** Disable (unload) a plugin by id. */
   disablePlugin(id: string): void {
+    console.log('[tpl:manager]', 'disablePlugin', { id })
     this.unloadPlugin(id)
   }
 }

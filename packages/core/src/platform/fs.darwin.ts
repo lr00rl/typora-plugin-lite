@@ -5,6 +5,41 @@
 
 import type { IFileSystem, FileStats, WalkOptions } from './filesystem.js'
 import { shell } from './shell.js'
+const TAG = '[tpl:fs:darwin]'
+let rgBinaryPromise: Promise<string | null> | null = null
+
+async function getRgBinary(): Promise<string | null> {
+  if (!rgBinaryPromise) {
+    rgBinaryPromise = (async () => {
+      try {
+        const out = (await shell.run('command -v rg || which rg || true', { timeout: 3000 })).trim()
+        if (out) {
+          console.log(TAG, 'rg:detected', { binary: out, source: 'PATH' })
+          return out
+        }
+      } catch (err) {
+        console.warn(TAG, 'rg:path-detect-failed', err)
+      }
+
+      const candidates = [
+        '/opt/homebrew/bin/rg',
+        '/usr/local/bin/rg',
+        '/opt/local/bin/rg',
+      ]
+      for (const candidate of candidates) {
+        try {
+          await shell.run(`test -x ${shell.escape(candidate)}`, { timeout: 3000 })
+          console.log(TAG, 'rg:detected', { binary: candidate, source: 'fallback' })
+          return candidate
+        } catch {}
+      }
+
+      console.log(TAG, 'rg:detected', { binary: null, source: 'none' })
+      return null
+    })()
+  }
+  return rgBinaryPromise
+}
 
 class DarwinFileStats implements FileStats {
   constructor(private info: string) {}
@@ -25,6 +60,66 @@ class DarwinFileStats implements FileStats {
 }
 
 export class DarwinFS implements IFileSystem {
+  private async walkDirWithPython(
+    dirpath: string,
+    exts: string[],
+    ignore: string[],
+    maxDepth: number,
+    maxFiles: number,
+  ): Promise<string[]> {
+    const script = [
+      'import json',
+      'import os',
+      'import sys',
+      '',
+      'root = os.path.abspath(sys.argv[1])',
+      'exts = {e.lower() for e in json.loads(sys.argv[2])}',
+      'ignore = set(json.loads(sys.argv[3]))',
+      'max_depth = int(sys.argv[4])',
+      'max_files = int(sys.argv[5])',
+      'root_depth = root.rstrip(os.sep).count(os.sep)',
+      'count = 0',
+      '',
+      'for current, dirs, files in os.walk(root):',
+      '    depth = current.rstrip(os.sep).count(os.sep) - root_depth',
+      '    dirs[:] = [d for d in dirs if d not in ignore and not d.startswith(".")]',
+      '    if depth >= max_depth:',
+      '        dirs[:] = []',
+      '    for name in files:',
+      '        if name.startswith("."):',
+      '            continue',
+      '        if exts and os.path.splitext(name)[1].lower() not in exts:',
+      '            continue',
+      '        print(os.path.join(current, name))',
+      '        count += 1',
+      '        if count >= max_files:',
+      '            sys.exit(0)',
+    ].join('\n')
+
+    const cmd = [
+      'python3',
+      '-',
+      shell.escape(dirpath),
+      shell.escape(JSON.stringify(exts)),
+      shell.escape(JSON.stringify(ignore)),
+      shell.escape(String(maxDepth)),
+      shell.escape(String(maxFiles)),
+      "<<'PY'",
+      script,
+      'PY',
+    ].join('\n')
+
+    console.log(TAG, 'walkDir:python-cmd', cmd)
+    const out = await shell.run(cmd, { timeout: 30_000 })
+    const results = out.trim().split('\n').filter(Boolean).slice(0, maxFiles)
+    console.log(TAG, 'walkDir:python-done', {
+      dirpath,
+      count: results.length,
+      sample: results.slice(0, 20),
+    })
+    return results
+  }
+
   exists(filepath: string): Promise<boolean> {
     return shell.run(`test -e ${shell.escape(filepath)}`)
       .then(() => true)
@@ -58,6 +153,39 @@ export class DarwinFS implements IFileSystem {
     const ignore = opts.ignore ?? ['.git', 'node_modules', '.obsidian', '.trash']
     const maxDepth = opts.maxDepth ?? 20
     const maxFiles = opts.maxFiles ?? 5000
+    console.log(TAG, 'walkDir:start', { dirpath, exts, ignore, maxDepth, maxFiles })
+
+    const rgBinary = await getRgBinary()
+    if (rgBinary) {
+      const rgParts = [shell.escape(rgBinary), '--files']
+      for (const ext of exts) {
+        rgParts.push('-g', shell.escape(`*${ext}`))
+      }
+      for (const name of ignore) {
+        rgParts.push('-g', shell.escape(`!**/${name}/**`))
+      }
+      rgParts.push('.')
+      const rgCmd = rgParts.join(' ')
+      try {
+        console.log(TAG, 'walkDir:rg-cmd', rgCmd)
+        const out = await shell.run(rgCmd, { cwd: dirpath, timeout: 30_000 })
+        const results = out.trim().split('\n').filter(Boolean).slice(0, maxFiles)
+        console.log(TAG, 'walkDir:rg-done', {
+          dirpath,
+          count: results.length,
+          sample: results.slice(0, 20),
+        })
+        return results
+      } catch (err) {
+        console.error(TAG, 'walkDir:rg-failed', { dirpath, err })
+      }
+    }
+
+    try {
+      return await this.walkDirWithPython(dirpath, exts, ignore, maxDepth, maxFiles)
+    } catch (err) {
+      console.error(TAG, 'walkDir:python-failed', { dirpath, err })
+    }
 
     // Build a `find` command — much faster than recursive shell.run('ls')
     const parts = ['find', shell.escape(dirpath)]
@@ -82,10 +210,18 @@ export class DarwinFS implements IFileSystem {
 
     const cmd = parts.join(' ')
     try {
-      const out = await shell.run(cmd, { timeout: 15_000 })
-      return out.trim().split('\n').filter(Boolean)
-    } catch {
-      return []
+      console.log(TAG, 'walkDir:cmd', cmd)
+      const out = await shell.run(cmd, { timeout: 60_000 })
+      const results = out.trim().split('\n').filter(Boolean)
+      console.log(TAG, 'walkDir:done', {
+        dirpath,
+        count: results.length,
+        sample: results.slice(0, 20),
+      })
+      return results
+    } catch (err) {
+      console.error(TAG, 'walkDir:failed', { dirpath, err })
+      throw err
     }
   }
 

@@ -47,6 +47,9 @@ interface TyporaEditor {
     root?: TyporaFileEntity
     watchedFolder?: string
     openFile(pathname: string, cb: () => void): void
+    fileTree?: {
+      expandNode?: ($el: unknown, filepath: string, callback: Function) => void
+    }
   }
   nodeMap: {
     allNodes: TyporaNodeMap
@@ -84,6 +87,7 @@ interface TyporaEditor {
 interface TyporaFileEntity {
   createDate: Date
   lastModified: Date
+  fetched?: boolean
   isDirectory: boolean
   isFile: boolean
   name: string
@@ -114,6 +118,8 @@ interface Window {
     (moduleName: string): unknown
   }
   bridge?: {
+    callHandler(type: 'library.fetchAllDocs', folder: string): void
+    callHandler(type: 'library.listDocsUnder', folder: string, cb: (file: unknown) => void): void
     callHandler(
       type: 'controller.runCommand',
       options: { args: string; cwd?: string },
