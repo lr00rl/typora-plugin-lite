@@ -1,5 +1,5 @@
 import * as esbuild from 'esbuild'
-import { readdirSync, existsSync, copyFileSync, mkdirSync } from 'node:fs'
+import { readdirSync, existsSync, copyFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
 const ROOT = resolve(import.meta.dirname, '..')
@@ -117,6 +117,11 @@ async function build() {
         copyFileSync(src, join(destDir, 'manifest.json'))
       }
     }
+    // Write builtin plugin manifest for installer to know which plugins to clean
+    writeFileSync(
+      join(DIST, 'builtin-plugins.json'),
+      JSON.stringify(pluginEntries.map(p => p.name), null, 2) + '\n',
+    )
     console.log(`Built loader + core + ${pluginEntries.length} plugins`)
   }
 }

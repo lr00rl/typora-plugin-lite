@@ -4,7 +4,7 @@
  */
 
 export { IS_MAC, IS_NODE, getPluginsDir, getBaseUrl, getDataDir, getMountFolder } from './detect.js'
-export type { IFileSystem, FileStats } from './filesystem.js'
+export type { IFileSystem, FileStats, WalkOptions } from './filesystem.js'
 export type { IShell } from './shell.js'
 export type { IPath } from './path.js'
 

@@ -3,7 +3,7 @@
  * Uses bridge.callSync for reads, Shell.run for writes/stat/mkdir/list/remove.
  */
 
-import type { IFileSystem, FileStats } from './filesystem.js'
+import type { IFileSystem, FileStats, WalkOptions } from './filesystem.js'
 import { shell } from './shell.js'
 
 class DarwinFileStats implements FileStats {
@@ -51,6 +51,42 @@ export class DarwinFS implements IFileSystem {
   list(dirpath: string): Promise<string[]> {
     return shell.run(`ls ${shell.escape(dirpath)}`)
       .then(out => out.trim().split('\n').filter(Boolean))
+  }
+
+  async walkDir(dirpath: string, opts: WalkOptions = {}): Promise<string[]> {
+    const exts = opts.exts ?? []
+    const ignore = opts.ignore ?? ['.git', 'node_modules', '.obsidian', '.trash']
+    const maxDepth = opts.maxDepth ?? 20
+    const maxFiles = opts.maxFiles ?? 5000
+
+    // Build a `find` command — much faster than recursive shell.run('ls')
+    const parts = ['find', shell.escape(dirpath)]
+    // Max depth
+    parts.push(`-maxdepth ${maxDepth}`)
+    // Prune ignored directories
+    if (ignore.length) {
+      const pruneExpr = ignore.map(d => `-name ${shell.escape(d)}`).join(' -o ')
+      parts.push(`\\( -type d \\( ${pruneExpr} \\) -prune \\)`)
+      parts.push('-o')
+    }
+    // Match files
+    parts.push('-type f')
+    // Filter by extension
+    if (exts.length) {
+      const extExpr = exts.map(e => `-name ${shell.escape('*' + e)}`).join(' -o ')
+      parts.push(`\\( ${extExpr} \\)`)
+    }
+    parts.push('-print')
+    // Limit output
+    parts.push(`| head -n ${maxFiles}`)
+
+    const cmd = parts.join(' ')
+    try {
+      const out = await shell.run(cmd, { timeout: 15_000 })
+      return out.trim().split('\n').filter(Boolean)
+    } catch {
+      return []
+    }
   }
 
   readText(filepath: string): Promise<string> {

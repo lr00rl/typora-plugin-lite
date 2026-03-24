@@ -3,7 +3,7 @@
  * Uses reqnode('fs') for all operations.
  */
 
-import type { IFileSystem, FileStats } from './filesystem.js'
+import type { IFileSystem, FileStats, WalkOptions } from './filesystem.js'
 
 export class NodeFS implements IFileSystem {
   private get _fs() {
@@ -36,6 +36,38 @@ export class NodeFS implements IFileSystem {
 
   list(dirpath: string): Promise<string[]> {
     return this._fsp.readdir(dirpath)
+  }
+
+  async walkDir(dirpath: string, opts: WalkOptions = {}): Promise<string[]> {
+    const exts = opts.exts?.map(e => e.toLowerCase()) ?? []
+    const ignoreSet = new Set(opts.ignore ?? ['.git', 'node_modules', '.obsidian', '.trash'])
+    const maxDepth = opts.maxDepth ?? 20
+    const maxFiles = opts.maxFiles ?? 5000
+    const results: string[] = []
+    const path = window.reqnode!('path') as typeof import('node:path')
+
+    const walk = async (dir: string, depth: number): Promise<void> => {
+      if (depth > maxDepth || results.length >= maxFiles) return
+      let entries: string[]
+      try { entries = await this._fsp.readdir(dir) } catch { return }
+      for (const name of entries) {
+        if (results.length >= maxFiles) return
+        if (name.startsWith('.') || ignoreSet.has(name)) continue
+        const full = path.join(dir, name)
+        let stat: import('node:fs').Stats
+        try { stat = await this._fsp.stat(full) } catch { continue }
+        if (stat.isDirectory()) {
+          await walk(full, depth + 1)
+        } else if (stat.isFile()) {
+          if (exts.length === 0 || exts.includes(path.extname(name).toLowerCase())) {
+            results.push(full)
+          }
+        }
+      }
+    }
+
+    await walk(dirpath, 0)
+    return results
   }
 
   readText(filepath: string): Promise<string> {

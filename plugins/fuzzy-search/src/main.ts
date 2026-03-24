@@ -1,4 +1,4 @@
-import { Plugin, editor, platform, IS_MAC } from '@typora-plugin-lite/core'
+import { Plugin, editor, platform } from '@typora-plugin-lite/core'
 
 interface FileEntry {
   absPath: string
@@ -6,14 +6,18 @@ interface FileEntry {
   basename: string
 }
 
-const MD_EXTS = new Set(['.md', '.markdown'])
+const MD_EXTS = ['.md', '.markdown']
+const MD_EXT_SET = new Set(MD_EXTS)
 const MAX_MRU = 30
 const HOTKEY = 'Mod+.'
-const DEBOUNCE_MS = 200
+const DEBOUNCE_MS = 150
+const INDEX_TTL_MS = 60_000
+const IGNORED_DIRS = ['.git', 'node_modules', '.obsidian', '.trash', '.Trash', '_archive']
 
 // ---------------------------------------------------------------------------
-// FZF-inspired scoring
-// Bonuses: consecutive chars, word boundaries (/ - _ . space), basename prefix
+// FZF-inspired scoring (ported from fzf.nvim behavior)
+// Bonuses: consecutive chars, word boundaries (/ - _ . space), basename prefix,
+//          exact prefix match, camelCase transitions
 // ---------------------------------------------------------------------------
 function fzfScore(text: string, query: string): number {
   const t = text.toLowerCase()
@@ -39,9 +43,16 @@ function fzfScore(text: string, query: string): number {
     }
     const prevCh = pos > 0 ? t[pos - 1] : ''
     if (pos === 0 || /[\\/\-_.\s]/.test(prevCh)) score += 10
+    // camelCase boundary
+    if (pos > 0 && text[pos] !== text[pos].toLowerCase() && text[pos - 1] === text[pos - 1].toLowerCase()) {
+      score += 8
+    }
     if (pos === 0) score += 12
     prevPos = pos
   }
+
+  // Exact prefix bonus
+  if (t.startsWith(q)) score += 20
 
   const span = positions[positions.length - 1] - positions[0] + 1
   score -= span * 0.4
@@ -53,6 +64,19 @@ function scoreFile(f: FileEntry, query: string): number {
   const nameScore = fzfScore(f.basename, query) + 25
   const pathScore = fzfScore(f.relPath, query)
   return Math.max(nameScore, pathScore)
+}
+
+// ---------------------------------------------------------------------------
+// Relative path helper
+// ---------------------------------------------------------------------------
+function toRelPath(absPath: string, root: string): string {
+  if (!root) return absPath
+  // Ensure root ends with separator for safe prefix check
+  const prefix = root.endsWith('/') ? root : root + '/'
+  if (absPath.startsWith(prefix)) {
+    return absPath.slice(prefix.length)
+  }
+  return absPath
 }
 
 // ---------------------------------------------------------------------------
@@ -168,12 +192,18 @@ export default class QuickOpenPlugin extends Plugin {
   private overlay: HTMLElement | null = null
   private inputEl: HTMLInputElement | null = null
   private listEl: HTMLElement | null = null
-  /** MRU files that actually exist + sibling .md files */
-  private localFiles: FileEntry[] = []
+  /** All searchable files (MRU + siblings + vault index) */
+  private allFiles: FileEntry[] = []
   private filtered: FileEntry[] = []
   private selectedIdx = 0
   private modalCleanups: Array<() => void> = []
   private debounceTimer: ReturnType<typeof setTimeout> | null = null
+
+  /** Cached full vault index */
+  private vaultIndex: FileEntry[] = []
+  private vaultIndexRoot = ''
+  private vaultIndexTime = 0
+  private indexing = false
 
   onload(): void {
     this.registerHotkey(HOTKEY, () => this.open())
@@ -204,7 +234,7 @@ export default class QuickOpenPlugin extends Plugin {
   }
 
   // -------------------------------------------------------------------------
-  // Get current directory & root
+  // Directory helpers
   // -------------------------------------------------------------------------
   private getCurrentDir(): string {
     const filePath = editor.getFilePath()
@@ -216,49 +246,114 @@ export default class QuickOpenPlugin extends Plugin {
   }
 
   // -------------------------------------------------------------------------
-  // Load files: MRU + siblings (instant, no deep scan)
+  // File index: two-phase loading
+  //   Phase 1 (instant): MRU + current dir siblings → show immediately
+  //   Phase 2 (async):   walkDir entire vault → merge in background
   // -------------------------------------------------------------------------
   private async loadFiles(): Promise<void> {
     const root = this.getRootDir()
     const currentDir = this.getCurrentDir()
     const seen = new Set<string>()
-    this.localFiles = []
+    const quickFiles: FileEntry[] = []
 
-    // 1. MRU files (already have full paths)
+    // Phase 1a: MRU entries
     const mru = this.getMru()
     for (const absPath of mru) {
       if (seen.has(absPath)) continue
       seen.add(absPath)
-      const basename = platform.path.basename(absPath)
-      const relPath = root && absPath.startsWith(root)
-        ? absPath.slice(root.length).replace(/^\//, '')
-        : absPath
-      this.localFiles.push({ absPath, relPath, basename })
+      quickFiles.push({
+        absPath,
+        relPath: toRelPath(absPath, root),
+        basename: platform.path.basename(absPath),
+      })
     }
 
-    // 2. Sibling .md files from current file's directory
+    // Phase 1b: Sibling .md files in current directory
     if (currentDir) {
       try {
         const entries = await platform.fs.list(currentDir)
         for (const name of entries) {
           if (name.startsWith('.')) continue
           const ext = platform.path.extname(name).toLowerCase()
-          if (!MD_EXTS.has(ext)) continue
+          if (!MD_EXT_SET.has(ext)) continue
           const absPath = platform.path.join(currentDir, name)
           if (seen.has(absPath)) continue
           seen.add(absPath)
-          const relPath = root && absPath.startsWith(root)
-            ? absPath.slice(root.length).replace(/^\//, '')
-            : name
-          this.localFiles.push({ absPath, relPath, basename: name })
+          quickFiles.push({
+            absPath,
+            relPath: toRelPath(absPath, root),
+            basename: name,
+          })
         }
       } catch (err) {
         console.warn('[tpl:quick-open] failed to list current dir:', err)
       }
     }
 
-    const dir = currentDir || root || '(无)'
-    this.updateFooter(`${this.localFiles.length} 个文件  ·  ${dir}`)
+    this.allFiles = quickFiles
+    this.updateFooter(`${quickFiles.length} 个文件  ·  ${root || currentDir || '(无)'}`)
+
+    // Phase 2: async vault-wide scan
+    if (root) {
+      this.loadVaultIndex(root, seen)
+    }
+  }
+
+  private async loadVaultIndex(root: string, alreadySeen: Set<string>): Promise<void> {
+    // Use cache if still valid
+    if (
+      this.vaultIndex.length > 0 &&
+      this.vaultIndexRoot === root &&
+      Date.now() - this.vaultIndexTime < INDEX_TTL_MS
+    ) {
+      this.mergeVaultIndex(alreadySeen)
+      return
+    }
+
+    if (this.indexing) return
+    this.indexing = true
+
+    try {
+      const paths = await platform.fs.walkDir(root, {
+        exts: MD_EXTS,
+        ignore: IGNORED_DIRS,
+        maxDepth: 20,
+        maxFiles: 5000,
+      })
+
+      this.vaultIndex = paths.map(absPath => ({
+        absPath,
+        relPath: toRelPath(absPath, root),
+        basename: platform.path.basename(absPath),
+      }))
+      this.vaultIndexRoot = root
+      this.vaultIndexTime = Date.now()
+
+      this.mergeVaultIndex(alreadySeen)
+    } catch (err) {
+      console.warn('[tpl:quick-open] vault index failed:', err)
+    } finally {
+      this.indexing = false
+    }
+  }
+
+  private mergeVaultIndex(alreadySeen: Set<string>): void {
+    const newEntries: FileEntry[] = []
+    for (const entry of this.vaultIndex) {
+      if (!alreadySeen.has(entry.absPath)) {
+        alreadySeen.add(entry.absPath)
+        newEntries.push(entry)
+      }
+    }
+    if (newEntries.length > 0) {
+      this.allFiles = [...this.allFiles, ...newEntries]
+      const root = this.getRootDir()
+      this.updateFooter(`${this.allFiles.length} 个文件  ·  ${root || '(无)'}`)
+      // Re-render if user hasn't typed anything yet
+      if (this.inputEl && !this.inputEl.value.trim()) {
+        this.renderList('')
+      }
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -338,7 +433,6 @@ export default class QuickOpenPlugin extends Plugin {
     this.listEl = list
 
     const onInput = () => {
-      // Debounce to avoid excess re-renders while typing fast
       if (this.debounceTimer) clearTimeout(this.debounceTimer)
       this.debounceTimer = setTimeout(() => this.renderList(input.value), DEBOUNCE_MS)
     }
@@ -372,14 +466,14 @@ export default class QuickOpenPlugin extends Plugin {
     if (!list) return
     list.innerHTML = ''
 
-    if (!this.localFiles.length) {
+    if (!this.allFiles.length) {
       list.appendChild(this.makeStatus('未找到 Markdown 文件'))
       return
     }
 
     if (query.trim()) {
-      // --- Query mode: FZF scoring ---
-      const results = this.localFiles
+      // --- Query mode: FZF scoring across all vault files ---
+      const results = this.allFiles
         .map(f => ({ f, s: scoreFile(f, query) }))
         .filter(x => x.s > -Infinity)
         .sort((a, b) => b.s - a.s)
@@ -393,30 +487,53 @@ export default class QuickOpenPlugin extends Plugin {
       this.selectedIdx = 0
       this.filtered.forEach((f, i) => list.appendChild(this.makeItem(f, i)))
     } else {
-      // --- No query: MRU first, then siblings ---
+      // --- Default view: MRU first, then current dir siblings ---
       const mru = this.getMru()
       const mruSet = new Set(mru)
-      const fileMap = new Map(this.localFiles.map(f => [f.absPath, f]))
+      const fileMap = new Map(this.allFiles.map(f => [f.absPath, f]))
 
       const mruFiles = mru
         .map(p => fileMap.get(p))
         .filter((f): f is FileEntry => !!f)
         .slice(0, 15)
 
-      const siblingFiles = this.localFiles
-        .filter(f => !mruSet.has(f.absPath))
-        .slice(0, 35)
+      const currentDir = this.getCurrentDir()
+      const root = this.getRootDir()
+      const currentDirPrefix = currentDir ? (currentDir.endsWith('/') ? currentDir : currentDir + '/') : ''
 
-      this.filtered = [...mruFiles, ...siblingFiles]
+      const siblingFiles = this.allFiles
+        .filter(f =>
+          !mruSet.has(f.absPath) &&
+          currentDirPrefix &&
+          f.absPath.startsWith(currentDirPrefix) &&
+          !f.absPath.slice(currentDirPrefix.length).includes('/'),
+        )
+        .slice(0, 20)
+
+      // Other vault files (not MRU, not siblings)
+      const shownSet = new Set([
+        ...mruFiles.map(f => f.absPath),
+        ...siblingFiles.map(f => f.absPath),
+      ])
+      const otherFiles = this.allFiles
+        .filter(f => !shownSet.has(f.absPath))
+        .slice(0, 15)
+
+      this.filtered = [...mruFiles, ...siblingFiles, ...otherFiles]
       this.selectedIdx = 0
 
+      let idx = 0
       if (mruFiles.length) {
         list.appendChild(this.makeSectionLabel('最近打开'))
-        mruFiles.forEach((f, i) => list.appendChild(this.makeItem(f, i)))
+        mruFiles.forEach(f => list.appendChild(this.makeItem(f, idx++)))
       }
       if (siblingFiles.length) {
-        list.appendChild(this.makeSectionLabel(mruFiles.length ? '当前目录' : '文件'))
-        siblingFiles.forEach((f, i) => list.appendChild(this.makeItem(f, mruFiles.length + i)))
+        list.appendChild(this.makeSectionLabel('当前目录'))
+        siblingFiles.forEach(f => list.appendChild(this.makeItem(f, idx++)))
+      }
+      if (otherFiles.length) {
+        list.appendChild(this.makeSectionLabel('其他文件'))
+        otherFiles.forEach(f => list.appendChild(this.makeItem(f, idx++)))
       }
     }
   }
