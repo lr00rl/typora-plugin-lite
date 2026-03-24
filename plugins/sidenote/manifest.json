@@ -1,0 +1,10 @@
+{
+  "id": "sidenote",
+  "name": "Sidenote",
+  "version": "0.1.0",
+  "description": "Auto-transform <span class=\"sidenote\"> into Tufte-style margin annotations",
+  "main": "main.js",
+  "loading": {
+    "startup": true
+  }
+}
