@@ -32,7 +32,9 @@ export class DarwinFS implements IFileSystem {
   }
 
   stat(filepath: string): Promise<FileStats> {
-    return shell.run(`stat ${shell.escape(filepath)}`)
+    // BSD stat needs -f format to produce parseable output;
+    // default BSD stat output doesn't contain "FileType:" strings.
+    return shell.run(`stat -f 'FileType: %HT%nModify: %Sm' -t '%Y-%m-%d %H:%M:%S' ${shell.escape(filepath)}`)
       .then(out => new DarwinFileStats(out))
   }
 

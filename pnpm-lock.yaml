@@ -31,6 +31,12 @@ importers:
         specifier: workspace:*
         version: link:../../packages/core
 
+  plugins/fuzzy-search:
+    dependencies:
+      '@typora-plugin-lite/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+
   plugins/md-padding:
     dependencies:
       '@typora-plugin-lite/core':

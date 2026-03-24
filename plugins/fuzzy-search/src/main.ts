@@ -6,12 +6,10 @@ interface FileEntry {
   basename: string
 }
 
-const SKIP_DIRS = new Set(['node_modules', '.git', '.next', 'dist', 'build', 'out', '.cache', '.svn', '.hg'])
 const MD_EXTS = new Set(['.md', '.markdown'])
-const MAX_DEPTH = 10
-const MAX_FILES = 8000
 const MAX_MRU = 30
 const HOTKEY = 'Mod+.'
+const DEBOUNCE_MS = 200
 
 // ---------------------------------------------------------------------------
 // FZF-inspired scoring
@@ -21,45 +19,37 @@ function fzfScore(text: string, query: string): number {
   const t = text.toLowerCase()
   const q = query.toLowerCase()
 
-  // Greedy forward subsequence match
   const positions: number[] = []
   let qi = 0
   for (let ti = 0; ti < t.length && qi < q.length; ti++) {
     if (t[ti] === q[qi]) { positions.push(ti); qi++ }
   }
-  if (qi < q.length) return -Infinity  // no match
+  if (qi < q.length) return -Infinity
 
   let score = 100
   let prevPos = -2
   let consecutive = 0
 
   for (const pos of positions) {
-    // Consecutive run bonus (escalates like fzf)
     if (pos === prevPos + 1) {
       consecutive++
       score += consecutive * 6
     } else {
       consecutive = 0
     }
-
-    // Word boundary bonus
     const prevCh = pos > 0 ? t[pos - 1] : ''
     if (pos === 0 || /[\\/\-_.\s]/.test(prevCh)) score += 10
-    if (pos === 0) score += 12  // leading-char bonus
-
+    if (pos === 0) score += 12
     prevPos = pos
   }
 
-  // Tighter match = less penalty
   const span = positions[positions.length - 1] - positions[0] + 1
   score -= span * 0.4
   score -= (t.length - q.length) * 0.1
-
   return score
 }
 
 function scoreFile(f: FileEntry, query: string): number {
-  // Basename match is worth more than full-path match
   const nameScore = fzfScore(f.basename, query) + 25
   const pathScore = fzfScore(f.relPath, query)
   return Math.max(nameScore, pathScore)
@@ -178,12 +168,12 @@ export default class QuickOpenPlugin extends Plugin {
   private overlay: HTMLElement | null = null
   private inputEl: HTMLInputElement | null = null
   private listEl: HTMLElement | null = null
-  private allFiles: FileEntry[] = []
+  /** MRU files that actually exist + sibling .md files */
+  private localFiles: FileEntry[] = []
   private filtered: FileEntry[] = []
   private selectedIdx = 0
-  private scanning = false
-  private scanRoot = ''
   private modalCleanups: Array<() => void> = []
+  private debounceTimer: ReturnType<typeof setTimeout> | null = null
 
   onload(): void {
     this.registerHotkey(HOTKEY, () => this.open())
@@ -194,7 +184,7 @@ export default class QuickOpenPlugin extends Plugin {
   }
 
   // -------------------------------------------------------------------------
-  // MRU helpers  (stored in plugin settings as plain string[])
+  // MRU helpers
   // -------------------------------------------------------------------------
   private getMru(): string[] {
     const raw = this.settings.get('mru' as never)
@@ -214,15 +204,61 @@ export default class QuickOpenPlugin extends Plugin {
   }
 
   // -------------------------------------------------------------------------
-  // Determine the workspace root to scan from.
-  // Priority: watchedFolder (sidebar) → current file's dirname
+  // Get current directory & root
   // -------------------------------------------------------------------------
-  private getRootDir(): string {
-    const watched = (window as any).File?.editor?.library?.watchedFolder
-    if (watched && typeof watched === 'string') return watched
-
+  private getCurrentDir(): string {
     const filePath = editor.getFilePath()
     return filePath ? platform.path.dirname(filePath) : ''
+  }
+
+  private getRootDir(): string {
+    return editor.getWatchedFolder() ?? this.getCurrentDir()
+  }
+
+  // -------------------------------------------------------------------------
+  // Load files: MRU + siblings (instant, no deep scan)
+  // -------------------------------------------------------------------------
+  private async loadFiles(): Promise<void> {
+    const root = this.getRootDir()
+    const currentDir = this.getCurrentDir()
+    const seen = new Set<string>()
+    this.localFiles = []
+
+    // 1. MRU files (already have full paths)
+    const mru = this.getMru()
+    for (const absPath of mru) {
+      if (seen.has(absPath)) continue
+      seen.add(absPath)
+      const basename = platform.path.basename(absPath)
+      const relPath = root && absPath.startsWith(root)
+        ? absPath.slice(root.length).replace(/^\//, '')
+        : absPath
+      this.localFiles.push({ absPath, relPath, basename })
+    }
+
+    // 2. Sibling .md files from current file's directory
+    if (currentDir) {
+      try {
+        const entries = await platform.fs.list(currentDir)
+        for (const name of entries) {
+          if (name.startsWith('.')) continue
+          const ext = platform.path.extname(name).toLowerCase()
+          if (!MD_EXTS.has(ext)) continue
+          const absPath = platform.path.join(currentDir, name)
+          if (seen.has(absPath)) continue
+          seen.add(absPath)
+          const relPath = root && absPath.startsWith(root)
+            ? absPath.slice(root.length).replace(/^\//, '')
+            : name
+          this.localFiles.push({ absPath, relPath, basename: name })
+        }
+      } catch (err) {
+        console.warn('[tpl:quick-open] failed to list current dir:', err)
+      }
+    }
+
+    const dir = currentDir || root || '(无)'
+    this.updateFooter(`${this.localFiles.length} 个文件  ·  ${dir}`)
   }
 
   // -------------------------------------------------------------------------
@@ -231,13 +267,14 @@ export default class QuickOpenPlugin extends Plugin {
   private async open(): Promise<void> {
     if (this.overlay) { this.close(); return }
     this.buildModal()
-    await this.scan()
+    await this.loadFiles()
     if (this.overlay) {
-      this.renderList(this.inputEl?.value ?? '')
+      this.renderList('')
     }
   }
 
   private close(): void {
+    if (this.debounceTimer) clearTimeout(this.debounceTimer)
     for (const fn of this.modalCleanups) fn()
     this.modalCleanups = []
     this.overlay?.remove()
@@ -269,29 +306,26 @@ export default class QuickOpenPlugin extends Plugin {
     const modal = document.createElement('div')
     modal.id = 'tpl-qo-modal'
 
-    // Input row
     const inputRow = document.createElement('div')
     inputRow.id = 'tpl-qo-input-row'
     const icon = document.createElement('span')
     icon.id = 'tpl-qo-icon'
-    icon.textContent = '⌕'
+    icon.textContent = '\u2315'
     const input = document.createElement('input')
     input.id = 'tpl-qo-input'
     input.type = 'text'
-    input.placeholder = '输入文件名...'
+    input.placeholder = '输入文件名搜索...'
     input.autocomplete = 'off'
     input.spellcheck = false
     inputRow.appendChild(icon)
     inputRow.appendChild(input)
 
-    // List
     const list = document.createElement('div')
     list.id = 'tpl-qo-list'
 
-    // Footer
     const footer = document.createElement('div')
     footer.id = 'tpl-qo-footer'
-    footer.textContent = '正在扫描...'
+    footer.textContent = '加载中...'
 
     modal.appendChild(inputRow)
     modal.appendChild(list)
@@ -303,8 +337,11 @@ export default class QuickOpenPlugin extends Plugin {
     this.inputEl = input
     this.listEl = list
 
-    // Event wiring
-    const onInput = () => this.renderList(input.value)
+    const onInput = () => {
+      // Debounce to avoid excess re-renders while typing fast
+      if (this.debounceTimer) clearTimeout(this.debounceTimer)
+      this.debounceTimer = setTimeout(() => this.renderList(input.value), DEBOUNCE_MS)
+    }
     const onKeydown = (e: KeyboardEvent) => this.handleKey(e)
     const onEsc = (e: KeyboardEvent) => {
       if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); this.close() }
@@ -318,7 +355,6 @@ export default class QuickOpenPlugin extends Plugin {
       () => document.removeEventListener('keydown', onEsc, { capture: true }),
     )
 
-    this.scanning = true
     this.renderList('')
     setTimeout(() => input.focus(), 30)
   }
@@ -329,81 +365,6 @@ export default class QuickOpenPlugin extends Plugin {
   }
 
   // -------------------------------------------------------------------------
-  // File scanning
-  // -------------------------------------------------------------------------
-  private async scan(): Promise<void> {
-    const root = this.getRootDir()
-    if (!root) {
-      this.scanning = false
-      this.updateFooter('未找到工作目录，请先在 Typora 中打开一个文件夹')
-      return
-    }
-    this.scanRoot = root
-    this.allFiles = []
-    try {
-      if (IS_MAC) {
-        await this.scanWithFind(root)
-      } else {
-        await this.scanDir(root, root, MAX_DEPTH)
-      }
-    } catch (err) {
-      console.error('[tpl:quick-open] scan error:', err)
-    } finally {
-      this.scanning = false
-      this.updateFooter(`${this.allFiles.length} 个文件  ·  ${root}`)
-    }
-  }
-
-  /** macOS: single `find` call — avoids per-entry stat() and BSD stat format issues. */
-  private async scanWithFind(root: string): Promise<void> {
-    const escaped = platform.shell.escape(root)
-    // Build -path prune expressions for skipped dirs
-    const pruneExpr = [...SKIP_DIRS]
-      .map(d => `-path ${platform.shell.escape('*/' + d)} -prune`)
-      .join(' -o ')
-    const cmd = [
-      `find ${escaped}`,
-      `\\( ${pruneExpr} \\)`,
-      `-o -type f \\( -iname '*.md' -o -iname '*.markdown' \\) -print`,
-    ].join(' ')
-
-    const output = await platform.shell.run(cmd, { timeout: 30_000 })
-    const lines = output.trim().split('\n').filter(Boolean)
-    for (const absPath of lines) {
-      if (this.allFiles.length >= MAX_FILES) break
-      const relPath = absPath.slice(root.length).replace(/^\//, '')
-      const basename = platform.path.basename(absPath)
-      this.allFiles.push({ absPath, relPath, basename })
-    }
-  }
-
-  /** Win/Linux: recursive scan via Node.js fs (stat works correctly there). */
-  private async scanDir(dir: string, root: string, depth: number): Promise<void> {
-    if (depth <= 0 || this.allFiles.length >= MAX_FILES) return
-    let entries: string[]
-    try {
-      entries = await platform.fs.list(dir)
-    } catch {
-      return
-    }
-    const subdirs: string[] = []
-    for (const name of entries) {
-      if (name.startsWith('.') || SKIP_DIRS.has(name)) continue
-      const absPath = platform.path.join(dir, name)
-      try {
-        const stat = await platform.fs.stat(absPath)
-        if (stat.isDirectory()) {
-          subdirs.push(absPath)
-        } else if (MD_EXTS.has(platform.path.extname(name).toLowerCase())) {
-          const relPath = absPath.slice(root.length).replace(/^[/\\]/, '')
-          this.allFiles.push({ absPath, relPath, basename: name })
-        }
-      } catch {}
-    }
-    await Promise.all(subdirs.map(sd => this.scanDir(sd, root, depth - 1)))
-  }
-
-  // -------------------------------------------------------------------------
   // Rendering
   // -------------------------------------------------------------------------
   private renderList(query: string): void {
@@ -411,18 +372,14 @@ export default class QuickOpenPlugin extends Plugin {
     if (!list) return
     list.innerHTML = ''
 
-    if (this.scanning) {
-      list.appendChild(this.makeStatus('正在扫描文件...'))
-      return
-    }
-    if (!this.allFiles.length) {
+    if (!this.localFiles.length) {
       list.appendChild(this.makeStatus('未找到 Markdown 文件'))
       return
     }
 
     if (query.trim()) {
       // --- Query mode: FZF scoring ---
-      const results = this.allFiles
+      const results = this.localFiles
         .map(f => ({ f, s: scoreFile(f, query) }))
         .filter(x => x.s > -Infinity)
         .sort((a, b) => b.s - a.s)
@@ -436,30 +393,30 @@ export default class QuickOpenPlugin extends Plugin {
       this.selectedIdx = 0
       this.filtered.forEach((f, i) => list.appendChild(this.makeItem(f, i)))
     } else {
-      // --- No query: MRU first, then remaining ---
+      // --- No query: MRU first, then siblings ---
       const mru = this.getMru()
       const mruSet = new Set(mru)
-      const fileMap = new Map(this.allFiles.map(f => [f.absPath, f]))
+      const fileMap = new Map(this.localFiles.map(f => [f.absPath, f]))
 
       const mruFiles = mru
         .map(p => fileMap.get(p))
         .filter((f): f is FileEntry => !!f)
         .slice(0, 15)
 
-      const restFiles = this.allFiles
+      const siblingFiles = this.localFiles
         .filter(f => !mruSet.has(f.absPath))
         .slice(0, 35)
 
-      this.filtered = [...mruFiles, ...restFiles]
+      this.filtered = [...mruFiles, ...siblingFiles]
       this.selectedIdx = 0
 
       if (mruFiles.length) {
         list.appendChild(this.makeSectionLabel('最近打开'))
         mruFiles.forEach((f, i) => list.appendChild(this.makeItem(f, i)))
       }
-      if (restFiles.length) {
-        list.appendChild(this.makeSectionLabel(mruFiles.length ? '所有文件' : '文件'))
-        restFiles.forEach((f, i) => list.appendChild(this.makeItem(f, mruFiles.length + i)))
+      if (siblingFiles.length) {
+        list.appendChild(this.makeSectionLabel(mruFiles.length ? '当前目录' : '文件'))
+        siblingFiles.forEach((f, i) => list.appendChild(this.makeItem(f, mruFiles.length + i)))
       }
     }
   }
