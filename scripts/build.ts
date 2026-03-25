@@ -1,8 +1,10 @@
 import * as esbuild from 'esbuild'
 import { readdirSync, existsSync, copyFileSync, mkdirSync, writeFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { join, resolve, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const ROOT = resolve(import.meta.dirname, '..')
+const __dirname = dirname(fileURLToPath(import.meta.url))
+const ROOT = resolve(__dirname, '..')
 const DIST = join(ROOT, 'dist')
 const isWatch = process.argv.includes('--watch')
 const isProd = process.argv.includes('--prod')
