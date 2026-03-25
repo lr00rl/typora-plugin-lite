@@ -37,31 +37,51 @@ export class PluginManager {
     this.appRef = { platform: deps.platform, events: deps.events, hotkeys: deps.hotkeys }
   }
 
-  /** Scan plugins directory for manifest.json files, register lazy triggers, then load startup plugins. */
-  async scanAndLoad(): Promise<void> {
-    const pluginsDir = this.platform.pluginsDir
-    console.log('[tpl:manager]', 'scan:start', { pluginsDir })
-    let dirs: string[]
+  /** Scan a single plugins directory for manifest.json files. */
+  private async scanDir(dir: string): Promise<string[]> {
     try {
-      dirs = await this.platform.fs.list(pluginsDir)
-      console.log('[tpl:manager]', 'scan:dirs', { count: dirs.length, dirs })
+      const entries = await this.platform.fs.list(dir)
+      console.log('[tpl:manager]', 'scan:dirs', { dir, count: entries.length, entries })
+      return entries
     } catch {
-      console.warn('[tpl] plugins directory not found, skipping scan')
+      console.log('[tpl:manager]', 'scan:dir-not-found', { dir })
+      return []
+    }
+  }
+
+  /** Scan plugins directories for manifest.json files, register lazy triggers, then load startup plugins. */
+  async scanAndLoad(): Promise<void> {
+    const builtinDir = this.platform.builtinPluginsDir
+    const userDir = this.platform.pluginsDir
+    console.log('[tpl:manager]', 'scan:start', { builtinDir, userDir })
+
+    // Scan both builtin and user plugin directories
+    const builtinEntries = builtinDir ? await this.scanDir(builtinDir) : []
+    const userEntries = (userDir && userDir !== builtinDir) ? await this.scanDir(userDir) : []
+
+    // Merge: map each entry to its parent directory for manifest resolution
+    const dirs: Array<{ name: string; parentDir: string }> = [
+      ...builtinEntries.map(name => ({ name, parentDir: builtinDir })),
+      ...userEntries.map(name => ({ name, parentDir: userDir })),
+    ]
+
+    if (dirs.length === 0) {
+      console.warn('[tpl] no plugins found in any directory')
       return
     }
 
     // Read all manifests
-    for (const dir of dirs) {
+    for (const { name, parentDir } of dirs) {
       try {
-        const manifestPath = this.platform.path.join(pluginsDir, dir, 'manifest.json')
+        const manifestPath = this.platform.path.join(parentDir, name, 'manifest.json')
         const exists = await this.platform.fs.exists(manifestPath)
-        console.log('[tpl:manager]', 'scan:manifest-check', { dir, manifestPath, exists })
+        console.log('[tpl:manager]', 'scan:manifest-check', { name, manifestPath, exists })
         if (!exists) continue
         const text = await this.platform.fs.readText(manifestPath)
         const manifest: PluginManifest = JSON.parse(text)
         this.registerPlugin(manifest)
       } catch (err) {
-        console.warn(`[tpl] failed to read manifest for ${dir}:`, err)
+        console.warn(`[tpl] failed to read manifest for ${name}:`, err)
       }
     }
 

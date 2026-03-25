@@ -12,7 +12,7 @@ warn()  { printf "${YELLOW}[warn]${NC}  %s\n" "$1"; }
 err()   { printf "${RED}[error]${NC} %s\n" "$1" >&2; }
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-DIST_DIR="$(cd "$SCRIPT_DIR/.." && pwd)/dist"
+DIST_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)/dist"
 TYPORA_PATH=""
 SILENT=false
 

@@ -29,20 +29,38 @@ export function getBaseUrl(): string {
 }
 
 /**
- * Get the filesystem path to the plugins directory.
+ * Get the filesystem path to the built-in plugins directory (shipped with installer).
  * On macOS: derived from baseUrl → /path/to/tpl/plugins.
+ * On Win/Linux: derived from __dirname (window.html location) → tpl/plugins.
+ */
+export function getBuiltinPluginsDir(): string {
+  if (IS_MAC) {
+    const baseUrl = getBaseUrl()
+    if (baseUrl) {
+      const tplDir = decodeURIComponent(baseUrl.replace(/^file:\/\//, ''))
+      return `${tplDir}/plugins`
+    }
+    return ''
+  }
+  // Electron: use process.resourcesPath to get the actual resources directory
+  // (__dirname points into electron.asar which is not a real filesystem path)
+  const resourcesPath = (window as any).process?.resourcesPath ?? ''
+  if (resourcesPath) {
+    const path = window.reqnode?.('path') as typeof import('node:path') | undefined
+    return path ? path.join(resourcesPath, 'tpl', 'plugins') : `${resourcesPath}/tpl/plugins`
+  }
+  return ''
+}
+
+/**
+ * Get the filesystem path to the user plugins directory (third-party plugins).
+ * On macOS: derived from baseUrl → /path/to/tpl/plugins (same as builtin for now).
  * On Win/Linux: use _options.userPath + /plugins.
  * Both platforms return the directory that contains plugin subdirectories.
  */
 export function getPluginsDir(): string {
   if (IS_MAC) {
-    const baseUrl = getBaseUrl()
-    if (baseUrl) {
-      // Convert file:///path/to/tpl → /path/to/tpl/plugins
-      const tplDir = decodeURIComponent(baseUrl.replace(/^file:\/\//, ''))
-      return `${tplDir}/plugins`
-    }
-    return ''
+    return getBuiltinPluginsDir()
   }
   const userPath = (window as any)._options?.userPath ?? ''
   return userPath ? `${userPath}/plugins` : ''
