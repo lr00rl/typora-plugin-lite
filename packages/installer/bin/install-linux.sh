@@ -83,6 +83,13 @@ HTML_FILE=$(find_html) || {
 HTML_DIR="$(dirname "$HTML_FILE")"
 info "Found HTML: $HTML_FILE"
 
+# --- check dist exists (before modifying anything) --------------------------
+if [[ ! -d "$DIST_DIR" ]]; then
+  err "dist/ directory not found at $DIST_DIR"
+  err "Please run 'pnpm build' first."
+  exit 1
+fi
+
 # --- check write permissions ------------------------------------------------
 if [[ ! -w "$HTML_FILE" ]]; then
   warn "No write permission. Trying with sudo..."
@@ -117,13 +124,6 @@ else
   echo "$SCRIPT_TAG" | $SUDO tee -a "$HTML_FILE" > /dev/null
 fi
 ok "Script tag injected"
-
-# --- check dist exists ------------------------------------------------------
-if [[ ! -d "$DIST_DIR" ]]; then
-  err "dist/ directory not found at $DIST_DIR"
-  err "Please run 'pnpm build' first."
-  exit 1
-fi
 
 # --- copy dist → tpl/ -------------------------------------------------------
 TPL_DIR="$HTML_DIR/tpl"

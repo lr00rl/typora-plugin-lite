@@ -102,6 +102,13 @@ if (-not $HtmlFile) {
 $HtmlDir = Split-Path -Parent $HtmlFile
 Write-Info "Found HTML: $HtmlFile"
 
+# --- Check dist exists (before modifying anything) -------------------------
+if (-not (Test-Path $DistDir -PathType Container)) {
+    Write-Err "dist\ directory not found at $DistDir"
+    Write-Err "Please run 'pnpm build' first."
+    exit 1
+}
+
 # --- Check if already installed ---------------------------------------------
 $ScriptTag = '<script src="./tpl/loader.js" defer="defer"></script>'
 $content = Get-Content $HtmlFile -Raw -Encoding UTF8
@@ -131,13 +138,6 @@ if ($content.Contains('</body>')) {
 
 Set-Content $HtmlFile -Value $content -Encoding UTF8 -NoNewline
 Write-Ok "Script tag injected"
-
-# --- Check dist exists ------------------------------------------------------
-if (-not (Test-Path $DistDir -PathType Container)) {
-    Write-Err "dist\ directory not found at $DistDir"
-    Write-Err "Please run 'pnpm build' first."
-    exit 1
-}
 
 # --- Copy dist → tpl\ -------------------------------------------------------
 $TplDir = Join-Path $HtmlDir 'tpl'
