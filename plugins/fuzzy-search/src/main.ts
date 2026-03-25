@@ -19,7 +19,7 @@ const MD_EXT_SET = new Set(MD_EXTS)
 const MAX_MRU = 30
 const HOTKEY = 'Mod+.'
 const DEBOUNCE_MS = 150
-const INDEX_TTL_MS = 60_000
+const INDEX_TTL_MS = 5_000
 const IGNORED_DIRS = ['.git', 'node_modules', '.obsidian', '.trash', '.Trash', '_archive']
 const TAG = '[tpl:quick-open]'
 const DEBUG_SAMPLE_LIMIT = 20
@@ -590,6 +590,92 @@ export default class QuickOpenPlugin extends Plugin {
     })
   }
 
+  /**
+   * Reliable directory walker that doesn't depend on Typora's library tree.
+   * Strategy: try `find` first (fast, single command), fall back to BFS `ls -p`.
+   */
+  private async walkDirPure(root: string, maxDepth = 20, maxFiles = 5000): Promise<FileEntry[]> {
+    // Fast path: single `find` command (typically <100ms for most workspaces)
+    try {
+      const findResult = await this.walkDirWithFind(root, maxDepth, maxFiles)
+      if (findResult.length > 0) return findResult
+    } catch (err) {
+      this.log('walkDirPure:find-failed, falling back to BFS', { root, err })
+    }
+
+    // Fallback: BFS with `ls -p` per directory (reliable, many small calls)
+    return this.walkDirWithBFS(root, maxDepth, maxFiles)
+  }
+
+  private async walkDirWithFind(root: string, maxDepth: number, maxFiles: number): Promise<FileEntry[]> {
+    const esc = (s: string) => platform.shell.escape(s)
+    const ignorePrune = IGNORED_DIRS.map(d => `-name ${esc(d)}`).join(' -o ')
+    const extMatch = MD_EXTS.map(e => `-name ${esc('*' + e)}`).join(' -o ')
+    const cmd = [
+      'find', esc(root),
+      `-maxdepth ${maxDepth}`,
+      `\\( -type d \\( ${ignorePrune} -o -name '.*' \\) -prune \\)`,
+      `-o -type f \\( ${extMatch} \\) -print`,
+      `| head -n ${maxFiles}`,
+    ].join(' ')
+
+    this.log('walkDirWithFind:start', { root, cmd: cmd.slice(0, 200) })
+    const output = await platform.shell.run(cmd, { timeout: 10_000 })
+    const results = output.trim().split('\n').filter(Boolean).map(absPath => ({
+      absPath,
+      relPath: toRelPath(absPath, root),
+      basename: platform.path.basename(absPath),
+    }))
+    this.log('walkDirWithFind:done', { root, count: results.length })
+    return results
+  }
+
+  private async walkDirWithBFS(root: string, maxDepth: number, maxFiles: number): Promise<FileEntry[]> {
+    const results: FileEntry[] = []
+    const queue: Array<{ dir: string; depth: number }> = [{ dir: root, depth: 0 }]
+    const BATCH_SIZE = 16
+
+    while (queue.length > 0 && results.length < maxFiles) {
+      const batch = queue.splice(0, BATCH_SIZE)
+      const batchResults = await Promise.all(
+        batch.map(async ({ dir, depth }) => {
+          const files: FileEntry[] = []
+          const subdirs: Array<{ dir: string; depth: number }> = []
+          try {
+            const output = await platform.shell.run(
+              `ls -p ${platform.shell.escape(dir)}`,
+              { timeout: 5000 },
+            )
+            for (const entry of output.trim().split('\n').filter(Boolean)) {
+              if (entry.startsWith('.')) continue
+              if (entry.endsWith('/')) {
+                const name = entry.slice(0, -1)
+                if (!IGNORED_DIRS.includes(name) && depth + 1 <= maxDepth) {
+                  subdirs.push({ dir: platform.path.join(dir, name), depth: depth + 1 })
+                }
+              } else {
+                const ext = platform.path.extname(entry).toLowerCase()
+                if (MD_EXT_SET.has(ext)) {
+                  const absPath = platform.path.join(dir, entry)
+                  files.push({ absPath, relPath: toRelPath(absPath, root), basename: entry })
+                }
+              }
+            }
+          } catch { /* directory not listable, skip */ }
+          return { files, subdirs }
+        }),
+      )
+
+      for (const r of batchResults) {
+        results.push(...r.files)
+        queue.push(...r.subdirs)
+      }
+    }
+
+    this.log('walkDirWithBFS:done', { root, count: results.length })
+    return results.slice(0, maxFiles)
+  }
+
   private mergeFileEntries(primary: FileEntry[], secondary: FileEntry[]): FileEntry[] {
     const merged = new Map<string, FileEntry>()
     for (const entry of [...primary, ...secondary]) merged.set(entry.absPath, entry)
@@ -616,9 +702,26 @@ export default class QuickOpenPlugin extends Plugin {
     this.log('loadFiles:start', { root, currentDir, candidates, cacheRoot: this.vaultIndexRoot, cacheCount: this.vaultIndex.length })
     await this.ensureFzfInfo()
 
-    // Phase 1a: MRU entries
-    const mru = this.getMru()
+    // Phase 1a: MRU entries — filter out deleted files
+    let mru = this.getMru()
     this.log('loadFiles:mru', { count: mru.length, sample: mru.slice(0, DEBUG_SAMPLE_LIMIT) })
+    if (mru.length > 0) {
+      try {
+        const checkCmd = mru
+          .map(p => `test -f ${platform.shell.escape(p)} && printf '%s\\n' ${platform.shell.escape(p)}`)
+          .join('; ')
+        const output = await platform.shell.run(checkCmd, { timeout: 5000 })
+        const existingSet = new Set(output.trim().split('\n').filter(Boolean))
+        const before = mru.length
+        mru = mru.filter(p => existingSet.has(p))
+        if (mru.length < before) {
+          this.log('loadFiles:mru-pruned', { before, after: mru.length })
+          this.saveMru(mru).catch(() => {})
+        }
+      } catch (err) {
+        this.warn('loadFiles:mru-existence-check-failed', err)
+      }
+    }
     for (const absPath of mru) {
       if (seen.has(absPath)) continue
       seen.add(absPath)
@@ -709,31 +812,26 @@ export default class QuickOpenPlugin extends Plugin {
     })
 
     try {
-      const libraryEntries = this.collectVaultIndexFromLibrary(root, 20, 5000)
-      const bridgeEntries = await this.collectVaultIndexFromBridge(root, 5000)
-      const typoraEntries = this.mergeFileEntries(libraryEntries, bridgeEntries)
-      this.log('loadVaultIndex:typora-sources', {
+      // Always run pure-JS walk as the primary source (reliable, no timeout)
+      // Typora's library tree is lazily loaded and often incomplete
+      const [pureWalkEntries, libraryEntries, bridgeEntries] = await Promise.all([
+        this.walkDirPure(root, 20, 5000),
+        Promise.resolve(this.collectVaultIndexFromLibrary(root, 20, 5000)),
+        this.collectVaultIndexFromBridge(root, 5000),
+      ])
+      // Merge all sources: pure walk is most complete, Typora sources fill gaps
+      const allEntries = this.mergeFileEntries(
+        pureWalkEntries,
+        this.mergeFileEntries(libraryEntries, bridgeEntries),
+      )
+      this.log('loadVaultIndex:sources', {
         root,
+        pureWalkCount: pureWalkEntries.length,
         libraryCount: libraryEntries.length,
         bridgeCount: bridgeEntries.length,
-        mergedCount: typoraEntries.length,
+        mergedCount: allEntries.length,
       })
-      if (typoraEntries.length > 0) {
-        this.vaultIndex = typoraEntries
-      } else {
-        this.log('loadVaultIndex:typora-empty-fallback-shell', { root })
-        const paths = await platform.fs.walkDir(root, {
-          exts: MD_EXTS,
-          ignore: IGNORED_DIRS,
-          maxDepth: 20,
-          maxFiles: 5000,
-        })
-        this.vaultIndex = paths.map(absPath => ({
-          absPath,
-          relPath: toRelPath(absPath, root),
-          basename: platform.path.basename(absPath),
-        }))
-      }
+      this.vaultIndex = allEntries
 
       this.vaultIndexRoot = root
       this.vaultIndexTime = Date.now()
@@ -1025,7 +1123,9 @@ export default class QuickOpenPlugin extends Plugin {
 
     const pathEl = document.createElement('div')
     pathEl.className = 'tpl-qo-path'
-    pathEl.textContent = f.relPath
+    // Show parent directory path (without filename) for clearer context
+    const lastSlash = f.relPath.lastIndexOf('/')
+    pathEl.textContent = lastSlash > 0 ? f.relPath.slice(0, lastSlash) : '/'
 
     item.appendChild(name)
     item.appendChild(pathEl)
