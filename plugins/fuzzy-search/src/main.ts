@@ -17,7 +17,7 @@ interface LibraryIndexStats {
 const MD_EXTS = ['.md', '.markdown']
 const MD_EXT_SET = new Set(MD_EXTS)
 const MAX_MRU = 30
-const HOTKEY = 'Mod+.'
+const DEFAULT_HOTKEYS = ['Mod+.', "Mod+'"]
 const DEBOUNCE_MS = 150
 const INDEX_TTL_MS = 5_000
 const IGNORED_DIRS = ['.git', 'node_modules', '.obsidian', '.trash', '.Trash', '_archive']
@@ -81,12 +81,14 @@ function scoreFile(f: FileEntry, query: string): number {
 // ---------------------------------------------------------------------------
 function toRelPath(absPath: string, root: string): string {
   if (!root) return absPath
-  // Ensure root ends with separator for safe prefix check
-  const prefix = root.endsWith('/') ? root : root + '/'
-  if (absPath.startsWith(prefix)) {
-    return absPath.slice(prefix.length)
+  // Normalize separators for cross-platform matching
+  const normAbs = absPath.replace(/\\/g, '/')
+  const normRoot = root.replace(/\\/g, '/')
+  const prefix = normRoot.endsWith('/') ? normRoot : normRoot + '/'
+  if (normAbs.startsWith(prefix)) {
+    return normAbs.slice(prefix.length)
   }
-  return absPath
+  return normAbs
 }
 
 // ---------------------------------------------------------------------------
@@ -218,9 +220,20 @@ export default class QuickOpenPlugin extends Plugin {
   private fzfChecked = false
   private fzfPath: string | null = null
 
+  private getHotkeys(): string[] {
+    const custom = this.settings.get('hotkeys' as never) as unknown
+    if (Array.isArray(custom) && custom.length > 0 && custom.every(k => typeof k === 'string')) {
+      return custom as string[]
+    }
+    return DEFAULT_HOTKEYS
+  }
+
   onload(): void {
-    this.log('onload', { hotkey: HOTKEY, dataDir: platform.dataDir })
-    this.registerHotkey(HOTKEY, () => this.open())
+    const hotkeys = this.getHotkeys()
+    this.log('onload', { hotkeys, dataDir: platform.dataDir })
+    for (const key of hotkeys) {
+      this.registerHotkey(key, () => this.open())
+    }
   }
 
   onunload(): void {

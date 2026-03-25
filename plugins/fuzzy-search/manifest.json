@@ -2,10 +2,10 @@
   "id": "fuzzy-search",
   "name": "Quick Open",
   "version": "0.1.0",
-  "description": "Quick file search and open with Mod+P (like VS Code's Cmd+P)",
+  "description": "Quick file search and open (Mod+. or Mod+')",
   "main": "main.js",
   "loading": {
     "startup": false,
-    "hotkey": ["Mod+."]
+    "hotkey": ["Mod+.", "Mod+'"]
   }
 }
