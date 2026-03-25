@@ -1161,6 +1161,8 @@ export default class QuickOpenPlugin extends Plugin {
   // Keyboard navigation
   // -------------------------------------------------------------------------
   private handleKey(e: KeyboardEvent): void {
+    // Skip when IME is composing (e.g. Chinese input confirming pinyin with Enter)
+    if (e.isComposing || e.keyCode === 229) return
     if (e.key === 'ArrowDown') {
       e.preventDefault()
       this.selectedIdx = Math.min(this.selectedIdx + 1, this.filtered.length - 1)
