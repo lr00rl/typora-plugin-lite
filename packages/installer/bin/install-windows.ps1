@@ -21,7 +21,7 @@ function Write-Warn  { param($m) Write-Host "[warn]  $m" -ForegroundColor Yellow
 function Write-Err   { param($m) Write-Host "[error] $m" -ForegroundColor Red }
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$DistDir   = Join-Path (Split-Path -Parent $ScriptDir) 'dist'
+$DistDir   = Join-Path (Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $ScriptDir))) 'dist'
 
 # --- Check admin ------------------------------------------------------------
 $isAdmin = ([Security.Principal.WindowsPrincipal] `

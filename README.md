@@ -59,27 +59,104 @@ Plugins never touch low-level APIs directly. They use `platform.fs`, `platform.s
 ## 🛠️ Installation
 
 ### Prerequisites
-- [Typora](https://typora.io/) installed.
-- [Node.js](https://nodejs.org/) and [pnpm](https://pnpm.io/) for building from source.
 
-### Build from source
+- [Typora](https://typora.io/) installed
+- [Node.js](https://nodejs.org/) (v18+) and [pnpm](https://pnpm.io/) for building from source
+
+### Step 1: Clone & Build
+
 ```bash
+git clone https://github.com/AcademicDog/typora-plugin-lite.git
+cd typora-plugin-lite
 pnpm install
-pnpm run build
+pnpm build
 ```
 
-### Run Installer
-The installer will automatically detect your OS, inject the loader script into Typora's entry HTML, and handle code signing (on macOS).
+### Step 2: Run Installer
 
-**macOS / Linux:**
+The installer automatically detects your Typora installation, backs up `window.html`, injects the loader script, and copies plugin files into Typora's resources directory.
+
+<details>
+<summary><strong>macOS</strong></summary>
+
 ```bash
 ./packages/installer/install.sh
 ```
 
-**Windows (PowerShell):**
-```powershell
-powershell -ExecutionPolicy Bypass -File packages/installer/bin/install-windows.ps1
+The script searches these default locations:
+- `/Applications/Typora.app`
+
+If Typora is installed elsewhere:
+```bash
+./packages/installer/install.sh -p /path/to/Typora.app
 ```
+
+> **Note:** On macOS, the installer will re-sign the app bundle to maintain code signature validity. You may be prompted for your password.
+
+</details>
+
+<details>
+<summary><strong>Linux</strong></summary>
+
+```bash
+sudo ./packages/installer/install.sh
+```
+
+`sudo` is required because Typora's resources directory (e.g. `/usr/share/typora/resources/`) is typically owned by root.
+
+The script searches these default locations:
+- `/usr/share/typora`
+- `/usr/local/share/typora`
+- `/opt/typora`
+- `~/.local/share/Typora`
+
+If Typora is installed elsewhere:
+```bash
+sudo ./packages/installer/install.sh -p /path/to/typora
+```
+
+</details>
+
+<details>
+<summary><strong>Windows</strong></summary>
+
+Open **PowerShell as Administrator**, then run:
+```powershell
+powershell -ExecutionPolicy Bypass -File packages\installer\bin\install-windows.ps1
+```
+
+The script searches these default locations:
+- `C:\Program Files\Typora`
+- `C:\Program Files (x86)\Typora`
+- `%LOCALAPPDATA%\Programs\Typora`
+- Windows Registry install records
+
+If Typora is installed elsewhere:
+```powershell
+powershell -ExecutionPolicy Bypass -File packages\installer\bin\install-windows.ps1 -Path "D:\Apps\Typora"
+```
+
+> **Note:** Administrator privileges are needed to write to Typora's installation directory.
+
+</details>
+
+### Step 3: Restart Typora
+
+Close and reopen Typora. Open DevTools (`Shift+F12` on Linux/Windows, or `Option+Command+I` on macOS) and check the console for:
+```
+[tpl:loader] done
+```
+
+### Uninstall
+
+Restore the original `window.html` from backup:
+```bash
+# The backup is at: <typora-resources>/window.html.tpl-backup
+# Linux example:
+sudo cp /usr/share/typora/resources/window.html.tpl-backup /usr/share/typora/resources/window.html
+```
+
+Or simply reinstall/update Typora — the plugin injection will be replaced by the fresh `window.html`.
 
 ---
 
