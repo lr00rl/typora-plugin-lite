@@ -58,6 +58,12 @@ Plugins never touch low-level APIs directly. They use `platform.fs`, `platform.s
 - Bottom-right status item trigger inside Typora's `content` area
 - Auto-reserves the sidenote gutter when `sidenote` is active
 
+### `sidenote` table behavior
+
+- Regular sidenotes float into the right margin in the editor
+- Sidenotes inside table cells are rendered into a dedicated right-side portal layer
+- The table keeps horizontal scrolling, while the sidenote stays docked on the outer editor gutter
+
 ---
 
 ## 🛠️ Installation
