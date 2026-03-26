@@ -108,7 +108,7 @@ export default class SidenotePlugin extends Plugin {
 
     root.classList.toggle('tpl-has-sidenotes', sidenotes.length > 0)
     root.classList.toggle('tpl-has-table-sidenotes', hasTableSidenotes)
-    this.syncTablePortals(sidenotes)
+    this.syncPortals(sidenotes)
   }
 
   private insertMarker(sidenote: HTMLElement): void {
@@ -136,7 +136,7 @@ export default class SidenotePlugin extends Plugin {
     this.portalLayerEl = layer
   }
 
-  private syncTablePortals(sidenotes: HTMLElement[]): void {
+  private syncPortals(sidenotes: HTMLElement[]): void {
     this.ensurePortalLayer()
     if (!this.writeEl || !this.portalLayerEl) return
 
@@ -148,7 +148,6 @@ export default class SidenotePlugin extends Plugin {
     const portalItems: Array<{ naturalTop: number, el: HTMLElement }> = []
 
     for (const sidenote of sidenotes) {
-      if (!sidenote.classList.contains('tpl-sidenote-in-table')) continue
       if (sidenote.closest('.md-focus')) continue
 
       const anchor = sidenote.previousElementSibling?.classList.contains('tpl-sn-num')
@@ -236,16 +235,22 @@ const EDITOR_CSS = /* css */ `
 }
 
 /* Hide prefix when editing */
-.md-focus > .md-html-inline.tpl-sidenote::before {
+.md-focus .md-html-inline.tpl-sidenote::before {
   content: none;
 }
 
 /* Desktop: float into right margin */
 @media (min-width: 1200px) {
-  #write.tpl-has-sidenotes {
-    padding-right: var(--tpl-sidenote-reserve, 300px);
-  }
+#write.tpl-has-sidenotes {
+  padding-right: var(--tpl-sidenote-reserve, 300px);
+}
 
+/* Typora sets #write pre { width: inherit }, which causes code blocks to
+   overflow into the sidenote padding-right reserve. Reset to normal block
+   flow so .md-fences fills only the content-box of #write. */
+#write.tpl-has-sidenotes .md-fences {
+  width: auto;
+}
   #tpl-sidenote-portal-layer {
     position: absolute;
     inset: 0;
@@ -255,37 +260,16 @@ const EDITOR_CSS = /* css */ `
   }
 
   .md-html-inline.tpl-sidenote {
-    float: right;
-    clear: right;
-    margin-right: calc(-1 * var(--tpl-sidenote-offset, 280px));
-    width: var(--tpl-sidenote-width, 250px);
-    margin-top: 0;
-    margin-bottom: 1rem;
-    border-left: 2px solid var(--border-color, #ddd5ca);
-    padding-left: 10px;
+    display: none;
   }
   /* When editing the paragraph, pull sidenote back inline */
-  .md-focus > .md-html-inline.tpl-sidenote {
-    float: none;
+  .md-focus .md-html-inline.tpl-sidenote {
+    display: inline;
     width: auto;
     margin-right: 0;
     margin-bottom: 0;
     border-left: none;
     padding-left: 0;
-  }
-
-  td .md-html-inline.tpl-sidenote.tpl-sidenote-in-table,
-  th .md-html-inline.tpl-sidenote.tpl-sidenote-in-table {
-    display: none;
-    float: none;
-    clear: none;
-    margin: 0;
-    border-left: none;
-    padding-left: 0;
-  }
-
-  .md-focus .md-html-inline.tpl-sidenote.tpl-sidenote-in-table {
-    display: inline;
   }
 
   .tpl-sidenote-portal {

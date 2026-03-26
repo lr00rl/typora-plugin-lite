@@ -60,9 +60,9 @@ Plugins never touch low-level APIs directly. They use `platform.fs`, `platform.s
 
 ### `sidenote` table behavior
 
-- Regular sidenotes float into the right margin in the editor
-- Sidenotes inside table cells are rendered into a dedicated right-side portal layer
-- The table keeps horizontal scrolling, while the sidenote stays docked on the outer editor gutter
+- Desktop sidenotes are rendered into a dedicated right-side portal layer in the editor
+- Table horizontal scrolling remains intact
+- Sidenotes stay docked on the outer editor gutter instead of participating in block layout
 
 ---
 
