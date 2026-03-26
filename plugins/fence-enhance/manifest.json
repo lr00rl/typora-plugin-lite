@@ -2,7 +2,7 @@
   "id": "fence-enhance",
   "name": "Fence Enhance",
   "version": "0.1.0",
-  "description": "Add line numbers and copy button to code fences",
+  "description": "Add copy button to code fences",
   "main": "main.js",
   "loading": {
     "startup": true

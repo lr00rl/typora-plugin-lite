@@ -45,7 +45,7 @@ Plugins never touch low-level APIs directly. They use `platform.fs`, `platform.s
 | Plugin | Complexity | Strategy | Description |
 |--------|------------|----------|-------------|
 | `md-padding` | S | `startup` | Automatically format Chinese/English spacing. |
-| `fence-enhance` | S | `startup` | Enhanced code block features (copy button, etc.). |
+| `fence-enhance` | S | `startup` | Add copy button to code fences. |
 | `title-shift` | S | `command` | Quickly shift heading levels. |
 | `todo-manager` | M | `startup` | Advanced TODO list management. |
 | `drawio` | L | `event` | Embed and edit Draw.io diagrams. |

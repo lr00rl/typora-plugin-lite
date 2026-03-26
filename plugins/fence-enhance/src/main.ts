@@ -1,24 +1,6 @@
 import { Plugin } from '@typora-plugin-lite/core'
 
 const CSS = `
-/* Line numbers via CSS counters */
-.md-fences .CodeMirror-code {
-  counter-reset: tpl-line;
-}
-.md-fences .CodeMirror-line::before {
-  counter-increment: tpl-line;
-  content: counter(tpl-line);
-  display: inline-block;
-  width: 2.5em;
-  margin-right: 0.8em;
-  text-align: right;
-  color: var(--text-color, #999);
-  opacity: 0.4;
-  font-size: 0.85em;
-  user-select: none;
-  pointer-events: none;
-}
-
 /* Copy button */
 .tpl-fence-copy {
   position: absolute;
