@@ -1,0 +1,10 @@
+{
+  "id": "wider",
+  "name": "Wider",
+  "version": "0.1.0",
+  "description": "Switch Typora between default, wide, and full writing widths without breaking sidenotes",
+  "main": "main.js",
+  "loading": {
+    "startup": true
+  }
+}

@@ -46,13 +46,17 @@ Plugins never touch low-level APIs directly. They use `platform.fs`, `platform.s
 |--------|------------|----------|-------------|
 | `md-padding` | S | `startup` | Automatically format Chinese/English spacing. |
 | `fence-enhance` | S | `startup` | Add copy button to code fences. |
-| `title-shift` | S | `command` | Quickly shift heading levels. |
-| `todo-manager` | M | `startup` | Advanced TODO list management. |
-| `drawio` | L | `event` | Embed and edit Draw.io diagrams. |
-| `timeline` | M | `event` | Render vertical/horizontal timelines. |
-| `fuzzy-search` | L | `hotkey` | Global file and content fuzzy search. |
-| `recent-files` | S | `startup` | Fast access to recently opened documents. |
-| `file-tags` | L | `hotkey` | Tag-based file organization and navigation. |
+| `sidenote` | M | `startup` | Render inline `<span class="sidenote">` as margin notes inside the editor. |
+| `wider` | M | `startup` | Switch editor width between `default / wide / full` with sidenote-aware spacing. |
+| `title-shift` | S | `hotkey` | Quickly shift heading levels. |
+| `fuzzy-search` | M | `hotkey` | Quick-open and fuzzy-search files from the current workspace. |
+
+### `wider` at a glance
+
+- Feishu-like `default / wide / full` writing widths
+- `Mod+[` narrows, `Mod+]` widens
+- Bottom-right status item trigger inside Typora's `content` area
+- Auto-reserves the sidenote gutter when `sidenote` is active
 
 ---
 

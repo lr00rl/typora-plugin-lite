@@ -19,23 +19,35 @@ const SIDENOTE_RE = /class=["'](?:side|margin)note["']/
 export default class SidenotePlugin extends Plugin {
   private observer: MutationObserver | null = null
   private rafId = 0
+  private writeEl: HTMLElement | null = null
 
   onload(): void {
-    const writeEl = document.getElementById('write')
-    if (!writeEl) return
+    this.writeEl = document.getElementById('write')
+    if (!this.writeEl) return
 
     this.registerCss(EDITOR_CSS)
-    this.processAll(writeEl)
+    this.processAll(this.writeEl)
 
     this.observer = new MutationObserver(() => {
       cancelAnimationFrame(this.rafId)
-      this.rafId = requestAnimationFrame(() => this.processAll(writeEl))
+      this.rafId = requestAnimationFrame(() => {
+        if (this.writeEl) this.processAll(this.writeEl)
+      })
     })
 
-    this.observer.observe(writeEl, { childList: true, subtree: true })
+    this.observer.observe(this.writeEl, { childList: true, subtree: true })
     this.addDisposable(() => {
       this.observer?.disconnect()
       cancelAnimationFrame(this.rafId)
+    })
+  }
+
+  onunload(): void {
+    if (!this.writeEl) return
+    this.writeEl.classList.remove('tpl-has-sidenotes')
+    this.writeEl.querySelectorAll('.tpl-sn-num').forEach(marker => marker.remove())
+    this.writeEl.querySelectorAll('.md-html-inline.tpl-sidenote').forEach(el => {
+      el.classList.remove('tpl-sidenote')
     })
   }
 
@@ -62,6 +74,8 @@ export default class SidenotePlugin extends Plugin {
         marker.remove()
       }
     })
+
+    root.classList.toggle('tpl-has-sidenotes', root.querySelector('.tpl-sidenote') !== null)
   }
 
   private insertMarker(sidenote: HTMLElement): void {
@@ -75,7 +89,12 @@ export default class SidenotePlugin extends Plugin {
 const EDITOR_CSS = /* css */ `
 /* ── Sidenote editor styles (injected by plugin) ── */
 
-#write { counter-reset: sidenote-counter; }
+#write {
+  counter-reset: sidenote-counter;
+  --tpl-sidenote-width: 250px;
+  --tpl-sidenote-reserve: 300px;
+  --tpl-sidenote-offset: 280px;
+}
 
 /* ── In-text superscript number ── */
 .tpl-sn-num {
@@ -119,15 +138,14 @@ const EDITOR_CSS = /* css */ `
 
 /* Desktop: float into right margin */
 @media (min-width: 1200px) {
-  #write:has(.tpl-sidenote) {
-    max-width: 1160px;
-    padding-right: 300px;
+  #write.tpl-has-sidenotes {
+    padding-right: var(--tpl-sidenote-reserve, 300px);
   }
   .md-html-inline.tpl-sidenote {
     float: right;
     clear: right;
-    margin-right: -280px;
-    width: 250px;
+    margin-right: calc(-1 * var(--tpl-sidenote-offset, 280px));
+    width: var(--tpl-sidenote-width, 250px);
     margin-top: 0;
     margin-bottom: 1rem;
     border-left: 2px solid var(--border-color, #ddd5ca);
