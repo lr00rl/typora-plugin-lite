@@ -1,5 +1,5 @@
 import * as esbuild from 'esbuild'
-import { readdirSync, existsSync, copyFileSync, mkdirSync, writeFileSync } from 'node:fs'
+import { readdirSync, existsSync, copyFileSync, cpSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join, resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -117,6 +117,13 @@ async function build() {
         const destDir = join(DIST, 'plugins', p.name)
         mkdirSync(destDir, { recursive: true })
         copyFileSync(src, join(destDir, 'manifest.json'))
+      }
+
+      const binDir = join(PLUGINS_DIR, p.name, 'bin')
+      if (existsSync(binDir)) {
+        const destDir = join(DIST, 'plugins', p.name, 'bin')
+        mkdirSync(join(DIST, 'plugins', p.name), { recursive: true })
+        cpSync(binDir, destDir, { recursive: true })
       }
     }
     // Write builtin plugin manifest for installer to know which plugins to clean

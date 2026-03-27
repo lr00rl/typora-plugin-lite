@@ -1,9 +1,13 @@
-import { Plugin, editor, platform } from '@typora-plugin-lite/core'
+import { IS_MAC, Plugin, editor, platform } from '@typora-plugin-lite/core'
 
 interface FileEntry {
   absPath: string
   relPath: string
+  cwdRelPath: string
   basename: string
+  relPathKey: string
+  cwdRelPathKey: string
+  basenameKey: string
 }
 
 interface LibraryIndexStats {
@@ -18,11 +22,14 @@ const MD_EXTS = ['.md', '.markdown']
 const MD_EXT_SET = new Set(MD_EXTS)
 const MAX_MRU = 30
 const DEFAULT_HOTKEYS = ['Mod+.', "Mod+'"]
-const DEBOUNCE_MS = 150
+const DEBOUNCE_MS = 80
 const INDEX_TTL_MS = 5_000
+const SEARCH_RESULT_LIMIT = 50
+const EXTERNAL_FZF_THRESHOLD = 50_000
 const IGNORED_DIRS = ['.git', 'node_modules', '.obsidian', '.trash', '.Trash', '_archive']
 const TAG = '[tpl:quick-open]'
 const DEBUG_SAMPLE_LIMIT = 20
+const DEBUG = false
 
 // ---------------------------------------------------------------------------
 // FZF-inspired scoring (ported from fzf.nvim behavior)
@@ -70,10 +77,27 @@ function fzfScore(text: string, query: string): number {
   return score
 }
 
+function fuzzyMatchPositions(text: string, query: string): number[] | null {
+  const t = text.toLowerCase()
+  const q = query.toLowerCase().trim()
+  if (!q) return []
+
+  const positions: number[] = []
+  let qi = 0
+  for (let ti = 0; ti < t.length && qi < q.length; ti++) {
+    if (t[ti] === q[qi]) {
+      positions.push(ti)
+      qi += 1
+    }
+  }
+  return qi === q.length ? positions : null
+}
+
 function scoreFile(f: FileEntry, query: string): number {
-  const nameScore = fzfScore(f.basename, query) + 25
-  const pathScore = fzfScore(f.relPath, query)
-  return Math.max(nameScore, pathScore)
+  const nameScore = fzfScore(f.basenameKey, query) + 25
+  const rootPathScore = fzfScore(f.relPathKey, query) + 8
+  const cwdPathScore = fzfScore(f.cwdRelPathKey, query) + (isRelativePathQuery(query) ? 20 : 14)
+  return Math.max(nameScore, rootPathScore, cwdPathScore)
 }
 
 // ---------------------------------------------------------------------------
@@ -82,13 +106,60 @@ function scoreFile(f: FileEntry, query: string): number {
 function toRelPath(absPath: string, root: string): string {
   if (!root) return absPath
   // Normalize separators for cross-platform matching
-  const normAbs = absPath.replace(/\\/g, '/')
-  const normRoot = root.replace(/\\/g, '/')
+  const normAbs = normalizePath(absPath)
+  const normRoot = normalizePath(root)
   const prefix = normRoot.endsWith('/') ? normRoot : normRoot + '/'
   if (normAbs.startsWith(prefix)) {
     return normAbs.slice(prefix.length)
   }
   return normAbs
+}
+
+function normalizePath(path: string): string {
+  return path.replace(/\\/g, '/')
+}
+
+function splitPath(path: string): string[] {
+  return normalizePath(path).split('/').filter(Boolean)
+}
+
+function getPathRoot(path: string): string {
+  const normalized = normalizePath(path)
+  const driveMatch = normalized.match(/^[A-Za-z]:/)
+  if (driveMatch) return driveMatch[0].toLowerCase()
+  return normalized.startsWith('/') ? '/' : ''
+}
+
+function toRelPathFromDir(absPath: string, baseDir: string): string {
+  const normalizedAbs = normalizePath(absPath)
+  const normalizedBase = normalizePath(baseDir)
+  if (!normalizedBase) return normalizedAbs
+  if (getPathRoot(normalizedAbs) !== getPathRoot(normalizedBase)) return normalizedAbs
+
+  const targetParts = splitPath(normalizedAbs)
+  const baseParts = splitPath(normalizedBase)
+  let shared = 0
+  while (
+    shared < targetParts.length &&
+    shared < baseParts.length &&
+    targetParts[shared] === baseParts[shared]
+  ) {
+    shared += 1
+  }
+
+  const up = baseParts.slice(shared).map(() => '..')
+  const down = targetParts.slice(shared)
+  return [...up, ...down].join('/') || '.'
+}
+
+function isRelativePathQuery(query: string): boolean {
+  const trimmed = query.trim()
+  return (
+    trimmed.startsWith('./') ||
+    trimmed.startsWith('../') ||
+    trimmed.includes('/') ||
+    trimmed.includes('\\')
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -175,6 +246,12 @@ const CSS = `
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.tpl-qo-hit {
+  color: inherit;
+  background: rgba(255, 212, 59, 0.28);
+  border-radius: 3px;
+  box-shadow: inset 0 -1px 0 rgba(255, 179, 0, 0.22);
+}
 .tpl-qo-path {
   font-size: 11.5px;
   opacity: 0.42;
@@ -211,14 +288,28 @@ export default class QuickOpenPlugin extends Plugin {
   private modalCleanups: Array<() => void> = []
   private debounceTimer: ReturnType<typeof setTimeout> | null = null
   private currentQuery = ''
+  private renderToken = 0
 
   /** Cached full vault index */
   private vaultIndex: FileEntry[] = []
   private vaultIndexRoot = ''
   private vaultIndexTime = 0
   private indexing = false
+  private rgChecked = false
+  private rgPath: string | null = null
   private fzfChecked = false
   private fzfPath: string | null = null
+  private indexBackend = 'walk'
+  private searchBackend = 'js'
+  private fzfInputPath = ''
+  private fzfInputDirty = true
+  private fzfInputMap = new Map<string, FileEntry>()
+  private openingSelection = false
+  private lastHandledEnterAt = 0
+  private searchPool: FileEntry[] = []
+  private lastSearchQuery = ''
+  private searchCacheVersion = 0
+  private searchPoolVersion = -1
 
   private getHotkeys(): string[] {
     const custom = this.settings.get('hotkeys' as never) as unknown
@@ -246,7 +337,7 @@ export default class QuickOpenPlugin extends Plugin {
   }
 
   private log(...args: unknown[]): void {
-    console.log(TAG, ...args)
+    if (DEBUG) console.log(TAG, ...args)
   }
 
   private warn(...args: unknown[]): void {
@@ -265,7 +356,20 @@ export default class QuickOpenPlugin extends Plugin {
     return platform.path.join(this.getDebugDir(), 'fuzzy-search-index.json')
   }
 
+  private async writeLargeText(filepath: string, text: string, chunkSize = 24_000): Promise<void> {
+    if (text.length <= chunkSize) {
+      await platform.fs.writeText(filepath, text)
+      return
+    }
+
+    await platform.fs.writeText(filepath, '')
+    for (let offset = 0; offset < text.length; offset += chunkSize) {
+      await platform.fs.appendText(filepath, text.slice(offset, offset + chunkSize))
+    }
+  }
+
   private async persistDebugDump(reason: string, extra: Record<string, unknown> = {}): Promise<void> {
+    if (!DEBUG) return
     try {
       const debugDir = this.getDebugDir()
       const statePath = this.getDebugStatePath()
@@ -297,13 +401,14 @@ export default class QuickOpenPlugin extends Plugin {
         files: this.vaultIndex.map(file => ({
           absPath: file.absPath,
           relPath: file.relPath,
+          cwdRelPath: file.cwdRelPath,
           basename: file.basename,
         })),
       }
 
       await Promise.all([
-        platform.fs.writeText(statePath, JSON.stringify(state, null, 2) + '\n'),
-        platform.fs.writeText(indexPath, JSON.stringify(indexDump, null, 2) + '\n'),
+        this.writeLargeText(statePath, JSON.stringify(state, null, 2) + '\n'),
+        this.writeLargeText(indexPath, JSON.stringify(indexDump, null, 2) + '\n'),
       ])
       this.log('debug dump written', { reason, statePath, indexPath, count: this.vaultIndex.length })
     } catch (err) {
@@ -311,16 +416,103 @@ export default class QuickOpenPlugin extends Plugin {
     }
   }
 
-  private async ensureFzfInfo(): Promise<void> {
-    if (this.fzfChecked) return
-    this.fzfChecked = true
-    try {
-      const out = (await platform.shell.run('command -v fzf || which fzf || true', { timeout: 3000 })).trim()
-      this.fzfPath = out || null
-      this.log('fzf detection', { found: !!this.fzfPath, path: this.fzfPath })
-    } catch (err) {
-      this.warn('fzf detection failed', err)
+  private getRuntimePlatform(): 'macos' | 'linux' | 'windows' {
+    if (IS_MAC) return 'macos'
+    const processPlatform = (window as any).process?.platform
+    if (processPlatform === 'win32') return 'windows'
+    return 'linux'
+  }
+
+  private getExecutableName(name: 'fzf' | 'rg'): string {
+    return this.getRuntimePlatform() === 'windows' ? `${name}.exe` : name
+  }
+
+  private getBundledBinaryCandidates(name: 'fzf' | 'rg'): string[] {
+    const exe = this.getExecutableName(name)
+    const platformName = this.getRuntimePlatform()
+    const roots = [platform.pluginsDir, platform.builtinPluginsDir].filter(Boolean)
+    const candidates: string[] = []
+
+    for (const root of roots) {
+      candidates.push(
+        platform.path.join(root, 'fuzzy-search', 'bin', exe),
+        platform.path.join(root, 'fuzzy-search', 'bin', platformName, exe),
+      )
     }
+
+    return [...new Set(candidates)]
+  }
+
+  private getBinaryPathDetectCommand(name: 'fzf' | 'rg'): string {
+    if (this.getRuntimePlatform() === 'windows') {
+      const exe = this.getExecutableName(name)
+      return `where ${exe} 2>NUL`
+    }
+    return `command -v ${name} || which ${name} || true`
+  }
+
+  private getCommonBinaryCandidates(name: 'fzf' | 'rg'): string[] {
+    const exe = this.getExecutableName(name)
+    const platformName = this.getRuntimePlatform()
+    if (platformName === 'macos') {
+      return [
+        `/opt/homebrew/bin/${exe}`,
+        `/usr/local/bin/${exe}`,
+        `/opt/local/bin/${exe}`,
+      ]
+    }
+    if (platformName === 'linux') {
+      return [
+        `/usr/local/bin/${exe}`,
+        `/usr/bin/${exe}`,
+      ]
+    }
+    return []
+  }
+
+  private async resolveBinary(name: 'fzf' | 'rg'): Promise<string | null> {
+    try {
+      const out = (await platform.shell.run(this.getBinaryPathDetectCommand(name), { timeout: 3000 })).trim()
+      const path = out.split(/\r?\n/).find(Boolean)?.trim() ?? ''
+      if (path) {
+        this.log(`${name} detection`, { found: true, source: 'PATH', path })
+        return path
+      }
+    } catch (err) {
+      this.warn(`${name} PATH detection failed`, err)
+    }
+
+    for (const candidate of [...this.getBundledBinaryCandidates(name), ...this.getCommonBinaryCandidates(name)]) {
+      try {
+        if (await platform.fs.exists(candidate)) {
+          this.log(`${name} detection`, { found: true, source: 'fallback', path: candidate })
+          return candidate
+        }
+      } catch {}
+    }
+
+    this.log(`${name} detection`, { found: false })
+    return null
+  }
+
+  private async ensureToolInfo(): Promise<void> {
+    if (!this.rgChecked) {
+      this.rgChecked = true
+      this.rgPath = await this.resolveBinary('rg')
+      this.indexBackend = this.rgPath ? 'rg' : 'walk'
+    }
+    if (!this.fzfChecked) {
+      this.fzfChecked = true
+      this.fzfPath = await this.resolveBinary('fzf')
+      this.searchBackend = 'js'
+    }
+  }
+
+  private invalidateSearchCache(): void {
+    this.searchCacheVersion += 1
+    this.searchPoolVersion = -1
+    this.lastSearchQuery = ''
+    this.searchPool = []
   }
 
   // -------------------------------------------------------------------------
@@ -376,6 +568,25 @@ export default class QuickOpenPlugin extends Plugin {
     return this.getWorkspaceRoot() || this.getCurrentDir()
   }
 
+  private makeFileEntry(
+    absPath: string,
+    root: string,
+    currentDir = this.getCurrentDir(),
+    basename = platform.path.basename(absPath),
+  ): FileEntry {
+    const relPath = toRelPath(absPath, root)
+    const cwdRelPath = toRelPathFromDir(absPath, currentDir)
+    return {
+      absPath,
+      relPath,
+      cwdRelPath,
+      basename,
+      relPathKey: relPath.toLowerCase(),
+      cwdRelPathKey: cwdRelPath.toLowerCase(),
+      basenameKey: basename.toLowerCase(),
+    }
+  }
+
   private getLibraryRootEntity(): TyporaFileEntity | null {
     const root = (window as any).File?.editor?.library?.root
     return root && typeof root.path === 'string' ? root as TyporaFileEntity : null
@@ -418,11 +629,7 @@ export default class QuickOpenPlugin extends Plugin {
       : platform.path.basename(node.path)
     const ext = platform.path.extname(basename).toLowerCase()
     if (!MD_EXT_SET.has(ext)) return
-    acc.set(node.path, {
-      absPath: node.path,
-      relPath: toRelPath(node.path, root),
-      basename,
-    })
+    acc.set(node.path, this.makeFileEntry(node.path, root, this.getCurrentDir(), basename))
   }
 
   private inspectLibraryTree(root: string, maxDepth = 20): LibraryIndexStats {
@@ -488,11 +695,7 @@ export default class QuickOpenPlugin extends Plugin {
       if (!node.isFile) return
       const ext = platform.path.extname(node.name || node.path).toLowerCase()
       if (!MD_EXT_SET.has(ext)) return
-      files.push({
-        absPath: node.path,
-        relPath: toRelPath(node.path, root),
-        basename: node.name || platform.path.basename(node.path),
-      })
+      files.push(this.makeFileEntry(node.path, root, this.getCurrentDir(), node.name || platform.path.basename(node.path)))
     }
 
     this.log('libraryIndex:start', {
@@ -605,9 +808,26 @@ export default class QuickOpenPlugin extends Plugin {
 
   /**
    * Reliable directory walker that doesn't depend on Typora's library tree.
-   * Strategy: try `find` first (fast, single command), fall back to BFS `ls -p`.
+   * Strategy: try platform fs walk first, then `find`, then BFS `ls -p`.
    */
   private async walkDirPure(root: string, maxDepth = 20, maxFiles = 5000): Promise<FileEntry[]> {
+    try {
+      const currentDir = this.getCurrentDir()
+      const walked = await platform.fs.walkDir(root, {
+        exts: MD_EXTS,
+        ignore: IGNORED_DIRS,
+        maxDepth,
+        maxFiles,
+      })
+      const results = walked.map(absPath => this.makeFileEntry(absPath, root, currentDir))
+      if (results.length > 0) {
+        this.log('walkDirPure:platformFs-hit', { root, count: results.length })
+        return results
+      }
+    } catch (err) {
+      this.log('walkDirPure:platformFs-failed, falling back to find', { root, err })
+    }
+
     // Fast path: single `find` command (typically <100ms for most workspaces)
     try {
       const findResult = await this.walkDirWithFind(root, maxDepth, maxFiles)
@@ -634,11 +854,9 @@ export default class QuickOpenPlugin extends Plugin {
 
     this.log('walkDirWithFind:start', { root, cmd: cmd.slice(0, 200) })
     const output = await platform.shell.run(cmd, { timeout: 10_000 })
-    const results = output.trim().split('\n').filter(Boolean).map(absPath => ({
-      absPath,
-      relPath: toRelPath(absPath, root),
-      basename: platform.path.basename(absPath),
-    }))
+    const currentDir = this.getCurrentDir()
+    const results = output.trim().split('\n').filter(Boolean)
+      .map(absPath => this.makeFileEntry(absPath, root, currentDir))
     this.log('walkDirWithFind:done', { root, count: results.length })
     return results
   }
@@ -670,7 +888,7 @@ export default class QuickOpenPlugin extends Plugin {
                 const ext = platform.path.extname(entry).toLowerCase()
                 if (MD_EXT_SET.has(ext)) {
                   const absPath = platform.path.join(dir, entry)
-                  files.push({ absPath, relPath: toRelPath(absPath, root), basename: entry })
+                  files.push(this.makeFileEntry(absPath, root, this.getCurrentDir(), entry))
                 }
               }
             }
@@ -689,14 +907,167 @@ export default class QuickOpenPlugin extends Plugin {
     return results.slice(0, maxFiles)
   }
 
+  private async collectVaultIndexWithRg(root: string, maxFiles: number): Promise<FileEntry[]> {
+    if (!this.rgPath) return []
+
+    const currentDir = this.getCurrentDir()
+    const cmd = [
+      platform.shell.escape(this.rgPath),
+      '--files',
+      ...MD_EXTS.flatMap(ext => ['-g', platform.shell.escape(`*${ext}`)]),
+      ...IGNORED_DIRS.flatMap(name => ['-g', platform.shell.escape(`!**/${name}/**`)]),
+      '.',
+      `| head -n ${maxFiles}`,
+    ].join(' ')
+
+    this.log('walkDirWithRg:start', { root, cmd: cmd.slice(0, 240), rgPath: this.rgPath })
+    const output = await platform.shell.run(cmd, { cwd: root, timeout: 10_000 })
+    const results = output.trim().split('\n').filter(Boolean)
+      .map(relPath => this.makeFileEntry(platform.path.join(root, relPath), root, currentDir))
+    this.log('walkDirWithRg:done', { root, count: results.length })
+    return results
+  }
+
+  private getFzfInputPath(): string {
+    return platform.path.join(platform.dataDir, 'cache', 'fuzzy-search-fzf-input.txt')
+  }
+
+  private async ensureFzfInputFile(): Promise<void> {
+    if (!this.fzfInputDirty && this.fzfInputPath) return
+
+    const cacheDir = platform.path.dirname(this.getFzfInputPath())
+    await platform.fs.mkdir(cacheDir)
+
+    const lines: string[] = []
+    this.fzfInputMap.clear()
+    for (let index = 0; index < this.allFiles.length; index++) {
+      const file = this.allFiles[index]
+      const id = String(index)
+      this.fzfInputMap.set(id, file)
+
+      const keys = [file.cwdRelPath, file.relPath, file.basename]
+      const seen = new Set<string>()
+      for (const key of keys) {
+        const normalized = normalizePath(key).trim()
+        if (!normalized || seen.has(normalized)) continue
+        seen.add(normalized)
+        lines.push(`${id}\t${normalized}`)
+      }
+    }
+
+    this.fzfInputPath = this.getFzfInputPath()
+    await this.writeLargeText(this.fzfInputPath, lines.join('\n') + (lines.length ? '\n' : ''))
+    this.fzfInputDirty = false
+    this.log('fzfInput:written', { path: this.fzfInputPath, lineCount: lines.length, fileCount: this.allFiles.length })
+  }
+
+  private async searchWithFzf(query: string, limit = 50): Promise<FileEntry[]> {
+    if (!this.fzfPath) return []
+    await this.ensureFzfInputFile()
+    const tabDelimiter = '	'
+
+    const cmd = [
+      'cat',
+      platform.shell.escape(this.fzfInputPath),
+      '|',
+      platform.shell.escape(this.fzfPath),
+      '--filter',
+      platform.shell.escape(query),
+      '--algo=v2',
+      '--scheme=path',
+      '--delimiter',
+      platform.shell.escape(tabDelimiter),
+      '--nth=2..',
+      `| head -n ${limit * 4}`,
+    ].join(' ')
+
+    const output = await platform.shell.run(cmd, { timeout: 10_000 })
+    const results: FileEntry[] = []
+    const seen = new Set<string>()
+
+    for (const line of output.trim().split('\n').filter(Boolean)) {
+      const tabIndex = line.indexOf('\t')
+      if (tabIndex <= 0) continue
+      const id = line.slice(0, tabIndex)
+      const file = this.fzfInputMap.get(id)
+      if (!file || seen.has(file.absPath)) continue
+      seen.add(file.absPath)
+      results.push(file)
+      if (results.length >= limit) break
+    }
+
+    this.searchBackend = 'fzf'
+    return results
+  }
+
+  private pushTopResult(
+    results: Array<{ file: FileEntry; score: number }>,
+    candidate: { file: FileEntry; score: number },
+    limit: number,
+  ): void {
+    let index = 0
+    while (index < results.length && results[index]!.score >= candidate.score) index += 1
+    if (index >= limit) return
+    results.splice(index, 0, candidate)
+    if (results.length > limit) results.length = limit
+  }
+
+  private searchWithJs(query: string, limit = 50): FileEntry[] {
+    this.searchBackend = 'js'
+    const normalizedQuery = query.trim().toLowerCase()
+    const canNarrow =
+      this.searchPoolVersion === this.searchCacheVersion &&
+      !!this.lastSearchQuery &&
+      normalizedQuery.startsWith(this.lastSearchQuery)
+    const source = canNarrow ? this.searchPool : this.allFiles
+    const matchedPool: FileEntry[] = []
+    const topResults: Array<{ file: FileEntry; score: number }> = []
+
+    for (const file of source) {
+      const score = scoreFile(file, normalizedQuery)
+      if (score === -Infinity) continue
+      matchedPool.push(file)
+      this.pushTopResult(topResults, { file, score }, limit)
+    }
+
+    this.lastSearchQuery = normalizedQuery
+    this.searchPool = matchedPool
+    this.searchPoolVersion = this.searchCacheVersion
+    return topResults.map(entry => entry.file)
+  }
+
+  private shouldUseExternalFzf(query: string): boolean {
+    return !IS_MAC && !!this.fzfPath && this.allFiles.length >= EXTERNAL_FZF_THRESHOLD && query.trim().length >= 2
+  }
+
+  private async searchFiles(query: string, limit = 50): Promise<FileEntry[]> {
+    if (this.shouldUseExternalFzf(query)) {
+      try {
+        return await this.searchWithFzf(query, limit)
+      } catch (err) {
+        this.warn('searchWithFzf failed, falling back to JS scoring', err)
+      }
+    }
+    return this.searchWithJs(query, limit)
+  }
+
   private mergeFileEntries(primary: FileEntry[], secondary: FileEntry[]): FileEntry[] {
     const merged = new Map<string, FileEntry>()
     for (const entry of [...primary, ...secondary]) merged.set(entry.absPath, entry)
     return [...merged.values()]
   }
 
+  private rehydrateEntries(entries: FileEntry[], root: string, currentDir = this.getCurrentDir()): FileEntry[] {
+    return entries.map(entry => this.makeFileEntry(entry.absPath, root, currentDir, entry.basename))
+  }
+
   private setFooter(fileCount: number, root: string, status = ''): void {
-    const parts = [`${fileCount} 个文件`, root || '(无)']
+    const parts = [
+      `${fileCount} 个文件`,
+      root || '(无)',
+      `索引:${this.indexBackend}`,
+      `搜索:${this.searchBackend}`,
+    ]
     if (status) parts.push(status)
     this.updateFooter(parts.join('  ·  '))
   }
@@ -713,7 +1084,7 @@ export default class QuickOpenPlugin extends Plugin {
     const seen = new Set<string>()
     const quickFiles: FileEntry[] = []
     this.log('loadFiles:start', { root, currentDir, candidates, cacheRoot: this.vaultIndexRoot, cacheCount: this.vaultIndex.length })
-    await this.ensureFzfInfo()
+    await this.ensureToolInfo()
 
     // Phase 1a: MRU entries — filter out deleted files
     let mru = this.getMru()
@@ -738,11 +1109,7 @@ export default class QuickOpenPlugin extends Plugin {
     for (const absPath of mru) {
       if (seen.has(absPath)) continue
       seen.add(absPath)
-      quickFiles.push({
-        absPath,
-        relPath: toRelPath(absPath, root),
-        basename: platform.path.basename(absPath),
-      })
+      quickFiles.push(this.makeFileEntry(absPath, root, currentDir))
     }
 
     // Phase 1b: Sibling .md files in current directory
@@ -757,11 +1124,7 @@ export default class QuickOpenPlugin extends Plugin {
           const absPath = platform.path.join(currentDir, name)
           if (seen.has(absPath)) continue
           seen.add(absPath)
-          quickFiles.push({
-            absPath,
-            relPath: toRelPath(absPath, root),
-            basename: name,
-          })
+          quickFiles.push(this.makeFileEntry(absPath, root, currentDir, name))
         }
       } catch (err) {
         this.warn('failed to list current dir', { currentDir, err })
@@ -769,6 +1132,8 @@ export default class QuickOpenPlugin extends Plugin {
     }
 
     this.allFiles = quickFiles
+    this.fzfInputDirty = true
+    this.invalidateSearchCache()
     this.log('loadFiles:phase1-complete', {
       root,
       currentDir,
@@ -776,15 +1141,6 @@ export default class QuickOpenPlugin extends Plugin {
       quickFilesSample: quickFiles.slice(0, DEBUG_SAMPLE_LIMIT).map(f => f.relPath),
     })
     this.setFooter(quickFiles.length, root || currentDir, root ? '正在索引整个文件夹…' : '')
-    await this.persistDebugDump('phase1-loaded', {
-      root,
-      currentDir,
-      quickFileCount: quickFiles.length,
-      quickFilesSample: quickFiles.slice(0, DEBUG_SAMPLE_LIMIT).map(f => f.relPath),
-      candidates,
-      fzfPath: this.fzfPath,
-    })
-
     // Phase 2: async vault-wide scan
     if (root) {
       this.log('loadFiles:phase2-dispatch', { root, alreadySeen: seen.size })
@@ -801,6 +1157,7 @@ export default class QuickOpenPlugin extends Plugin {
       this.vaultIndexRoot === root &&
       Date.now() - this.vaultIndexTime < INDEX_TTL_MS
     ) {
+      this.vaultIndex = this.rehydrateEntries(this.vaultIndex, root)
       this.log('loadVaultIndex:cache-hit', {
         root,
         ageMs: Date.now() - this.vaultIndexTime,
@@ -825,26 +1182,34 @@ export default class QuickOpenPlugin extends Plugin {
     })
 
     try {
-      // Always run pure-JS walk as the primary source (reliable, no timeout)
-      // Typora's library tree is lazily loaded and often incomplete
-      const [pureWalkEntries, libraryEntries, bridgeEntries] = await Promise.all([
-        this.walkDirPure(root, 20, 5000),
-        Promise.resolve(this.collectVaultIndexFromLibrary(root, 20, 5000)),
-        this.collectVaultIndexFromBridge(root, 5000),
-      ])
-      // Merge all sources: pure walk is most complete, Typora sources fill gaps
+      const rgEntries = await this.collectVaultIndexWithRg(root, 5000).catch(err => {
+        this.warn('walkDirWithRg failed', { root, err })
+        return [] as FileEntry[]
+      })
+      const primaryEntries = rgEntries.length > 0
+        ? rgEntries
+        : await this.walkDirPure(root, 20, 5000)
+      const fallbackEntries = primaryEntries.length > 0
+        ? []
+        : this.mergeFileEntries(
+            this.collectVaultIndexFromLibrary(root, 20, 5000),
+            await this.collectVaultIndexFromBridge(root, 5000),
+          )
+      this.indexBackend = rgEntries.length > 0 ? 'rg' : 'walk'
       const allEntries = this.mergeFileEntries(
-        pureWalkEntries,
-        this.mergeFileEntries(libraryEntries, bridgeEntries),
+        primaryEntries,
+        fallbackEntries,
       )
       this.log('loadVaultIndex:sources', {
         root,
-        pureWalkCount: pureWalkEntries.length,
-        libraryCount: libraryEntries.length,
-        bridgeCount: bridgeEntries.length,
+        rgCount: rgEntries.length,
+        primaryCount: primaryEntries.length,
+        libraryCount: fallbackEntries.length,
+        bridgeCount: 0,
+        backend: this.indexBackend,
         mergedCount: allEntries.length,
       })
-      this.vaultIndex = allEntries
+      this.vaultIndex = this.rehydrateEntries(allEntries, root)
 
       this.vaultIndexRoot = root
       this.vaultIndexTime = Date.now()
@@ -854,19 +1219,9 @@ export default class QuickOpenPlugin extends Plugin {
         count: this.vaultIndex.length,
         sample: this.vaultIndex.slice(0, DEBUG_SAMPLE_LIMIT).map(f => f.relPath),
       })
-      await this.persistDebugDump('vault-indexed', {
-        root,
-        durationMs: Date.now() - startedAt,
-        count: this.vaultIndex.length,
-      })
-
       this.mergeVaultIndex(alreadySeen)
     } catch (err) {
       this.warn('vault index failed', { root, err })
-      await this.persistDebugDump('vault-index-failed', {
-        root,
-        error: err instanceof Error ? err.message : String(err),
-      })
     } finally {
       this.indexing = false
     }
@@ -882,6 +1237,8 @@ export default class QuickOpenPlugin extends Plugin {
     }
     if (newEntries.length > 0) {
       this.allFiles = [...this.allFiles, ...newEntries]
+      this.fzfInputDirty = true
+      this.invalidateSearchCache()
     }
 
     const root = this.getRootDir()
@@ -892,14 +1249,8 @@ export default class QuickOpenPlugin extends Plugin {
       sample: newEntries.slice(0, DEBUG_SAMPLE_LIMIT).map(f => f.relPath),
     })
     this.setFooter(this.allFiles.length, root, '')
-    void this.persistDebugDump('vault-index-merged', {
-      root,
-      newEntries: newEntries.length,
-      totalFiles: this.allFiles.length,
-    })
-
     if (this.overlay) {
-      this.renderList(this.inputEl?.value ?? this.currentQuery)
+      void this.renderList(this.inputEl?.value ?? this.currentQuery)
     }
   }
 
@@ -912,6 +1263,8 @@ export default class QuickOpenPlugin extends Plugin {
       this.close()
       return
     }
+    this.lastHandledEnterAt = 0
+    this.openingSelection = false
     this.log('open:start', {
       filePath: editor.getFilePath(),
       fileName: editor.getFileName(),
@@ -920,7 +1273,7 @@ export default class QuickOpenPlugin extends Plugin {
     this.buildModal()
     await this.loadFiles()
     if (this.overlay) {
-      this.renderList('')
+      void this.renderList('')
     }
   }
 
@@ -940,6 +1293,9 @@ export default class QuickOpenPlugin extends Plugin {
     this.filtered = []
     this.selectedIdx = 0
     this.currentQuery = ''
+    this.lastSearchQuery = ''
+    this.searchPool = []
+    this.searchPoolVersion = -1
   }
 
   // -------------------------------------------------------------------------
@@ -972,7 +1328,7 @@ export default class QuickOpenPlugin extends Plugin {
     const input = document.createElement('input')
     input.id = 'tpl-qo-input'
     input.type = 'text'
-    input.placeholder = '搜索整个文件夹中的 Markdown 文件...'
+    input.placeholder = '搜索文件名、工作区路径或相对当前文件的路径...'
     input.autocomplete = 'off'
     input.spellcheck = false
     inputRow.appendChild(icon)
@@ -996,9 +1352,8 @@ export default class QuickOpenPlugin extends Plugin {
     this.listEl = list
 
     const onInput = () => {
-      this.log('input', { value: input.value, length: input.value.length, indexedFiles: this.allFiles.length })
       if (this.debounceTimer) clearTimeout(this.debounceTimer)
-      this.debounceTimer = setTimeout(() => this.renderList(input.value), DEBOUNCE_MS)
+      this.debounceTimer = setTimeout(() => { void this.renderList(input.value) }, DEBOUNCE_MS)
     }
     const onKeydown = (e: KeyboardEvent) => this.handleKey(e)
     const onEsc = (e: KeyboardEvent) => {
@@ -1013,7 +1368,7 @@ export default class QuickOpenPlugin extends Plugin {
       () => document.removeEventListener('keydown', onEsc, { capture: true }),
     )
 
-    this.renderList('')
+    void this.renderList('')
     setTimeout(() => input.focus(), 30)
   }
 
@@ -1025,9 +1380,10 @@ export default class QuickOpenPlugin extends Plugin {
   // -------------------------------------------------------------------------
   // Rendering
   // -------------------------------------------------------------------------
-  private renderList(query: string): void {
+  private async renderList(query: string): Promise<void> {
     const list = this.listEl
     if (!list) return
+    const token = ++this.renderToken
     this.currentQuery = query
     list.innerHTML = ''
 
@@ -1037,24 +1393,20 @@ export default class QuickOpenPlugin extends Plugin {
     }
 
     if (query.trim()) {
-      // --- Query mode: FZF scoring across all vault files ---
-      const results = this.allFiles
-        .map(f => ({ f, s: scoreFile(f, query) }))
-        .filter(x => x.s > -Infinity)
-        .sort((a, b) => b.s - a.s)
-        .slice(0, 50)
-      this.filtered = results.map(x => x.f)
+      this.searchBackend = this.shouldUseExternalFzf(query) ? 'fzf' : 'js'
+      list.appendChild(this.makeStatus(`搜索中… (${this.searchBackend})`))
+      const results = await this.searchFiles(query, SEARCH_RESULT_LIMIT)
+      if (token !== this.renderToken || !this.listEl) return
+
+      this.filtered = results
+      list.innerHTML = ''
+      this.setFooter(this.allFiles.length, this.getRootDir(), query ? `查询:${query}` : '')
       this.log('renderList:query', {
         query,
         indexedFiles: this.allFiles.length,
         resultCount: this.filtered.length,
         topResults: this.filtered.slice(0, 10).map(f => f.relPath),
         fzfPath: this.fzfPath,
-      })
-      void this.persistDebugDump('render-query', {
-        query,
-        resultCount: this.filtered.length,
-        topResults: this.filtered.slice(0, 10).map(f => f.relPath),
       })
 
       if (!this.filtered.length) {
@@ -1077,6 +1429,7 @@ export default class QuickOpenPlugin extends Plugin {
       const currentDir = this.getCurrentDir()
       const root = this.getRootDir()
       const currentDirPrefix = currentDir ? (currentDir.endsWith('/') ? currentDir : currentDir + '/') : ''
+      this.setFooter(this.allFiles.length, root || currentDir, '')
 
       const siblingFiles = this.allFiles
         .filter(f =>
@@ -1103,11 +1456,6 @@ export default class QuickOpenPlugin extends Plugin {
         siblingCount: siblingFiles.length,
         otherCount: otherFiles.length,
       })
-      void this.persistDebugDump('render-default', {
-        mruCount: mruFiles.length,
-        siblingCount: siblingFiles.length,
-        otherCount: otherFiles.length,
-      })
       this.selectedIdx = 0
 
       let idx = 0
@@ -1126,19 +1474,74 @@ export default class QuickOpenPlugin extends Plugin {
     }
   }
 
+  private getItemPathText(f: FileEntry): string {
+    if (this.currentQuery.trim() && isRelativePathQuery(this.currentQuery) && f.cwdRelPath !== f.relPath) {
+      return f.cwdRelPath
+    }
+    const lastSlash = f.relPath.lastIndexOf('/')
+    return lastSlash > 0 ? f.relPath.slice(0, lastSlash) : '/'
+  }
+
+  private getItemPathTitle(f: FileEntry): string {
+    if (f.cwdRelPath === f.relPath) return f.relPath
+    return `workspace: ${f.relPath}\ncurrent: ${f.cwdRelPath}`
+  }
+
+  private renderHighlightedText(el: HTMLElement, text: string): void {
+    const query = this.currentQuery.trim()
+    const positions = query ? fuzzyMatchPositions(text, query) : []
+    if (!query || !positions || positions.length === 0) {
+      el.textContent = text
+      return
+    }
+
+    el.textContent = ''
+    const hitSet = new Set(positions)
+    let plain = ''
+    let highlighted = ''
+
+    const flushPlain = (): void => {
+      if (!plain) return
+      el.appendChild(document.createTextNode(plain))
+      plain = ''
+    }
+
+    const flushHighlight = (): void => {
+      if (!highlighted) return
+      const span = document.createElement('mark')
+      span.className = 'tpl-qo-hit'
+      span.textContent = highlighted
+      el.appendChild(span)
+      highlighted = ''
+    }
+
+    for (let index = 0; index < text.length; index++) {
+      const ch = text[index] ?? ''
+      if (hitSet.has(index)) {
+        flushPlain()
+        highlighted += ch
+      } else {
+        flushHighlight()
+        plain += ch
+      }
+    }
+
+    flushPlain()
+    flushHighlight()
+  }
+
   private makeItem(f: FileEntry, idx: number): HTMLElement {
     const item = document.createElement('div')
     item.className = 'tpl-qo-item' + (idx === this.selectedIdx ? ' tpl-qo-selected' : '')
 
     const name = document.createElement('div')
     name.className = 'tpl-qo-name'
-    name.textContent = f.basename
+    this.renderHighlightedText(name, f.basename)
 
     const pathEl = document.createElement('div')
     pathEl.className = 'tpl-qo-path'
-    // Show parent directory path (without filename) for clearer context
-    const lastSlash = f.relPath.lastIndexOf('/')
-    pathEl.textContent = lastSlash > 0 ? f.relPath.slice(0, lastSlash) : '/'
+    this.renderHighlightedText(pathEl, this.getItemPathText(f))
+    pathEl.title = this.getItemPathTitle(f)
 
     item.appendChild(name)
     item.appendChild(pathEl)
@@ -1178,27 +1581,39 @@ export default class QuickOpenPlugin extends Plugin {
     if (e.isComposing || e.keyCode === 229) return
     if (e.key === 'ArrowDown') {
       e.preventDefault()
+      e.stopPropagation()
       this.selectedIdx = Math.min(this.selectedIdx + 1, this.filtered.length - 1)
       this.highlight()
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
+      e.stopPropagation()
       this.selectedIdx = Math.max(this.selectedIdx - 1, 0)
       this.highlight()
     } else if (e.key === 'Enter') {
+      if (e.repeat) return
+      const now = Date.now()
+      if (now - this.lastHandledEnterAt < 180) return
+      this.lastHandledEnterAt = now
       e.preventDefault()
+      e.stopPropagation()
       this.openSelected()
     }
   }
 
   private openSelected(): void {
     const f = this.filtered[this.selectedIdx]
-    if (!f) return
+    if (!f || this.openingSelection) return
+    this.openingSelection = true
     this.log('openSelected', { index: this.selectedIdx, file: f })
     this.close()
     this.recordOpen(f.absPath).catch(() => {})
-    editor.openFile(f.absPath).catch(err => {
-      this.warn('openSelected failed', { file: f.absPath, err })
-      this.showNotice(`打开文件失败: ${err.message}`)
-    })
+    editor.openFile(f.absPath)
+      .catch(err => {
+        this.warn('openSelected failed', { file: f.absPath, err })
+        this.showNotice(`打开文件失败: ${err.message}`)
+      })
+      .finally(() => {
+        this.openingSelection = false
+      })
   }
 }

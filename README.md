@@ -49,7 +49,7 @@ Plugins never touch low-level APIs directly. They use `platform.fs`, `platform.s
 | `sidenote` | M | `startup` | Render inline `<span class="sidenote">` as margin notes inside the editor. |
 | `wider` | M | `startup` | Switch editor width between `default / wide / full` with sidenote-aware spacing. |
 | `title-shift` | S | `hotkey` | Quickly shift heading levels. |
-| `fuzzy-search` | M | `hotkey` | Quick-open and fuzzy-search files from the current workspace. |
+| `fuzzy-search` | M | `hotkey` | Quick-open with fzf-style ranking, relative-path matching, and rg/fallback indexing. |
 
 ### `wider` at a glance
 
