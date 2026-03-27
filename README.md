@@ -55,7 +55,7 @@ Plugins never touch low-level APIs directly. They use `platform.fs`, `platform.s
 
 - Feishu-like `default / wide / full` writing widths
 - `Mod+[` narrows, `Mod+]` widens
-- Bottom-right status item trigger inside Typora's `content` area
+- Shortcut-only switching with a brief mode toast
 - Auto-reserves the sidenote gutter when `sidenote` is active
 
 ### `sidenote` table behavior

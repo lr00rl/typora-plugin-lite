@@ -9,6 +9,10 @@ import { PluginSettings } from './settings.js'
 import type { Platform } from '../platform/index.js'
 import type { HotkeyManager } from '../hotkey/manager.js'
 
+let noticeToastEl: HTMLDivElement | null = null
+let noticeHideTimer = 0
+let noticeRemoveTimer = 0
+
 export interface Command {
   id: string
   name: string
@@ -95,8 +99,10 @@ export abstract class Plugin<T extends Record<string, unknown> = Record<string, 
 
   showNotice(msg: string, duration = 3000): void {
     this.app.events.emit('ui:notice', { msg, duration, pluginId: this.manifest.id })
-    // Direct DOM toast as fallback (until UI runtime is built in Phase 2)
-    const toast = document.createElement('div')
+    // Direct DOM toast as fallback (until UI runtime is built in Phase 2).
+    // Reuse a single element so rapid consecutive notices do not visually overlap.
+    const toast = noticeToastEl ?? document.createElement('div')
+    noticeToastEl = toast
     toast.textContent = msg
     Object.assign(toast.style, {
       position: 'fixed',
@@ -114,11 +120,22 @@ export abstract class Plugin<T extends Record<string, unknown> = Record<string, 
       opacity: '0',
       pointerEvents: 'none',
     })
-    document.body.appendChild(toast)
+    if (!toast.isConnected) {
+      document.body.appendChild(toast)
+    }
+
+    window.clearTimeout(noticeHideTimer)
+    window.clearTimeout(noticeRemoveTimer)
+    toast.style.opacity = '0'
     requestAnimationFrame(() => { toast.style.opacity = '1' })
-    setTimeout(() => {
+    noticeHideTimer = window.setTimeout(() => {
       toast.style.opacity = '0'
-      setTimeout(() => toast.remove(), 300)
+      noticeRemoveTimer = window.setTimeout(() => {
+        toast.remove()
+        if (noticeToastEl === toast) {
+          noticeToastEl = null
+        }
+      }, 300)
     }, duration)
   }
 }
