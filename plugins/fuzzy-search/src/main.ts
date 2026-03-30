@@ -10,26 +10,25 @@ interface FileEntry {
   basenameKey: string
 }
 
-interface LibraryIndexStats {
-  totalNodes: number
-  dirCount: number
-  fileCount: number
-  fetchedDirCount: number
-  unfetchedDirs: string[]
-}
-
 const MD_EXTS = ['.md', '.markdown']
 const MD_EXT_SET = new Set(MD_EXTS)
 const MAX_MRU = 30
 const DEFAULT_HOTKEYS = ['Mod+.', "Mod+'"]
-const DEBOUNCE_MS = 80
-const INDEX_TTL_MS = 5_000
-const SEARCH_RESULT_LIMIT = 50
-const EXTERNAL_FZF_THRESHOLD = 50_000
+const DEBOUNCE_MS = 120
+const INDEX_TTL_MS = 5 * 60_000
+const SEARCH_RESULT_LIMIT = 100
 const IGNORED_DIRS = ['.git', 'node_modules', '.obsidian', '.trash', '.Trash', '_archive']
 const TAG = '[tpl:quick-open]'
 const DEBUG_SAMPLE_LIMIT = 20
 const DEBUG = false
+const INDEX_SCHEMA_VERSION = 1
+
+interface PersistedIndexMeta {
+  schemaVersion: number
+  root: string
+  count: number
+  updatedAt: number
+}
 
 // ---------------------------------------------------------------------------
 // FZF-inspired scoring (ported from fzf.nvim behavior)
@@ -281,7 +280,7 @@ export default class QuickOpenPlugin extends Plugin {
   private overlay: HTMLElement | null = null
   private inputEl: HTMLInputElement | null = null
   private listEl: HTMLElement | null = null
-  /** All searchable files (MRU + current dir + workspace index) */
+  /** Recent files shown immediately before the persistent index is queried. */
   private allFiles: FileEntry[] = []
   private filtered: FileEntry[] = []
   private selectedIdx = 0
@@ -301,15 +300,15 @@ export default class QuickOpenPlugin extends Plugin {
   private fzfPath: string | null = null
   private indexBackend = 'walk'
   private searchBackend = 'js'
-  private fzfInputPath = ''
-  private fzfInputDirty = true
-  private fzfInputMap = new Map<string, FileEntry>()
   private openingSelection = false
   private lastHandledEnterAt = 0
-  private searchPool: FileEntry[] = []
-  private lastSearchQuery = ''
-  private searchCacheVersion = 0
-  private searchPoolVersion = -1
+  private indexFilePath = ''
+  private indexMetaPath = ''
+  private indexRoot = ''
+  private indexedFileCount = 0
+  private indexReady = false
+  private lastInputValue = ''
+  private lastRecordedActiveFile = ''
 
   private getHotkeys(): string[] {
     const custom = this.settings.get('hotkeys' as never) as unknown
@@ -325,15 +324,26 @@ export default class QuickOpenPlugin extends Plugin {
     for (const key of hotkeys) {
       this.registerHotkey(key, () => this.open())
     }
+    this.syncActiveFileToRecent().catch(() => {})
+    this.registerInterval(() => {
+      void this.syncActiveFileToRecent()
+    }, 1200)
   }
 
   onunload(): void {
     this.log('onunload', {
-      indexedFiles: this.vaultIndex.length,
-      vaultIndexRoot: this.vaultIndexRoot,
+      indexedFiles: this.indexedFileCount,
+      indexRoot: this.indexRoot,
       currentQuery: this.currentQuery,
     })
     this.close()
+  }
+
+  private async syncActiveFileToRecent(): Promise<void> {
+    const activeFile = editor.getFilePath()
+    if (!activeFile || activeFile === this.lastRecordedActiveFile) return
+    this.lastRecordedActiveFile = activeFile
+    await this.recordOpen(activeFile)
   }
 
   private log(...args: unknown[]): void {
@@ -356,6 +366,31 @@ export default class QuickOpenPlugin extends Plugin {
     return platform.path.join(this.getDebugDir(), 'fuzzy-search-index.json')
   }
 
+  private hashText(text: string): string {
+    let hash = 2166136261
+    for (let i = 0; i < text.length; i++) {
+      hash ^= text.charCodeAt(i)
+      hash = Math.imul(hash, 16777619)
+    }
+    return (hash >>> 0).toString(16).padStart(8, '0')
+  }
+
+  private getIndexCacheDir(): string {
+    return platform.path.join(platform.dataDir, 'cache', 'fuzzy-search')
+  }
+
+  private getIndexPaths(root: string): { dir: string; metaPath: string; filePath: string; tempPath: string } {
+    const dir = this.getIndexCacheDir()
+    const key = this.hashText(normalizePath(root).toLowerCase())
+    const base = `index-${key}`
+    return {
+      dir,
+      metaPath: platform.path.join(dir, `${base}.meta.json`),
+      filePath: platform.path.join(dir, `${base}.paths.txt`),
+      tempPath: platform.path.join(dir, `${base}.tmp.txt`),
+    }
+  }
+
   private async writeLargeText(filepath: string, text: string, chunkSize = 24_000): Promise<void> {
     if (text.length <= chunkSize) {
       await platform.fs.writeText(filepath, text)
@@ -365,6 +400,42 @@ export default class QuickOpenPlugin extends Plugin {
     await platform.fs.writeText(filepath, '')
     for (let offset = 0; offset < text.length; offset += chunkSize) {
       await platform.fs.appendText(filepath, text.slice(offset, offset + chunkSize))
+    }
+  }
+
+  private async loadPersistedIndexMeta(root: string): Promise<boolean> {
+    const { dir, filePath, metaPath } = this.getIndexPaths(root)
+    this.indexRoot = root
+    this.indexFilePath = filePath
+    this.indexMetaPath = metaPath
+    this.indexedFileCount = 0
+    this.vaultIndexTime = 0
+    this.indexReady = false
+
+    try {
+      await platform.fs.mkdir(dir)
+      const [metaExists, fileExists] = await Promise.all([
+        platform.fs.exists(metaPath),
+        platform.fs.exists(filePath),
+      ])
+      if (!metaExists || !fileExists) return false
+
+      const meta = JSON.parse(await platform.fs.readText(metaPath)) as PersistedIndexMeta
+      if (
+        meta.schemaVersion !== INDEX_SCHEMA_VERSION ||
+        normalizePath(meta.root) !== normalizePath(root) ||
+        typeof meta.count !== 'number'
+      ) {
+        return false
+      }
+
+      this.indexedFileCount = meta.count
+      this.indexReady = meta.count > 0
+      this.vaultIndexTime = meta.updatedAt || 0
+      return true
+    } catch (err) {
+      this.warn('loadPersistedIndexMeta failed', { root, err })
+      return false
     }
   }
 
@@ -386,8 +457,8 @@ export default class QuickOpenPlugin extends Plugin {
         query: this.inputEl?.value ?? this.currentQuery,
         allFilesCount: this.allFiles.length,
         filteredCount: this.filtered.length,
-        vaultIndexCount: this.vaultIndex.length,
-        vaultIndexRoot: this.vaultIndexRoot,
+        vaultIndexCount: this.indexedFileCount,
+        vaultIndexRoot: this.indexRoot,
         vaultIndexTime: this.vaultIndexTime ? new Date(this.vaultIndexTime).toISOString() : null,
         allFilesSample: this.allFiles.slice(0, DEBUG_SAMPLE_LIMIT),
         filteredSample: this.filtered.slice(0, DEBUG_SAMPLE_LIMIT),
@@ -396,21 +467,16 @@ export default class QuickOpenPlugin extends Plugin {
       const indexDump = {
         reason,
         timestamp: state.timestamp,
-        rootDir: this.vaultIndexRoot || this.getRootDir(),
-        count: this.vaultIndex.length,
-        files: this.vaultIndex.map(file => ({
-          absPath: file.absPath,
-          relPath: file.relPath,
-          cwdRelPath: file.cwdRelPath,
-          basename: file.basename,
-        })),
+        rootDir: this.indexRoot || this.getRootDir(),
+        count: this.indexedFileCount,
+        indexFilePath: this.indexFilePath,
       }
 
       await Promise.all([
         this.writeLargeText(statePath, JSON.stringify(state, null, 2) + '\n'),
         this.writeLargeText(indexPath, JSON.stringify(indexDump, null, 2) + '\n'),
       ])
-      this.log('debug dump written', { reason, statePath, indexPath, count: this.vaultIndex.length })
+      this.log('debug dump written', { reason, statePath, indexPath, count: this.indexedFileCount })
     } catch (err) {
       this.warn('failed to write debug dump', { reason, err })
     }
@@ -508,13 +574,6 @@ export default class QuickOpenPlugin extends Plugin {
     }
   }
 
-  private invalidateSearchCache(): void {
-    this.searchCacheVersion += 1
-    this.searchPoolVersion = -1
-    this.lastSearchQuery = ''
-    this.searchPool = []
-  }
-
   // -------------------------------------------------------------------------
   // MRU helpers
   // -------------------------------------------------------------------------
@@ -587,412 +646,33 @@ export default class QuickOpenPlugin extends Plugin {
     }
   }
 
-  private getLibraryRootEntity(): TyporaFileEntity | null {
-    const root = (window as any).File?.editor?.library?.root
-    return root && typeof root.path === 'string' ? root as TyporaFileEntity : null
-  }
-
-  private flattenTyporaEntityPayload(
-    payload: unknown,
-    root: string,
-    acc: Map<string, FileEntry>,
-    stats?: { callbackCount: number; nodeCount: number; dirCount: number; fileCount: number },
-    visited = new Set<string>(),
-  ): void {
-    if (!payload) return
-
-    if (Array.isArray(payload)) {
-      for (const item of payload) this.flattenTyporaEntityPayload(item, root, acc, stats, visited)
-      return
-    }
-
-    if (typeof payload !== 'object') return
-    const node = payload as Partial<TyporaFileEntity>
-    if (!node.path || typeof node.path !== 'string' || visited.has(node.path)) return
-    visited.add(node.path)
-    if (stats) stats.nodeCount += 1
-
-    if (node.isDirectory) {
-      if (stats) stats.dirCount += 1
-      const subdir = Array.isArray(node.subdir) ? node.subdir : []
-      const content = Array.isArray(node.content) ? node.content : []
-      for (const child of [...subdir, ...content]) {
-        this.flattenTyporaEntityPayload(child, root, acc, stats, visited)
-      }
-      return
-    }
-
-    if (!node.isFile) return
-    if (stats) stats.fileCount += 1
-    const basename = typeof node.name === 'string' && node.name
-      ? node.name
-      : platform.path.basename(node.path)
-    const ext = platform.path.extname(basename).toLowerCase()
-    if (!MD_EXT_SET.has(ext)) return
-    acc.set(node.path, this.makeFileEntry(node.path, root, this.getCurrentDir(), basename))
-  }
-
-  private inspectLibraryTree(root: string, maxDepth = 20): LibraryIndexStats {
-    const rootEntity = this.getLibraryRootEntity()
-    const stats: LibraryIndexStats = {
-      totalNodes: 0,
-      dirCount: 0,
-      fileCount: 0,
-      fetchedDirCount: 0,
-      unfetchedDirs: [],
-    }
-    if (!rootEntity) return stats
-
-    const visited = new Set<string>()
-    const walk = (node: TyporaFileEntity, depth: number): void => {
-      if (!node?.path || visited.has(node.path) || depth > maxDepth) return
-      visited.add(node.path)
-      stats.totalNodes += 1
-
-      if (node.isDirectory) {
-        stats.dirCount += 1
-        if (node.fetched) {
-          stats.fetchedDirCount += 1
-        } else {
-          stats.unfetchedDirs.push(toRelPath(node.path, root))
-        }
-        const children = [...(node.subdir ?? []), ...(node.content ?? [])]
-        for (const child of children) walk(child, depth + 1)
-        return
-      }
-
-      if (node.isFile) stats.fileCount += 1
-    }
-
-    walk(rootEntity, 0)
-    return stats
-  }
-
-  private collectVaultIndexFromLibrary(root: string, maxDepth = 20, maxFiles = 5000): FileEntry[] {
-    const rootEntity = this.getLibraryRootEntity()
-    if (!rootEntity) {
-      this.log('libraryIndex:no-root-entity')
-      return []
-    }
-
-    const visited = new Set<string>()
-    const files: FileEntry[] = []
-    const stats = this.inspectLibraryTree(root, maxDepth)
-    const walk = (node: TyporaFileEntity, depth: number): void => {
-      if (!node?.path || visited.has(node.path) || files.length >= maxFiles || depth > maxDepth) return
-      visited.add(node.path)
-
-      if (node.isDirectory) {
-        if (IGNORED_DIRS.includes(node.name) || node.name.startsWith('.')) return
-        const children = [...(node.subdir ?? []), ...(node.content ?? [])]
-        for (const child of children) {
-          if (files.length >= maxFiles) break
-          walk(child, depth + 1)
-        }
-        return
-      }
-
-      if (!node.isFile) return
-      const ext = platform.path.extname(node.name || node.path).toLowerCase()
-      if (!MD_EXT_SET.has(ext)) return
-      files.push(this.makeFileEntry(node.path, root, this.getCurrentDir(), node.name || platform.path.basename(node.path)))
-    }
-
-    this.log('libraryIndex:start', {
-      root,
-      entityPath: rootEntity.path,
-      entityName: rootEntity.name,
-      fetched: rootEntity.fetched ?? null,
-      subdirCount: rootEntity.subdir?.length ?? 0,
-      contentCount: rootEntity.content?.length ?? 0,
-      maxDepth,
-      maxFiles,
-      treeStats: {
-        totalNodes: stats.totalNodes,
-        dirCount: stats.dirCount,
-        fileCount: stats.fileCount,
-        fetchedDirCount: stats.fetchedDirCount,
-        unfetchedDirCount: stats.unfetchedDirs.length,
-        unfetchedDirsSample: stats.unfetchedDirs.slice(0, DEBUG_SAMPLE_LIMIT),
-      },
-    })
-    walk(rootEntity, 0)
-    this.log('libraryIndex:done', {
-      root,
-      count: files.length,
-      sample: files.slice(0, DEBUG_SAMPLE_LIMIT).map(file => file.relPath),
-      treeStats: {
-        totalNodes: stats.totalNodes,
-        dirCount: stats.dirCount,
-        fileCount: stats.fileCount,
-        fetchedDirCount: stats.fetchedDirCount,
-        unfetchedDirCount: stats.unfetchedDirs.length,
-      },
-    })
-    return files
-  }
-
-  private collectVaultIndexFromBridge(root: string, maxFiles = 5000, hardTimeoutMs = 5000): Promise<FileEntry[]> {
-    return new Promise(resolve => {
-      const bridge = window.bridge
-      if (!bridge?.callHandler) {
-        this.log('bridgeIndex:unavailable')
-        resolve([])
-        return
-      }
-
-      const entries = new Map<string, FileEntry>()
-      const stats = { callbackCount: 0, nodeCount: 0, dirCount: 0, fileCount: 0 }
-      let idleTimer: ReturnType<typeof setTimeout> | null = null
-      let hardTimer: ReturnType<typeof setTimeout> | null = null
-      let settled = false
-      const finish = (reason: string): void => {
-        if (settled) return
-        settled = true
-        if (idleTimer) clearTimeout(idleTimer)
-        if (hardTimer) clearTimeout(hardTimer)
-        const files = [...entries.values()].slice(0, maxFiles)
-        this.log('bridgeIndex:done', {
-          root,
-          reason,
-          callbackCount: stats.callbackCount,
-          nodeCount: stats.nodeCount,
-          dirCount: stats.dirCount,
-          fileCount: stats.fileCount,
-          count: files.length,
-          sample: files.slice(0, DEBUG_SAMPLE_LIMIT).map(file => file.relPath),
-        })
-        resolve(files)
-      }
-      const bumpIdleTimer = (): void => {
-        if (idleTimer) clearTimeout(idleTimer)
-        idleTimer = setTimeout(() => finish('idle-timeout'), 250)
-      }
-
-      this.log('bridgeIndex:start', { root, hardTimeoutMs, maxFiles })
-      try {
-        bridge.callHandler('library.fetchAllDocs', root)
-        this.log('bridgeIndex:fetchAllDocs-dispatched', { root })
-      } catch (err) {
-        this.warn('bridgeIndex:fetchAllDocs-failed', { root, err })
-      }
-
-      hardTimer = setTimeout(() => finish('hard-timeout'), hardTimeoutMs)
-
-      try {
-        bridge.callHandler('library.listDocsUnder', root, (payload: unknown) => {
-          stats.callbackCount += 1
-          this.log('bridgeIndex:callback', {
-            root,
-            callbackCount: stats.callbackCount,
-            payloadType: Array.isArray(payload) ? 'array' : typeof payload,
-            path: (payload as any)?.path ?? null,
-            name: (payload as any)?.name ?? null,
-            fetched: (payload as any)?.fetched ?? null,
-            subdirCount: Array.isArray((payload as any)?.subdir) ? (payload as any).subdir.length : null,
-            contentCount: Array.isArray((payload as any)?.content) ? (payload as any).content.length : null,
-          })
-          this.flattenTyporaEntityPayload(payload, root, entries, stats)
-          if (entries.size >= maxFiles) {
-            finish('max-files')
-            return
-          }
-          bumpIdleTimer()
-        })
-      } catch (err) {
-        this.warn('bridgeIndex:failed', { root, err })
-        finish('bridge-error')
-      }
-    })
-  }
-
-  /**
-   * Reliable directory walker that doesn't depend on Typora's library tree.
-   * Strategy: try platform fs walk first, then `find`, then BFS `ls -p`.
-   */
-  private async walkDirPure(root: string, maxDepth = 20, maxFiles = 5000): Promise<FileEntry[]> {
-    try {
-      const currentDir = this.getCurrentDir()
-      const walked = await platform.fs.walkDir(root, {
-        exts: MD_EXTS,
-        ignore: IGNORED_DIRS,
-        maxDepth,
-        maxFiles,
-      })
-      const results = walked.map(absPath => this.makeFileEntry(absPath, root, currentDir))
-      if (results.length > 0) {
-        this.log('walkDirPure:platformFs-hit', { root, count: results.length })
-        return results
-      }
-    } catch (err) {
-      this.log('walkDirPure:platformFs-failed, falling back to find', { root, err })
-    }
-
-    // Fast path: single `find` command (typically <100ms for most workspaces)
-    try {
-      const findResult = await this.walkDirWithFind(root, maxDepth, maxFiles)
-      if (findResult.length > 0) return findResult
-    } catch (err) {
-      this.log('walkDirPure:find-failed, falling back to BFS', { root, err })
-    }
-
-    // Fallback: BFS with `ls -p` per directory (reliable, many small calls)
-    return this.walkDirWithBFS(root, maxDepth, maxFiles)
-  }
-
-  private async walkDirWithFind(root: string, maxDepth: number, maxFiles: number): Promise<FileEntry[]> {
-    const esc = (s: string) => platform.shell.escape(s)
-    const ignorePrune = IGNORED_DIRS.map(d => `-name ${esc(d)}`).join(' -o ')
-    const extMatch = MD_EXTS.map(e => `-name ${esc('*' + e)}`).join(' -o ')
-    const cmd = [
-      'find', esc(root),
-      `-maxdepth ${maxDepth}`,
-      `\\( -type d \\( ${ignorePrune} -o -name '.*' \\) -prune \\)`,
-      `-o -type f \\( ${extMatch} \\) -print`,
-      `| head -n ${maxFiles}`,
-    ].join(' ')
-
-    this.log('walkDirWithFind:start', { root, cmd: cmd.slice(0, 200) })
-    const output = await platform.shell.run(cmd, { timeout: 10_000 })
-    const currentDir = this.getCurrentDir()
-    const results = output.trim().split('\n').filter(Boolean)
-      .map(absPath => this.makeFileEntry(absPath, root, currentDir))
-    this.log('walkDirWithFind:done', { root, count: results.length })
-    return results
-  }
-
-  private async walkDirWithBFS(root: string, maxDepth: number, maxFiles: number): Promise<FileEntry[]> {
-    const results: FileEntry[] = []
-    const queue: Array<{ dir: string; depth: number }> = [{ dir: root, depth: 0 }]
-    const BATCH_SIZE = 16
-
-    while (queue.length > 0 && results.length < maxFiles) {
-      const batch = queue.splice(0, BATCH_SIZE)
-      const batchResults = await Promise.all(
-        batch.map(async ({ dir, depth }) => {
-          const files: FileEntry[] = []
-          const subdirs: Array<{ dir: string; depth: number }> = []
-          try {
-            const output = await platform.shell.run(
-              `ls -p ${platform.shell.escape(dir)}`,
-              { timeout: 5000 },
-            )
-            for (const entry of output.trim().split('\n').filter(Boolean)) {
-              if (entry.startsWith('.')) continue
-              if (entry.endsWith('/')) {
-                const name = entry.slice(0, -1)
-                if (!IGNORED_DIRS.includes(name) && depth + 1 <= maxDepth) {
-                  subdirs.push({ dir: platform.path.join(dir, name), depth: depth + 1 })
-                }
-              } else {
-                const ext = platform.path.extname(entry).toLowerCase()
-                if (MD_EXT_SET.has(ext)) {
-                  const absPath = platform.path.join(dir, entry)
-                  files.push(this.makeFileEntry(absPath, root, this.getCurrentDir(), entry))
-                }
-              }
-            }
-          } catch { /* directory not listable, skip */ }
-          return { files, subdirs }
-        }),
-      )
-
-      for (const r of batchResults) {
-        results.push(...r.files)
-        queue.push(...r.subdirs)
-      }
-    }
-
-    this.log('walkDirWithBFS:done', { root, count: results.length })
-    return results.slice(0, maxFiles)
-  }
-
-  private async collectVaultIndexWithRg(root: string, maxFiles: number): Promise<FileEntry[]> {
-    if (!this.rgPath) return []
-
-    const currentDir = this.getCurrentDir()
-    const cmd = [
-      platform.shell.escape(this.rgPath),
-      '--files',
-      ...MD_EXTS.flatMap(ext => ['-g', platform.shell.escape(`*${ext}`)]),
-      ...IGNORED_DIRS.flatMap(name => ['-g', platform.shell.escape(`!**/${name}/**`)]),
-      '.',
-      `| head -n ${maxFiles}`,
-    ].join(' ')
-
-    this.log('walkDirWithRg:start', { root, cmd: cmd.slice(0, 240), rgPath: this.rgPath })
-    const output = await platform.shell.run(cmd, { cwd: root, timeout: 10_000 })
-    const results = output.trim().split('\n').filter(Boolean)
-      .map(relPath => this.makeFileEntry(platform.path.join(root, relPath), root, currentDir))
-    this.log('walkDirWithRg:done', { root, count: results.length })
-    return results
-  }
-
-  private getFzfInputPath(): string {
-    return platform.path.join(platform.dataDir, 'cache', 'fuzzy-search-fzf-input.txt')
-  }
-
-  private async ensureFzfInputFile(): Promise<void> {
-    if (!this.fzfInputDirty && this.fzfInputPath) return
-
-    const cacheDir = platform.path.dirname(this.getFzfInputPath())
-    await platform.fs.mkdir(cacheDir)
-
-    const lines: string[] = []
-    this.fzfInputMap.clear()
-    for (let index = 0; index < this.allFiles.length; index++) {
-      const file = this.allFiles[index]
-      const id = String(index)
-      this.fzfInputMap.set(id, file)
-
-      const keys = [file.cwdRelPath, file.relPath, file.basename]
-      const seen = new Set<string>()
-      for (const key of keys) {
-        const normalized = normalizePath(key).trim()
-        if (!normalized || seen.has(normalized)) continue
-        seen.add(normalized)
-        lines.push(`${id}\t${normalized}`)
-      }
-    }
-
-    this.fzfInputPath = this.getFzfInputPath()
-    await this.writeLargeText(this.fzfInputPath, lines.join('\n') + (lines.length ? '\n' : ''))
-    this.fzfInputDirty = false
-    this.log('fzfInput:written', { path: this.fzfInputPath, lineCount: lines.length, fileCount: this.allFiles.length })
-  }
-
   private async searchWithFzf(query: string, limit = 50): Promise<FileEntry[]> {
-    if (!this.fzfPath) return []
-    await this.ensureFzfInputFile()
-    const tabDelimiter = '	'
-
+    if (!this.fzfPath || !this.indexReady || !this.indexFilePath || !this.indexRoot) return []
     const cmd = [
       'cat',
-      platform.shell.escape(this.fzfInputPath),
+      platform.shell.escape(this.indexFilePath),
       '|',
       platform.shell.escape(this.fzfPath),
       '--filter',
       platform.shell.escape(query),
       '--algo=v2',
       '--scheme=path',
-      '--delimiter',
-      platform.shell.escape(tabDelimiter),
-      '--nth=2..',
-      `| head -n ${limit * 4}`,
+      `| head -n ${limit}`,
     ].join(' ')
 
     const output = await platform.shell.run(cmd, { timeout: 10_000 })
     const results: FileEntry[] = []
     const seen = new Set<string>()
+    const root = this.indexRoot
+    const currentDir = this.getCurrentDir()
 
     for (const line of output.trim().split('\n').filter(Boolean)) {
-      const tabIndex = line.indexOf('\t')
-      if (tabIndex <= 0) continue
-      const id = line.slice(0, tabIndex)
-      const file = this.fzfInputMap.get(id)
-      if (!file || seen.has(file.absPath)) continue
-      seen.add(file.absPath)
-      results.push(file)
+      const relPath = normalizePath(line.trim())
+      if (!relPath) continue
+      const absPath = platform.path.join(root, relPath)
+      if (seen.has(absPath)) continue
+      seen.add(absPath)
+      results.push(this.makeFileEntry(absPath, root, currentDir))
       if (results.length >= limit) break
     }
 
@@ -1012,32 +692,29 @@ export default class QuickOpenPlugin extends Plugin {
     if (results.length > limit) results.length = limit
   }
 
-  private searchWithJs(query: string, limit = 50): FileEntry[] {
+  private async searchWithJs(query: string, limit = 50): Promise<FileEntry[]> {
     this.searchBackend = 'js'
-    const normalizedQuery = query.trim().toLowerCase()
-    const canNarrow =
-      this.searchPoolVersion === this.searchCacheVersion &&
-      !!this.lastSearchQuery &&
-      normalizedQuery.startsWith(this.lastSearchQuery)
-    const source = canNarrow ? this.searchPool : this.allFiles
-    const matchedPool: FileEntry[] = []
+    if (!this.indexReady || !this.indexFilePath || !this.indexRoot) return []
+
+    const normalizedQuery = query.trim()
+    const text = await platform.fs.readText(this.indexFilePath)
+    const root = this.indexRoot
+    const currentDir = this.getCurrentDir()
     const topResults: Array<{ file: FileEntry; score: number }> = []
 
-    for (const file of source) {
+    for (const relPath of text.split('\n').filter(Boolean)) {
+      const absPath = platform.path.join(root, relPath)
+      const file = this.makeFileEntry(absPath, root, currentDir)
       const score = scoreFile(file, normalizedQuery)
       if (score === -Infinity) continue
-      matchedPool.push(file)
       this.pushTopResult(topResults, { file, score }, limit)
     }
 
-    this.lastSearchQuery = normalizedQuery
-    this.searchPool = matchedPool
-    this.searchPoolVersion = this.searchCacheVersion
     return topResults.map(entry => entry.file)
   }
 
   private shouldUseExternalFzf(query: string): boolean {
-    return !IS_MAC && !!this.fzfPath && this.allFiles.length >= EXTERNAL_FZF_THRESHOLD && query.trim().length >= 2
+    return !!this.fzfPath && !!query.trim() && this.indexReady
   }
 
   private async searchFiles(query: string, limit = 50): Promise<FileEntry[]> {
@@ -1048,17 +725,93 @@ export default class QuickOpenPlugin extends Plugin {
         this.warn('searchWithFzf failed, falling back to JS scoring', err)
       }
     }
-    return this.searchWithJs(query, limit)
+    return await this.searchWithJs(query, limit)
   }
 
-  private mergeFileEntries(primary: FileEntry[], secondary: FileEntry[]): FileEntry[] {
-    const merged = new Map<string, FileEntry>()
-    for (const entry of [...primary, ...secondary]) merged.set(entry.absPath, entry)
-    return [...merged.values()]
+  private async buildIndexWithRg(root: string): Promise<number> {
+    if (!this.rgPath) return 0
+    const { dir, filePath, tempPath } = this.getIndexPaths(root)
+    await platform.fs.mkdir(dir)
+    const cmd = [
+      platform.shell.escape(this.rgPath),
+      '--files',
+      ...MD_EXTS.flatMap(ext => ['-g', platform.shell.escape(`*${ext}`)]),
+      ...IGNORED_DIRS.flatMap(name => ['-g', platform.shell.escape(`!**/${name}/**`)]),
+      '.',
+      '>',
+      platform.shell.escape(tempPath),
+      '&&',
+      'wc -l <',
+      platform.shell.escape(tempPath),
+    ].join(' ')
+
+    const countText = (await platform.shell.run(cmd, { cwd: root, timeout: 30_000 })).trim()
+    await platform.shell.run(
+      `mv ${platform.shell.escape(tempPath)} ${platform.shell.escape(filePath)}`,
+      { timeout: 10_000 },
+    )
+    return Number.parseInt(countText, 10) || 0
   }
 
-  private rehydrateEntries(entries: FileEntry[], root: string, currentDir = this.getCurrentDir()): FileEntry[] {
-    return entries.map(entry => this.makeFileEntry(entry.absPath, root, currentDir, entry.basename))
+  private async buildIndexWithFind(root: string): Promise<number> {
+    const { dir, filePath, tempPath } = this.getIndexPaths(root)
+    await platform.fs.mkdir(dir)
+    const esc = (s: string) => platform.shell.escape(s)
+    const ignorePrune = IGNORED_DIRS.map(d => `-name ${esc(d)}`).join(' -o ')
+    const extMatch = MD_EXTS.map(e => `-name ${esc('*' + e)}`).join(' -o ')
+    const cmd = [
+      'find .',
+      `\\( -type d \\( ${ignorePrune} -o -name '.*' \\) -prune \\)`,
+      '-o',
+      `-type f \\( ${extMatch} \\) -print`,
+      '| sed',
+      esc('s#^\\./##'),
+      '>',
+      esc(tempPath),
+      '&&',
+      'wc -l <',
+      esc(tempPath),
+    ].join(' ')
+
+    const countText = (await platform.shell.run(cmd, { cwd: root, timeout: 60_000 })).trim()
+    await platform.shell.run(`mv ${esc(tempPath)} ${esc(filePath)}`, { timeout: 10_000 })
+    return Number.parseInt(countText, 10) || 0
+  }
+
+  private async persistIndexMeta(root: string, count: number): Promise<void> {
+    const meta: PersistedIndexMeta = {
+      schemaVersion: INDEX_SCHEMA_VERSION,
+      root,
+      count,
+      updatedAt: Date.now(),
+    }
+    await this.writeLargeText(this.indexMetaPath, JSON.stringify(meta, null, 2) + '\n')
+  }
+
+  private async buildPersistentIndex(root: string): Promise<void> {
+    const startedAt = Date.now()
+    await this.loadPersistedIndexMeta(root)
+
+    let count = 0
+    if (this.rgPath) {
+      count = await this.buildIndexWithRg(root)
+      this.indexBackend = 'rg'
+    } else {
+      count = await this.buildIndexWithFind(root)
+      this.indexBackend = 'find'
+    }
+
+    this.indexRoot = root
+    this.indexedFileCount = count
+    this.indexReady = count > 0
+    await this.persistIndexMeta(root, count)
+    this.log('buildPersistentIndex:done', {
+      root,
+      count,
+      durationMs: Date.now() - startedAt,
+      indexFilePath: this.indexFilePath,
+      backend: this.indexBackend,
+    })
   }
 
   private setFooter(fileCount: number, root: string, status = ''): void {
@@ -1081,23 +834,25 @@ export default class QuickOpenPlugin extends Plugin {
     const root = this.getRootDir()
     const currentDir = this.getCurrentDir()
     const candidates = this.getWorkspaceCandidates()
-    const seen = new Set<string>()
-    const quickFiles: FileEntry[] = []
-    this.log('loadFiles:start', { root, currentDir, candidates, cacheRoot: this.vaultIndexRoot, cacheCount: this.vaultIndex.length })
+    this.log('loadFiles:start', { root, currentDir, candidates, cacheRoot: this.indexRoot, cacheCount: this.indexedFileCount })
     await this.ensureToolInfo()
+    this.indexReady = root ? await this.loadPersistedIndexMeta(root) : false
 
-    // Phase 1a: MRU entries — filter out deleted files
     let mru = this.getMru()
     this.log('loadFiles:mru', { count: mru.length, sample: mru.slice(0, DEBUG_SAMPLE_LIMIT) })
     if (mru.length > 0) {
       try {
-        const checkCmd = mru
-          .map(p => `test -f ${platform.shell.escape(p)} && printf '%s\\n' ${platform.shell.escape(p)}`)
-          .join('; ')
-        const output = await platform.shell.run(checkCmd, { timeout: 5000 })
-        const existingSet = new Set(output.trim().split('\n').filter(Boolean))
+        const existing = await Promise.all(
+          mru.map(async p => {
+            try {
+              return await platform.fs.exists(p) ? p : null
+            } catch {
+              return null
+            }
+          }),
+        )
         const before = mru.length
-        mru = mru.filter(p => existingSet.has(p))
+        mru = existing.filter((p): p is string => !!p)
         if (mru.length < before) {
           this.log('loadFiles:mru-pruned', { before, after: mru.length })
           this.saveMru(mru).catch(() => {})
@@ -1106,120 +861,71 @@ export default class QuickOpenPlugin extends Plugin {
         this.warn('loadFiles:mru-existence-check-failed', err)
       }
     }
-    for (const absPath of mru) {
-      if (seen.has(absPath)) continue
-      seen.add(absPath)
-      quickFiles.push(this.makeFileEntry(absPath, root, currentDir))
-    }
-
-    // Phase 1b: Sibling .md files in current directory
-    if (currentDir) {
-      try {
-        const entries = await platform.fs.list(currentDir)
-        this.log('loadFiles:currentDirList', { currentDir, count: entries.length, sample: entries.slice(0, DEBUG_SAMPLE_LIMIT) })
-        for (const name of entries) {
-          if (name.startsWith('.')) continue
-          const ext = platform.path.extname(name).toLowerCase()
-          if (!MD_EXT_SET.has(ext)) continue
-          const absPath = platform.path.join(currentDir, name)
-          if (seen.has(absPath)) continue
-          seen.add(absPath)
-          quickFiles.push(this.makeFileEntry(absPath, root, currentDir, name))
-        }
-      } catch (err) {
-        this.warn('failed to list current dir', { currentDir, err })
-      }
-    }
-
-    this.allFiles = quickFiles
-    this.fzfInputDirty = true
-    this.invalidateSearchCache()
+    this.allFiles = mru.map(absPath => this.makeFileEntry(absPath, root, currentDir))
+    this.filtered = [...this.allFiles]
     this.log('loadFiles:phase1-complete', {
       root,
       currentDir,
-      quickFileCount: quickFiles.length,
-      quickFilesSample: quickFiles.slice(0, DEBUG_SAMPLE_LIMIT).map(f => f.relPath),
+      recentCount: this.allFiles.length,
+      recentSample: this.allFiles.slice(0, DEBUG_SAMPLE_LIMIT).map(f => f.relPath),
+      indexReady: this.indexReady,
+      indexedFileCount: this.indexedFileCount,
     })
-    this.setFooter(quickFiles.length, root || currentDir, root ? '正在索引整个文件夹…' : '')
-    // Phase 2: async vault-wide scan
+    this.setFooter(
+      this.indexedFileCount || this.allFiles.length,
+      root || currentDir,
+      root && !this.indexReady ? '正在构建索引…' : '',
+    )
     if (root) {
-      this.log('loadFiles:phase2-dispatch', { root, alreadySeen: seen.size })
-      this.loadVaultIndex(root, seen)
+      this.log('loadFiles:phase2-dispatch', { root })
+      void this.loadVaultIndex(root)
     } else {
       this.warn('loadFiles:no-root', { currentDir, candidates })
     }
   }
 
-  private async loadVaultIndex(root: string, alreadySeen: Set<string>): Promise<void> {
-    // Use cache if still valid
+  private async loadVaultIndex(root: string): Promise<void> {
+    if (this.indexing) {
+      this.log('loadVaultIndex:skip-already-indexing', { root, currentRoot: this.indexRoot })
+      return
+    }
+
     if (
-      this.vaultIndex.length > 0 &&
-      this.vaultIndexRoot === root &&
+      this.indexReady &&
+      this.indexRoot === root &&
+      this.vaultIndexTime &&
       Date.now() - this.vaultIndexTime < INDEX_TTL_MS
     ) {
-      this.vaultIndex = this.rehydrateEntries(this.vaultIndex, root)
       this.log('loadVaultIndex:cache-hit', {
         root,
         ageMs: Date.now() - this.vaultIndexTime,
-        count: this.vaultIndex.length,
+        count: this.indexedFileCount,
       })
-      this.mergeVaultIndex(alreadySeen)
       return
     }
 
-    if (this.indexing) {
-      this.log('loadVaultIndex:skip-already-indexing', { root, currentRoot: this.vaultIndexRoot })
-      return
-    }
     this.indexing = true
     const startedAt = Date.now()
-    this.setFooter(this.allFiles.length, root, '正在索引整个文件夹…')
+    this.setFooter(this.indexedFileCount || this.allFiles.length, root, '正在构建索引…')
     this.log('loadVaultIndex:start', {
       root,
       ignoredDirs: IGNORED_DIRS,
-      maxDepth: 20,
-      maxFiles: 5000,
+      currentIndexPath: this.indexFilePath,
     })
 
     try {
-      const rgEntries = await this.collectVaultIndexWithRg(root, 5000).catch(err => {
-        this.warn('walkDirWithRg failed', { root, err })
-        return [] as FileEntry[]
-      })
-      const primaryEntries = rgEntries.length > 0
-        ? rgEntries
-        : await this.walkDirPure(root, 20, 5000)
-      const fallbackEntries = primaryEntries.length > 0
-        ? []
-        : this.mergeFileEntries(
-            this.collectVaultIndexFromLibrary(root, 20, 5000),
-            await this.collectVaultIndexFromBridge(root, 5000),
-          )
-      this.indexBackend = rgEntries.length > 0 ? 'rg' : 'walk'
-      const allEntries = this.mergeFileEntries(
-        primaryEntries,
-        fallbackEntries,
-      )
-      this.log('loadVaultIndex:sources', {
-        root,
-        rgCount: rgEntries.length,
-        primaryCount: primaryEntries.length,
-        libraryCount: fallbackEntries.length,
-        bridgeCount: 0,
-        backend: this.indexBackend,
-        mergedCount: allEntries.length,
-      })
-      this.vaultIndex = this.rehydrateEntries(allEntries, root)
-
+      await this.buildPersistentIndex(root)
+      this.vaultIndex = []
       this.vaultIndexRoot = root
       this.vaultIndexTime = Date.now()
       this.log('loadVaultIndex:done', {
         root,
         durationMs: Date.now() - startedAt,
-        count: this.vaultIndex.length,
-        sample: this.vaultIndex.slice(0, DEBUG_SAMPLE_LIMIT).map(f => f.relPath),
+        count: this.indexedFileCount,
+        indexFilePath: this.indexFilePath,
+        backend: this.indexBackend,
       })
-      this.mergeVaultIndex(alreadySeen)
+      this.mergeVaultIndex()
     } catch (err) {
       this.warn('vault index failed', { root, err })
     } finally {
@@ -1227,28 +933,15 @@ export default class QuickOpenPlugin extends Plugin {
     }
   }
 
-  private mergeVaultIndex(alreadySeen: Set<string>): void {
-    const newEntries: FileEntry[] = []
-    for (const entry of this.vaultIndex) {
-      if (!alreadySeen.has(entry.absPath)) {
-        alreadySeen.add(entry.absPath)
-        newEntries.push(entry)
-      }
-    }
-    if (newEntries.length > 0) {
-      this.allFiles = [...this.allFiles, ...newEntries]
-      this.fzfInputDirty = true
-      this.invalidateSearchCache()
-    }
-
+  private mergeVaultIndex(): void {
     const root = this.getRootDir()
     this.log('mergeVaultIndex', {
       root,
-      newEntries: newEntries.length,
-      totalFiles: this.allFiles.length,
-      sample: newEntries.slice(0, DEBUG_SAMPLE_LIMIT).map(f => f.relPath),
+      totalFiles: this.indexedFileCount,
+      indexFilePath: this.indexFilePath,
+      indexReady: this.indexReady,
     })
-    this.setFooter(this.allFiles.length, root, '')
+    this.setFooter(this.indexedFileCount || this.allFiles.length, root, '')
     if (this.overlay) {
       void this.renderList(this.inputEl?.value ?? this.currentQuery)
     }
@@ -1293,9 +986,7 @@ export default class QuickOpenPlugin extends Plugin {
     this.filtered = []
     this.selectedIdx = 0
     this.currentQuery = ''
-    this.lastSearchQuery = ''
-    this.searchPool = []
-    this.searchPoolVersion = -1
+    this.lastInputValue = ''
   }
 
   // -------------------------------------------------------------------------
@@ -1352,8 +1043,14 @@ export default class QuickOpenPlugin extends Plugin {
     this.listEl = list
 
     const onInput = () => {
+      const nextQuery = input.value
+      if (nextQuery === this.lastInputValue) return
+      this.lastInputValue = nextQuery
       if (this.debounceTimer) clearTimeout(this.debounceTimer)
-      this.debounceTimer = setTimeout(() => { void this.renderList(input.value) }, DEBOUNCE_MS)
+      this.debounceTimer = setTimeout(() => {
+        if (input.value === this.currentQuery) return
+        void this.renderList(input.value)
+      }, DEBOUNCE_MS)
     }
     const onKeydown = (e: KeyboardEvent) => this.handleKey(e)
     const onEsc = (e: KeyboardEvent) => {
@@ -1387,23 +1084,25 @@ export default class QuickOpenPlugin extends Plugin {
     this.currentQuery = query
     list.innerHTML = ''
 
-    if (!this.allFiles.length) {
-      list.appendChild(this.makeStatus('未找到 Markdown 文件'))
-      return
-    }
-
     if (query.trim()) {
       this.searchBackend = this.shouldUseExternalFzf(query) ? 'fzf' : 'js'
+      if (!this.indexReady) {
+        this.filtered = []
+        list.appendChild(this.makeStatus('索引尚未准备好，正在后台构建…'))
+        this.setFooter(this.indexedFileCount || this.allFiles.length, this.getRootDir(), '等待索引完成')
+        return
+      }
+
       list.appendChild(this.makeStatus(`搜索中… (${this.searchBackend})`))
       const results = await this.searchFiles(query, SEARCH_RESULT_LIMIT)
       if (token !== this.renderToken || !this.listEl) return
 
       this.filtered = results
       list.innerHTML = ''
-      this.setFooter(this.allFiles.length, this.getRootDir(), query ? `查询:${query}` : '')
+      this.setFooter(this.indexedFileCount || this.allFiles.length, this.getRootDir(), query ? `查询:${query}` : '')
       this.log('renderList:query', {
         query,
-        indexedFiles: this.allFiles.length,
+        indexedFiles: this.indexedFileCount || this.allFiles.length,
         resultCount: this.filtered.length,
         topResults: this.filtered.slice(0, 10).map(f => f.relPath),
         fzfPath: this.fzfPath,
@@ -1416,60 +1115,30 @@ export default class QuickOpenPlugin extends Plugin {
       this.selectedIdx = 0
       this.filtered.forEach((f, i) => list.appendChild(this.makeItem(f, i)))
     } else {
-      // --- Default view: MRU first, then current dir siblings ---
       const mru = this.getMru()
-      const mruSet = new Set(mru)
-      const fileMap = new Map(this.allFiles.map(f => [f.absPath, f]))
-
       const mruFiles = mru
-        .map(p => fileMap.get(p))
-        .filter((f): f is FileEntry => !!f)
-        .slice(0, 15)
+        .map(p => this.makeFileEntry(p, this.getRootDir(), this.getCurrentDir()))
+        .slice(0, MAX_MRU)
 
-      const currentDir = this.getCurrentDir()
       const root = this.getRootDir()
-      const currentDirPrefix = currentDir ? (currentDir.endsWith('/') ? currentDir : currentDir + '/') : ''
-      this.setFooter(this.allFiles.length, root || currentDir, '')
-
-      const siblingFiles = this.allFiles
-        .filter(f =>
-          !mruSet.has(f.absPath) &&
-          currentDirPrefix &&
-          f.absPath.startsWith(currentDirPrefix) &&
-          !f.absPath.slice(currentDirPrefix.length).includes('/'),
-        )
-        .slice(0, 20)
-
-      // Other vault files (not MRU, not siblings)
-      const shownSet = new Set([
-        ...mruFiles.map(f => f.absPath),
-        ...siblingFiles.map(f => f.absPath),
-      ])
-      const otherFiles = this.allFiles
-        .filter(f => !shownSet.has(f.absPath))
-        .slice(0, 15)
-
-      this.filtered = [...mruFiles, ...siblingFiles, ...otherFiles]
+      this.filtered = [...mruFiles]
       this.log('renderList:default', {
-        indexedFiles: this.allFiles.length,
+        indexedFiles: this.indexedFileCount || this.allFiles.length,
         mruCount: mruFiles.length,
-        siblingCount: siblingFiles.length,
-        otherCount: otherFiles.length,
+        indexReady: this.indexReady,
       })
       this.selectedIdx = 0
+      this.setFooter(
+        this.indexedFileCount || this.allFiles.length,
+        root || this.getCurrentDir(),
+        this.indexReady ? '' : (root ? '正在构建索引…' : ''),
+      )
 
-      let idx = 0
       if (mruFiles.length) {
         list.appendChild(this.makeSectionLabel('最近打开'))
-        mruFiles.forEach(f => list.appendChild(this.makeItem(f, idx++)))
-      }
-      if (siblingFiles.length) {
-        list.appendChild(this.makeSectionLabel('当前目录'))
-        siblingFiles.forEach(f => list.appendChild(this.makeItem(f, idx++)))
-      }
-      if (otherFiles.length) {
-        list.appendChild(this.makeSectionLabel('其他文件'))
-        otherFiles.forEach(f => list.appendChild(this.makeItem(f, idx++)))
+        mruFiles.forEach((f, idx) => list.appendChild(this.makeItem(f, idx)))
+      } else {
+        list.appendChild(this.makeStatus(this.indexReady ? '暂无最近打开文件' : '暂无最近打开文件，索引正在后台构建…'))
       }
     }
   }
@@ -1606,6 +1275,7 @@ export default class QuickOpenPlugin extends Plugin {
     this.openingSelection = true
     this.log('openSelected', { index: this.selectedIdx, file: f })
     this.close()
+    this.lastRecordedActiveFile = f.absPath
     this.recordOpen(f.absPath).catch(() => {})
     editor.openFile(f.absPath)
       .catch(err => {
