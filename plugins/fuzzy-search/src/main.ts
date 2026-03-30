@@ -10,6 +10,13 @@ interface FileEntry {
   basenameKey: string
 }
 
+interface InstallPlan {
+  manager: string
+  label: string
+  command: string
+  canRunDirectly: boolean
+}
+
 const MD_EXTS = ['.md', '.markdown']
 const MD_EXT_SET = new Set(MD_EXTS)
 const MAX_MRU = 30
@@ -161,6 +168,12 @@ function isRelativePathQuery(query: string): boolean {
   )
 }
 
+function escapeHtml(text: string): string {
+  return text.replace(/[&<>"']/g, (ch) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch] ?? ch
+  ))
+}
+
 // ---------------------------------------------------------------------------
 // CSS
 // ---------------------------------------------------------------------------
@@ -264,6 +277,10 @@ const CSS = `
   opacity: 0.5;
 }
 #tpl-qo-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   padding: 5px 16px;
   font-size: 11px;
   opacity: 0.32;
@@ -274,12 +291,41 @@ const CSS = `
   flex-shrink: 0;
   user-select: none;
 }
+#tpl-qo-footer-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#tpl-qo-footer-action {
+  border: 1px solid var(--border-color, rgba(128,128,128,0.2));
+  background: transparent;
+  color: inherit;
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-size: 11px;
+  line-height: 1.5;
+  cursor: pointer;
+  opacity: 0.9;
+  flex-shrink: 0;
+}
+#tpl-qo-footer-action:hover {
+  background: rgba(128,128,128,0.08);
+}
+#tpl-qo-footer-action[hidden] {
+  display: none;
+}
+#tpl-qo-footer-action:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
 `
 
 export default class QuickOpenPlugin extends Plugin {
   private overlay: HTMLElement | null = null
   private inputEl: HTMLInputElement | null = null
   private listEl: HTMLElement | null = null
+  private footerTextEl: HTMLElement | null = null
+  private footerActionEl: HTMLButtonElement | null = null
   /** Recent files shown immediately before the persistent index is queried. */
   private allFiles: FileEntry[] = []
   private filtered: FileEntry[] = []
@@ -298,8 +344,11 @@ export default class QuickOpenPlugin extends Plugin {
   private rgPath: string | null = null
   private fzfChecked = false
   private fzfPath: string | null = null
+  private fzfInstallPlanChecked = false
+  private fzfInstallPlan: InstallPlan | null = null
   private indexBackend = 'walk'
   private searchBackend = 'js'
+  private installInFlight = false
   private openingSelection = false
   private lastHandledEnterAt = 0
   private indexFilePath = ''
@@ -324,6 +373,11 @@ export default class QuickOpenPlugin extends Plugin {
     for (const key of hotkeys) {
       this.registerHotkey(key, () => this.open())
     }
+    this.registerCommand({
+      id: 'quick-open:install-fzf',
+      name: 'Quick Open: Install fzf',
+      callback: () => this.promptInstallFzf(),
+    })
     this.syncActiveFileToRecent().catch(() => {})
     this.registerInterval(() => {
       void this.syncActiveFileToRecent()
@@ -561,6 +615,89 @@ export default class QuickOpenPlugin extends Plugin {
     return null
   }
 
+  private getCommandDetectCommand(name: string): string {
+    if (this.getRuntimePlatform() === 'windows') {
+      return `where ${name} 2>NUL`
+    }
+    return `command -v ${name} || which ${name} || true`
+  }
+
+  private async resolveCommandPath(name: string, candidates: string[] = []): Promise<string | null> {
+    try {
+      const out = (await platform.shell.run(this.getCommandDetectCommand(name), { timeout: 3000 })).trim()
+      const path = out.split(/\r?\n/).find(Boolean)?.trim() ?? ''
+      if (path) return path
+    } catch {}
+
+    for (const candidate of candidates) {
+      try {
+        if (await platform.fs.exists(candidate)) return candidate
+      } catch {}
+    }
+
+    return null
+  }
+
+  private async resolveFzfInstallPlan(): Promise<InstallPlan | null> {
+    const runtime = this.getRuntimePlatform()
+    const defs = runtime === 'windows'
+      ? [
+          { manager: 'scoop', label: 'Scoop', command: 'scoop install fzf', canRunDirectly: true },
+          { manager: 'winget', label: 'Winget', command: 'winget install fzf', canRunDirectly: false },
+          { manager: 'choco', label: 'Chocolatey', command: 'choco install fzf', canRunDirectly: false },
+        ]
+      : runtime === 'macos'
+        ? [
+            {
+              manager: 'brew',
+              label: 'Homebrew',
+              command: 'brew install fzf',
+              canRunDirectly: true,
+              candidates: ['/opt/homebrew/bin/brew', '/usr/local/bin/brew'],
+            },
+            { manager: 'mise', label: 'Mise', command: 'mise use -g fzf@latest', canRunDirectly: true },
+            {
+              manager: 'port',
+              label: 'MacPorts',
+              command: 'sudo port install fzf',
+              canRunDirectly: false,
+              candidates: ['/opt/local/bin/port'],
+            },
+          ]
+        : [
+            {
+              manager: 'brew',
+              label: 'Homebrew',
+              command: 'brew install fzf',
+              canRunDirectly: true,
+              candidates: ['/home/linuxbrew/.linuxbrew/bin/brew'],
+            },
+            { manager: 'mise', label: 'Mise', command: 'mise use -g fzf@latest', canRunDirectly: true },
+            { manager: 'apt', label: 'APT', command: 'sudo apt install fzf', canRunDirectly: false },
+            { manager: 'dnf', label: 'DNF', command: 'sudo dnf install fzf', canRunDirectly: false },
+            { manager: 'pacman', label: 'Pacman', command: 'sudo pacman -S fzf', canRunDirectly: false },
+            { manager: 'zypper', label: 'Zypper', command: 'sudo zypper install fzf', canRunDirectly: false },
+            { manager: 'apk', label: 'APK', command: 'sudo apk add fzf', canRunDirectly: false },
+            { manager: 'conda', label: 'Conda', command: 'conda install -c conda-forge fzf', canRunDirectly: true },
+            { manager: 'nix-env', label: 'Nix', command: 'nix-env -iA nixpkgs.fzf', canRunDirectly: true },
+          ]
+
+    for (const def of defs) {
+      const path = await this.resolveCommandPath(def.manager, 'candidates' in def ? (def.candidates ?? []) : [])
+      if (path) {
+        this.log('fzf install plan detected', { manager: def.manager, path, canRunDirectly: def.canRunDirectly })
+        return {
+          manager: def.manager,
+          label: def.label,
+          command: def.command,
+          canRunDirectly: def.canRunDirectly,
+        }
+      }
+    }
+
+    return null
+  }
+
   private async ensureToolInfo(): Promise<void> {
     if (!this.rgChecked) {
       this.rgChecked = true
@@ -571,6 +708,10 @@ export default class QuickOpenPlugin extends Plugin {
       this.fzfChecked = true
       this.fzfPath = await this.resolveBinary('fzf')
       this.searchBackend = 'js'
+    }
+    if (!this.fzfPath && !this.fzfInstallPlanChecked) {
+      this.fzfInstallPlanChecked = true
+      this.fzfInstallPlan = await this.resolveFzfInstallPlan()
     }
   }
 
@@ -823,6 +964,7 @@ export default class QuickOpenPlugin extends Plugin {
     ]
     if (status) parts.push(status)
     this.updateFooter(parts.join('  ·  '))
+    this.updateFooterAction()
   }
 
   // -------------------------------------------------------------------------
@@ -983,6 +1125,8 @@ export default class QuickOpenPlugin extends Plugin {
     this.overlay = null
     this.inputEl = null
     this.listEl = null
+    this.footerTextEl = null
+    this.footerActionEl = null
     this.filtered = []
     this.selectedIdx = 0
     this.currentQuery = ''
@@ -1030,7 +1174,17 @@ export default class QuickOpenPlugin extends Plugin {
 
     const footer = document.createElement('div')
     footer.id = 'tpl-qo-footer'
-    footer.textContent = '加载中...'
+    const footerText = document.createElement('div')
+    footerText.id = 'tpl-qo-footer-text'
+    footerText.textContent = '加载中...'
+    const footerAction = document.createElement('button')
+    footerAction.id = 'tpl-qo-footer-action'
+    footerAction.type = 'button'
+    footerAction.textContent = '安装 fzf'
+    footerAction.hidden = true
+    footerAction.addEventListener('click', () => { void this.promptInstallFzf() })
+    footer.appendChild(footerText)
+    footer.appendChild(footerAction)
 
     modal.appendChild(inputRow)
     modal.appendChild(list)
@@ -1041,6 +1195,8 @@ export default class QuickOpenPlugin extends Plugin {
     this.overlay = overlay
     this.inputEl = input
     this.listEl = list
+    this.footerTextEl = footerText
+    this.footerActionEl = footerAction
 
     const onInput = () => {
       const nextQuery = input.value
@@ -1070,8 +1226,100 @@ export default class QuickOpenPlugin extends Plugin {
   }
 
   private updateFooter(text: string): void {
-    const el = this.overlay?.querySelector('#tpl-qo-footer')
-    if (el) el.textContent = text
+    if (this.footerTextEl) this.footerTextEl.textContent = text
+  }
+
+  private updateFooterAction(): void {
+    if (!this.footerActionEl) return
+    const shouldShow = !this.fzfPath
+    this.footerActionEl.hidden = !shouldShow
+    this.footerActionEl.disabled = this.installInFlight
+    if (!shouldShow) return
+    if (this.installInFlight) {
+      this.footerActionEl.textContent = '安装中...'
+      return
+    }
+    this.footerActionEl.textContent = this.fzfInstallPlan ? '安装 fzf' : '安装说明'
+    const detail = this.fzfInstallPlan ? `${this.fzfInstallPlan.label}: ${this.fzfInstallPlan.command}` : '未检测到可用包管理器'
+    this.footerActionEl.title = detail
+  }
+
+  private async promptInstallFzf(): Promise<void> {
+    await this.ensureToolInfo()
+    if (this.fzfPath) {
+      this.showNotice('已检测到 fzf')
+      this.updateFooterAction()
+      return
+    }
+
+    const showDialog = window.File?.editor?.EditHelper?.showDialog
+    const plan = this.fzfInstallPlan
+    const html = plan
+      ? `<div>未检测到 <code>fzf</code>。检测到可用包管理器：<strong>${escapeHtml(plan.label)}</strong>。</div>
+         <div style="margin-top:8px"><code>${escapeHtml(plan.command)}</code></div>
+         <div style="margin-top:8px; opacity:.75">${plan.canRunDirectly ? '可直接由插件尝试执行安装命令。' : '该命令通常需要终端交互或 sudo，插件只提供复制。'}</div>`
+      : `<div>未检测到 <code>fzf</code>，也没有识别到支持的包管理器。</div>
+         <div style="margin-top:8px; opacity:.75">请根据系统手动安装后重新打开 Quick Open。</div>`
+
+    if (!showDialog) {
+      if (plan) {
+        await navigator.clipboard.writeText(plan.command).catch(() => {})
+        this.showNotice('已复制 fzf 安装命令')
+      } else {
+        this.showNotice('未检测到可用的 fzf 安装方式')
+      }
+      return
+    }
+
+    const buttons = plan
+      ? (plan.canRunDirectly ? ['Run install', 'Copy command', 'Cancel'] : ['Copy command', 'Close'])
+      : ['Close']
+
+    showDialog({
+      title: 'Install fzf',
+      html,
+      buttons,
+      callback: (index) => {
+        if (!plan) return
+        if (plan.canRunDirectly) {
+          if (index === 0) void this.runFzfInstall(plan)
+          if (index === 1) void navigator.clipboard.writeText(plan.command).then(() => this.showNotice('已复制安装命令')).catch(() => this.showNotice('复制安装命令失败'))
+          return
+        }
+        if (index === 0) void navigator.clipboard.writeText(plan.command).then(() => this.showNotice('已复制安装命令')).catch(() => this.showNotice('复制安装命令失败'))
+      },
+    })
+  }
+
+  private async runFzfInstall(plan: InstallPlan): Promise<void> {
+    if (this.installInFlight) return
+    this.installInFlight = true
+    this.updateFooterAction()
+    this.showNotice(`正在通过 ${plan.label} 安装 fzf...`, 4000)
+    try {
+      await platform.shell.run(plan.command, { timeout: 10 * 60_000 })
+      this.fzfChecked = false
+      this.fzfInstallPlanChecked = false
+      this.fzfPath = null
+      this.fzfInstallPlan = null
+      await this.ensureToolInfo()
+      if (this.fzfPath) {
+        this.showNotice(`fzf 已安装 (${this.fzfPath})`)
+      } else {
+        this.showNotice('安装命令已完成，请重新打开 Quick Open 验证 fzf 是否可用', 5000)
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      this.warn('runFzfInstall failed', { plan, err })
+      this.showNotice(`安装 fzf 失败: ${message}`, 5000)
+    } finally {
+      this.installInFlight = false
+      this.updateFooterAction()
+      if (this.overlay) {
+        const root = this.getRootDir() || this.getCurrentDir()
+        this.setFooter(this.indexedFileCount || this.allFiles.length, root, this.currentQuery ? `查询:${this.currentQuery}` : '')
+      }
+    }
   }
 
   // -------------------------------------------------------------------------
