@@ -53,6 +53,7 @@ export default class SidenotePlugin extends Plugin {
     if (!this.writeEl) return
     this.writeEl.classList.remove('tpl-has-sidenotes')
     this.writeEl.classList.remove('tpl-has-table-sidenotes')
+    this.writeEl.querySelectorAll('.tpl-sn-num').forEach(marker => marker.remove())
     this.writeEl.querySelectorAll('.md-html-inline.tpl-sidenote').forEach(el => {
       el.classList.remove('tpl-sidenote')
       el.classList.remove('tpl-sidenote-in-table')
@@ -65,12 +66,26 @@ export default class SidenotePlugin extends Plugin {
   private processAll(root: HTMLElement): void {
     const inlines = root.querySelectorAll<HTMLSpanElement>('span.md-html-inline')
     for (const el of inlines) {
-      if (el.classList.contains('tpl-sidenote')) continue
+      // Already processed — just ensure marker still exists
+      if (el.classList.contains('tpl-sidenote')) {
+        if (!el.previousElementSibling?.classList.contains('tpl-sn-num')) {
+          this.insertMarker(el)
+        }
+        continue
+      }
       const before = el.querySelector('.md-meta.md-before')
       if (before && SIDENOTE_RE.test(before.textContent ?? '')) {
         el.classList.add('tpl-sidenote')
+        this.insertMarker(el)
       }
     }
+
+    // Clean orphan markers whose sidenote was removed
+    root.querySelectorAll('.tpl-sn-num').forEach(marker => {
+      if (!marker.nextElementSibling?.classList.contains('tpl-sidenote')) {
+        marker.remove()
+      }
+    })
 
     const sidenotes = Array.from(root.querySelectorAll<HTMLElement>('.md-html-inline.tpl-sidenote'))
     let hasTableSidenotes = false
@@ -78,6 +93,11 @@ export default class SidenotePlugin extends Plugin {
     sidenotes.forEach((sidenote, index) => {
       const noteIndex = String(index + 1)
       sidenote.dataset.tplSnIndex = noteIndex
+
+      const marker = sidenote.previousElementSibling
+      if (marker?.classList.contains('tpl-sn-num')) {
+        ;(marker as HTMLElement).dataset.tplSnIndex = noteIndex
+      }
 
       const inTable = sidenote.closest('td, th') !== null
       sidenote.classList.toggle('tpl-sidenote-in-table', inTable)
@@ -87,6 +107,13 @@ export default class SidenotePlugin extends Plugin {
     root.classList.toggle('tpl-has-sidenotes', sidenotes.length > 0)
     root.classList.toggle('tpl-has-table-sidenotes', hasTableSidenotes)
     this.syncPortals(sidenotes)
+  }
+
+  private insertMarker(sidenote: HTMLElement): void {
+    const marker = document.createElement('span')
+    marker.className = 'tpl-sn-num'
+    marker.setAttribute('contenteditable', 'false')
+    sidenote.parentNode?.insertBefore(marker, sidenote)
   }
 
   private scheduleProcess(): void {
@@ -121,7 +148,11 @@ export default class SidenotePlugin extends Plugin {
     for (const sidenote of sidenotes) {
       if (sidenote.closest('.md-focus')) continue
 
-      const anchorRect = sidenote.getBoundingClientRect()
+      const anchor = sidenote.previousElementSibling?.classList.contains('tpl-sn-num')
+        ? sidenote.previousElementSibling as HTMLElement
+        : sidenote
+
+      const anchorRect = anchor.getBoundingClientRect()
       const naturalTop = Math.max(0, anchorRect.top)
       const portal = this.createPortal(sidenote)
       portalItems.push({ naturalTop, el: portal })
@@ -190,8 +221,43 @@ const EDITOR_CSS = /* css */ `
   --tpl-sidenote-offset: 280px;
 }
 
-.md-html-inline.tpl-sidenote {
+/* ── In-text superscript number ── */
+.tpl-sn-num {
+  user-select: none;
+  pointer-events: none;
+}
+.tpl-sn-num::after {
+  content: attr(data-tpl-sn-index);
+  font-size: 0.7em;
   position: relative;
+  top: -0.5em;
+  color: var(--accent-color, #bc6a3a);
+  font-weight: 600;
+  padding-left: 1px;
+}
+/* Hide marker when editing the paragraph */
+.md-focus > .tpl-sn-num { display: none; }
+
+/* ── Margin note ── */
+.md-html-inline.tpl-sidenote {
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--quote-text-color, #625950);
+  vertical-align: baseline;
+  position: relative;
+}
+
+/* Numbered prefix in the margin note: "1. " */
+.md-html-inline.tpl-sidenote::before {
+  content: attr(data-tpl-sn-index) ". ";
+  font-weight: 600;
+  color: var(--accent-color, #bc6a3a);
+  font-size: 0.78rem;
+}
+
+/* Hide prefix when editing */
+.md-focus .md-html-inline.tpl-sidenote::before {
+  content: none;
 }
 
 /* Desktop: float into right margin */
@@ -206,68 +272,30 @@ const EDITOR_CSS = /* css */ `
 #write.tpl-has-sidenotes .md-fences {
   width: auto;
 }
-	  #tpl-sidenote-portal-layer {
-	    position: fixed;
-	    inset: 0;
-	    overflow: visible;
-	    pointer-events: none;
-	    z-index: 3;
-	  }
+  #tpl-sidenote-portal-layer {
+    position: fixed;
+    inset: 0;
+    overflow: visible;
+    pointer-events: none;
+    z-index: 3;
+  }
 
-	  #write.tpl-has-sidenotes .md-html-inline.tpl-sidenote {
-	    display: inline-block;
-	    width: 0;
-	    min-width: 0;
-	    margin: 0;
-	    padding: 0;
-	    border: 0;
-	    overflow: visible;
-	    white-space: nowrap;
-	    vertical-align: baseline;
-	    font-size: 0;
-	    line-height: 0;
-	    color: transparent;
-	  }
+  .md-html-inline.tpl-sidenote {
+    display: none;
+  }
+  /* When editing the paragraph, pull sidenote back inline */
+  .md-focus .md-html-inline.tpl-sidenote {
+    display: inline;
+    width: auto;
+    margin-right: 0;
+    margin-bottom: 0;
+    border-left: none;
+    padding-left: 0;
+  }
 
-	  #write.tpl-has-sidenotes .md-html-inline.tpl-sidenote::before {
-	    content: attr(data-tpl-sn-index);
-	    font-size: 0.7rem;
-	    line-height: 1;
-	    position: relative;
-	    top: -0.5em;
-	    color: var(--accent-color, #bc6a3a);
-	    font-weight: 600;
-	    padding-left: 1px;
-	  }
-
-	  /* When editing the paragraph, pull sidenote back inline */
-	  #write.tpl-has-sidenotes .md-focus .md-html-inline.tpl-sidenote {
-	    display: inline;
-	    width: auto;
-	    min-width: auto;
-	    margin-right: 0;
-	    margin-bottom: 0;
-	    border-left: none;
-	    padding-left: 0;
-	    overflow: visible;
-	    white-space: normal;
-	    vertical-align: baseline;
-	    font-size: 0.82rem;
-	    line-height: 1.45;
-	    color: var(--quote-text-color, #625950);
-	  }
-
-	  #write.tpl-has-sidenotes .md-focus .md-html-inline.tpl-sidenote::before {
-	    content: attr(data-tpl-sn-index) ". ";
-	    font-size: 0.78rem;
-	    line-height: inherit;
-	    top: 0;
-	  }
-
-	  .tpl-sidenote-portal {
-	    position: absolute;
+  .tpl-sidenote-portal {
+    position: absolute;
     top: 0;
-    right: calc(var(--tpl-sidenote-reserve, 300px) - var(--tpl-sidenote-offset, 280px));
     width: var(--tpl-sidenote-width, 250px);
     font-size: 0.82rem;
     line-height: 1.45;
@@ -291,20 +319,10 @@ const EDITOR_CSS = /* css */ `
 /* Narrow screens: inline callout */
 @media (max-width: 1199px) {
   .md-html-inline.tpl-sidenote {
-    font-size: 0.82rem;
-    line-height: 1.45;
-    color: var(--quote-text-color, #625950);
     padding: 0.1em 0.4em;
     background: var(--quote-bg-color, #f3ede5);
     border-radius: 4px;
     margin: 0 2px;
-  }
-
-  .md-html-inline.tpl-sidenote::before {
-    content: attr(data-tpl-sn-index) ". ";
-    font-weight: 600;
-    color: var(--accent-color, #bc6a3a);
-    font-size: 0.78rem;
   }
 
   #tpl-sidenote-portal-layer {
