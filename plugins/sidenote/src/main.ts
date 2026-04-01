@@ -21,6 +21,7 @@ export default class SidenotePlugin extends Plugin {
   private rafId = 0
   private writeEl: HTMLElement | null = null
   private portalLayerEl: HTMLElement | null = null
+  private widerTransitionTimer = 0
 
   onload(): void {
     this.writeEl = document.getElementById('write')
@@ -42,10 +43,11 @@ export default class SidenotePlugin extends Plugin {
     this.registerDomEvent(this.writeEl, 'input', () => this.scheduleProcess())
     this.registerDomEvent(window, 'resize', () => this.scheduleProcess())
     this.registerDomEvent(window, 'scroll', () => this.scheduleProcess(), { passive: true, capture: true })
-    this.registerEvent('wider:mode-changed', () => this.scheduleProcess())
+    this.registerEvent('wider:mode-changed', () => this.scheduleProcessAfterTransition())
     this.addDisposable(() => {
       this.observer?.disconnect()
       cancelAnimationFrame(this.rafId)
+      clearTimeout(this.widerTransitionTimer)
     })
   }
 
@@ -123,14 +125,24 @@ export default class SidenotePlugin extends Plugin {
     })
   }
 
+  /** Wait for wider plugin's CSS transition (180ms) to finish before repositioning */
+  private scheduleProcessAfterTransition(): void {
+    this.scheduleProcess()
+    clearTimeout(this.widerTransitionTimer)
+    this.widerTransitionTimer = window.setTimeout(() => {
+      this.scheduleProcess()
+    }, 200)
+  }
+
   private ensurePortalLayer(): void {
     if (this.portalLayerEl?.isConnected) return
+    if (!this.writeEl) return
 
     const layer = document.createElement('div')
     layer.id = 'tpl-sidenote-portal-layer'
     layer.setAttribute('aria-hidden', 'true')
     layer.setAttribute('contenteditable', 'false')
-    document.body.appendChild(layer)
+    this.writeEl.appendChild(layer)
     this.portalLayerEl = layer
   }
 
@@ -153,18 +165,17 @@ export default class SidenotePlugin extends Plugin {
         : sidenote
 
       const anchorRect = anchor.getBoundingClientRect()
-      const naturalTop = Math.max(0, anchorRect.top)
+      const naturalTop = anchorRect.top - writeRect.top
       const portal = this.createPortal(sidenote)
       portalItems.push({ naturalTop, el: portal })
     }
 
     portalItems.sort((a, b) => a.naturalTop - b.naturalTop)
 
-    let nextTop = 0
+    let nextTop = -Infinity
     for (const item of portalItems) {
       const top = Math.max(item.naturalTop, nextTop)
       item.el.style.top = `${top}px`
-      item.el.style.left = `${this.calcPortalLeft(writeRect)}px`
       this.portalLayerEl.appendChild(item.el)
       nextTop = top + item.el.offsetHeight + 12
     }
@@ -193,21 +204,6 @@ export default class SidenotePlugin extends Plugin {
 
     const target = mutation.target
     return target === this.portalLayerEl || this.portalLayerEl.contains(target)
-  }
-
-  private calcPortalLeft(writeRect: DOMRect): number {
-    if (!this.writeEl) return writeRect.right
-
-    const styles = getComputedStyle(this.writeEl)
-    const reserve = this.parseCssLength(styles.getPropertyValue('--tpl-sidenote-reserve'), 300)
-    const offset = this.parseCssLength(styles.getPropertyValue('--tpl-sidenote-offset'), 280)
-    const width = this.parseCssLength(styles.getPropertyValue('--tpl-sidenote-width'), 250)
-    return writeRect.right - (reserve - offset) - width
-  }
-
-  private parseCssLength(value: string, fallback: number): number {
-    const parsed = Number.parseFloat(value.trim())
-    return Number.isFinite(parsed) ? parsed : fallback
   }
 }
 
@@ -273,7 +269,7 @@ const EDITOR_CSS = /* css */ `
   width: auto;
 }
   #tpl-sidenote-portal-layer {
-    position: fixed;
+    position: absolute;
     inset: 0;
     overflow: visible;
     pointer-events: none;
@@ -296,6 +292,7 @@ const EDITOR_CSS = /* css */ `
   .tpl-sidenote-portal {
     position: absolute;
     top: 0;
+    right: calc(var(--tpl-sidenote-reserve, 300px) - var(--tpl-sidenote-offset, 280px));
     width: var(--tpl-sidenote-width, 250px);
     font-size: 0.82rem;
     line-height: 1.45;
