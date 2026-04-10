@@ -17,6 +17,15 @@ interface InstallPlan {
   canRunDirectly: boolean
 }
 
+interface ContentMatch {
+  absPath: string
+  relPath: string
+  basename: string
+  line: number
+  col: number
+  matchText: string
+}
+
 const MD_EXTS = ['.md', '.markdown']
 const MD_EXT_SET = new Set(MD_EXTS)
 const MAX_MRU = 30
@@ -318,6 +327,51 @@ const CSS = `
   cursor: default;
   opacity: 0.45;
 }
+#tpl-qo-tab-bar {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--border-color, rgba(128,128,128,0.15));
+  padding: 0 12px;
+  flex-shrink: 0;
+}
+.tpl-qo-tab {
+  padding: 6px 14px;
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0.5;
+  border-bottom: 2px solid transparent;
+  user-select: none;
+  transition: opacity 0.15s;
+}
+.tpl-qo-tab:hover {
+  opacity: 0.75;
+}
+.tpl-qo-tab-active {
+  opacity: 1;
+  border-bottom-color: var(--accent-color, #1a73e8);
+}
+.tpl-qo-tab-hint {
+  font-size: 10px;
+  opacity: 0.35;
+  margin-left: auto;
+  user-select: none;
+}
+.tpl-qo-content-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-color, inherit);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tpl-qo-content-line {
+  font-size: 11.5px;
+  opacity: 0.55;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--monospace, 'SF Mono', 'Fira Code', 'Consolas', monospace);
+}
 `
 
 export default class QuickOpenPlugin extends Plugin {
@@ -357,6 +411,9 @@ export default class QuickOpenPlugin extends Plugin {
   private indexedFileCount = 0
   private indexReady = false
   private lastInputValue = ''
+  private searchMode: 'files' | 'content' = 'files'
+  private contentFiltered: ContentMatch[] = []
+  private tabBarEl: HTMLElement | null = null
   private lastRecordedActiveFile = ''
 
   private getHotkeys(): string[] {
@@ -1125,12 +1182,15 @@ export default class QuickOpenPlugin extends Plugin {
     this.overlay = null
     this.inputEl = null
     this.listEl = null
+    this.tabBarEl = null
     this.footerTextEl = null
     this.footerActionEl = null
     this.filtered = []
+    this.contentFiltered = []
     this.selectedIdx = 0
     this.currentQuery = ''
     this.lastInputValue = ''
+    this.searchMode = 'files'
   }
 
   // -------------------------------------------------------------------------
@@ -1186,7 +1246,27 @@ export default class QuickOpenPlugin extends Plugin {
     footer.appendChild(footerText)
     footer.appendChild(footerAction)
 
+    const tabBar = document.createElement('div')
+    tabBar.id = 'tpl-qo-tab-bar'
+    const tabFiles = document.createElement('div')
+    tabFiles.className = 'tpl-qo-tab tpl-qo-tab-active'
+    tabFiles.textContent = '文件'
+    tabFiles.dataset.mode = 'files'
+    tabFiles.addEventListener('click', () => { if (this.searchMode !== 'files') this.toggleSearchMode() })
+    const tabContent = document.createElement('div')
+    tabContent.className = 'tpl-qo-tab'
+    tabContent.textContent = '内容'
+    tabContent.dataset.mode = 'content'
+    tabContent.addEventListener('click', () => { if (this.searchMode !== 'content') this.toggleSearchMode() })
+    const tabHint = document.createElement('div')
+    tabHint.className = 'tpl-qo-tab-hint'
+    tabHint.textContent = IS_MAC ? '⌘Tab 切换' : 'Ctrl+Tab 切换'
+    tabBar.appendChild(tabFiles)
+    tabBar.appendChild(tabContent)
+    tabBar.appendChild(tabHint)
+
     modal.appendChild(inputRow)
+    modal.appendChild(tabBar)
     modal.appendChild(list)
     modal.appendChild(footer)
     overlay.appendChild(modal)
@@ -1195,6 +1275,7 @@ export default class QuickOpenPlugin extends Plugin {
     this.overlay = overlay
     this.inputEl = input
     this.listEl = list
+    this.tabBarEl = tabBar
     this.footerTextEl = footerText
     this.footerActionEl = footerAction
 
@@ -1330,7 +1411,35 @@ export default class QuickOpenPlugin extends Plugin {
     if (!list) return
     const token = ++this.renderToken
     this.currentQuery = query
-    list.innerHTML = ''
+    while (list.firstChild) list.removeChild(list.firstChild)
+
+    if (this.searchMode === 'content') {
+      this.contentFiltered = []
+      if (!query.trim()) {
+        list.appendChild(this.makeStatus('输入关键词搜索文件内容'))
+        this.updateFooter('内容搜索')
+        return
+      }
+      if (!this.rgPath) {
+        list.appendChild(this.makeStatus('需要 rg (ripgrep) 来搜索内容'))
+        this.updateFooter('未检测到 rg')
+        return
+      }
+      list.appendChild(this.makeStatus('搜索中… (rg)'))
+      const results = await this.searchContent(query, SEARCH_RESULT_LIMIT)
+      if (token !== this.renderToken || !this.listEl) return
+
+      this.contentFiltered = results
+      while (list.firstChild) list.removeChild(list.firstChild)
+      this.updateFooter(`${results.length} 条匹配  ·  内容搜索`)
+      if (!results.length) {
+        list.appendChild(this.makeStatus('没有匹配的内容'))
+        return
+      }
+      this.selectedIdx = 0
+      results.forEach((m, i) => list.appendChild(this.makeContentItem(m, i)))
+      return
+    }
 
     if (query.trim()) {
       this.searchBackend = this.shouldUseExternalFzf(query) ? 'fzf' : 'js'
@@ -1346,7 +1455,7 @@ export default class QuickOpenPlugin extends Plugin {
       if (token !== this.renderToken || !this.listEl) return
 
       this.filtered = results
-      list.innerHTML = ''
+      while (list.firstChild) list.removeChild(list.firstChild)
       this.setFooter(this.indexedFileCount || this.allFiles.length, this.getRootDir(), query ? `查询:${query}` : '')
       this.log('renderList:query', {
         query,
@@ -1467,6 +1576,26 @@ export default class QuickOpenPlugin extends Plugin {
     return item
   }
 
+  private makeContentItem(m: ContentMatch, idx: number): HTMLElement {
+    const item = document.createElement('div')
+    item.className = 'tpl-qo-item' + (idx === this.selectedIdx ? ' tpl-qo-selected' : '')
+
+    const name = document.createElement('div')
+    name.className = 'tpl-qo-content-name'
+    name.textContent = `${m.basename}:${m.line}`
+    name.title = m.relPath
+
+    const lineEl = document.createElement('div')
+    lineEl.className = 'tpl-qo-content-line'
+    lineEl.textContent = m.matchText.trim()
+
+    item.appendChild(name)
+    item.appendChild(lineEl)
+    item.addEventListener('mouseenter', () => { this.selectedIdx = idx; this.highlight() })
+    item.addEventListener('click', () => this.openSelected())
+    return item
+  }
+
   private makeSectionLabel(text: string): HTMLElement {
     const div = document.createElement('div')
     div.className = 'tpl-qo-section-label'
@@ -1496,10 +1625,17 @@ export default class QuickOpenPlugin extends Plugin {
   private handleKey(e: KeyboardEvent): void {
     // Skip when IME is composing (e.g. Chinese input confirming pinyin with Enter)
     if (e.isComposing || e.keyCode === 229) return
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Tab') {
+      e.preventDefault()
+      e.stopPropagation()
+      this.toggleSearchMode()
+      return
+    }
     if (e.key === 'ArrowDown') {
       e.preventDefault()
       e.stopPropagation()
-      this.selectedIdx = Math.min(this.selectedIdx + 1, this.filtered.length - 1)
+      const count = this.searchMode === 'content' ? this.contentFiltered.length : this.filtered.length
+      this.selectedIdx = Math.min(this.selectedIdx + 1, count - 1)
       this.highlight()
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
@@ -1518,6 +1654,10 @@ export default class QuickOpenPlugin extends Plugin {
   }
 
   private openSelected(): void {
+    if (this.searchMode === 'content') {
+      this.openSelectedContent()
+      return
+    }
     const f = this.filtered[this.selectedIdx]
     if (!f || this.openingSelection) return
     this.openingSelection = true
@@ -1526,6 +1666,7 @@ export default class QuickOpenPlugin extends Plugin {
     this.lastRecordedActiveFile = f.absPath
     this.recordOpen(f.absPath).catch(() => {})
     editor.openFile(f.absPath)
+      .then(() => this.revealInSidebar(f.absPath))
       .catch(err => {
         this.warn('openSelected failed', { file: f.absPath, err })
         this.showNotice(`打开文件失败: ${err.message}`)
@@ -1533,5 +1674,118 @@ export default class QuickOpenPlugin extends Plugin {
       .finally(() => {
         this.openingSelection = false
       })
+  }
+
+  private openSelectedContent(): void {
+    const m = this.contentFiltered[this.selectedIdx]
+    if (!m || this.openingSelection) return
+    this.openingSelection = true
+    this.log('openSelectedContent', { index: this.selectedIdx, match: m })
+    this.close()
+    this.lastRecordedActiveFile = m.absPath
+    this.recordOpen(m.absPath).catch(() => {})
+    editor.openFile(m.absPath)
+      .then(() => this.revealInSidebar(m.absPath))
+      .catch(err => {
+        this.warn('openSelectedContent failed', { file: m.absPath, err })
+        this.showNotice(`打开文件失败: ${err.message}`)
+      })
+      .finally(() => {
+        this.openingSelection = false
+      })
+  }
+
+  private toggleSearchMode(): void {
+    this.searchMode = this.searchMode === 'files' ? 'content' : 'files'
+    this.updateTabBar()
+    this.updatePlaceholder()
+    if (this.inputEl) {
+      void this.renderList(this.inputEl.value)
+    }
+  }
+
+  private updateTabBar(): void {
+    if (!this.tabBarEl) return
+    this.tabBarEl.querySelectorAll('.tpl-qo-tab').forEach(el => {
+      const tab = el as HTMLElement
+      tab.classList.toggle('tpl-qo-tab-active', tab.dataset.mode === this.searchMode)
+    })
+  }
+
+  private updatePlaceholder(): void {
+    if (!this.inputEl) return
+    this.inputEl.placeholder = this.searchMode === 'content'
+      ? '搜索文件内容...'
+      : '搜索文件名、工作区路径或相对当前文件的路径...'
+  }
+
+  private async searchContent(query: string, limit: number): Promise<ContentMatch[]> {
+    if (!this.rgPath || !query.trim()) return []
+    const root = this.getRootDir()
+    if (!root) return []
+
+    const cmd = [
+      platform.shell.escape(this.rgPath),
+      '--no-heading', '--line-number', '--column',
+      '--max-count', '3',
+      '--max-columns', '200',
+      '-i',
+      ...MD_EXTS.flatMap(ext => ['-g', platform.shell.escape(`*${ext}`)]),
+      ...IGNORED_DIRS.flatMap(d => ['--glob', platform.shell.escape(`!${d}`)]),
+      '--', platform.shell.escape(query),
+      platform.shell.escape(root),
+    ].join(' ')
+
+    try {
+      const stdout = await platform.shell.run(cmd, { timeout: 5000 })
+      return this.parseRgOutput(stdout, root, limit)
+    } catch (err) {
+      this.warn('searchContent failed', err)
+      return []
+    }
+  }
+
+  private parseRgOutput(stdout: string, root: string, limit: number): ContentMatch[] {
+    const results: ContentMatch[] = []
+    for (const line of stdout.split('\n')) {
+      if (!line.trim()) continue
+      // Format: filepath:line:col:text
+      const match = line.match(/^(.+?):(\d+):(\d+):(.*)$/)
+      if (!match) continue
+      const [, filepath, lineStr, colStr, matchText] = match
+      if (!filepath || !lineStr || !colStr) continue
+      const absPath = filepath.startsWith('/') ? filepath : platform.path.join(root, filepath)
+      results.push({
+        absPath,
+        relPath: toRelPath(absPath, root),
+        basename: platform.path.basename(absPath),
+        line: Number.parseInt(lineStr, 10),
+        col: Number.parseInt(colStr, 10),
+        matchText: matchText ?? '',
+      })
+      if (results.length >= limit) break
+    }
+    return results
+  }
+
+  private revealInSidebar(filepath: string): void {
+    try {
+      const lib = (window as any).File?.editor?.library
+      if (!lib) return
+
+      // Only reveal if sidebar is already shown — don't force it open
+      if (lib.isSidebarShown?.() && lib.getActiveTab?.() !== 'file-tree') {
+        lib.show?.('file-tree')
+      }
+
+      if (lib.fileTree?.expandNode) {
+        const $ = (window as any).$ || (window as any).jQuery
+        if ($) {
+          lib.fileTree.expandNode($(), filepath, () => {})
+        }
+      }
+    } catch {
+      // Non-critical — silently ignore
+    }
   }
 }
