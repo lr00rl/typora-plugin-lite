@@ -221,6 +221,20 @@ const WIDER_CSS = /* css */ `
   transition: width 180ms ease, max-width 180ms ease, padding-right 180ms ease;
 }
 
+/* Typora base.css sets width:inherit on h1-h6, p, pre inside #write.
+   With border-box on #write, children inherit the border-box width but
+   apply it as content-box, causing overflow. Reset to normal block flow. */
+#write[data-tpl-wider-mode] h1,
+#write[data-tpl-wider-mode] h2,
+#write[data-tpl-wider-mode] h3,
+#write[data-tpl-wider-mode] h4,
+#write[data-tpl-wider-mode] h5,
+#write[data-tpl-wider-mode] h6,
+#write[data-tpl-wider-mode] p,
+#write[data-tpl-wider-mode] pre {
+  width: auto;
+}
+
 #typora-source {
   margin: 0 auto;
 }
