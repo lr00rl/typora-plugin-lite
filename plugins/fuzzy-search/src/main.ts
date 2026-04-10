@@ -1772,18 +1772,33 @@ export default class QuickOpenPlugin extends Plugin {
     try {
       const lib = (window as any).File?.editor?.library
       if (!lib) return
+      if (!lib.isSidebarShown?.()) return
 
-      // Only reveal if sidebar is already shown — don't force it open
-      if (lib.isSidebarShown?.() && lib.getActiveTab?.() !== 'file-tree') {
+      // Switch to file-tree tab if sidebar is showing a different tab
+      if (lib.getActiveTab?.() !== 'file-tree') {
         lib.show?.('file-tree')
       }
 
-      if (lib.fileTree?.expandNode) {
-        const $ = (window as any).$ || (window as any).jQuery
-        if ($) {
-          lib.fileTree.expandNode($(), filepath, () => {})
-        }
+      // Refresh the panel to update internal tree state after file open,
+      // then expand to the target file. refreshPanelCommand re-reads the
+      // folder and re-renders the tree DOM — needed on Linux/Electron where
+      // the tree doesn't auto-sync like macOS WKWebView.
+      if (lib.refreshPanelCommand) {
+        lib.refreshPanelCommand()
       }
+
+      // Delay expandNode to run after refreshPanelCommand re-renders the tree
+      setTimeout(() => {
+        try {
+          if (!lib.fileTree?.expandNode) return
+          const $ = (window as any).$ || (window as any).jQuery
+          if ($) {
+            lib.fileTree.expandNode($(), filepath, () => {})
+          }
+        } catch {
+          // ignore
+        }
+      }, 200)
     } catch {
       // Non-critical — silently ignore
     }
