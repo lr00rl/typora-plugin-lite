@@ -1,4 +1,6 @@
 import { Plugin } from '@typora-plugin-lite/core'
+import { shouldMutateLiveSidenoteDom } from './dom-guards.js'
+import { getPortalPagePosition } from './portal-geometry.js'
 
 const SIDENOTE_RE = /class=["'](?:side|margin)note["']/
 
@@ -22,6 +24,8 @@ export default class SidenotePlugin extends Plugin {
   private writeEl: HTMLElement | null = null
   private portalLayerEl: HTMLElement | null = null
   private widerTransitionTimer = 0
+  private isComposing = false
+  private pendingProcess = false
 
   onload(): void {
     this.writeEl = document.getElementById('write')
@@ -41,6 +45,10 @@ export default class SidenotePlugin extends Plugin {
       subtree: true,
     })
     this.registerDomEvent(this.writeEl, 'input', () => this.scheduleProcess())
+    this.registerDomEvent(this.writeEl, 'focusin', () => this.scheduleProcess(), { capture: true })
+    this.registerDomEvent(this.writeEl, 'focusout', () => this.scheduleProcess(), { capture: true })
+    this.registerDomEvent(this.writeEl, 'compositionstart', () => this.handleCompositionStart(), { capture: true })
+    this.registerDomEvent(this.writeEl, 'compositionend', () => this.handleCompositionEnd(), { capture: true })
     this.registerDomEvent(window, 'resize', () => this.scheduleProcess())
     this.registerDomEvent(window, 'scroll', () => this.scheduleProcess(), { passive: true, capture: true })
     this.registerEvent('wider:mode-changed', () => this.scheduleProcessAfterTransition())
@@ -66,15 +74,24 @@ export default class SidenotePlugin extends Plugin {
   }
 
   private processAll(root: HTMLElement): void {
+    this.removeMarkersFromFocusedBlocks(root)
+
     const inlines = root.querySelectorAll<HTMLSpanElement>('span.md-html-inline')
     for (const el of inlines) {
+      const canMutateInlineDom = shouldMutateLiveSidenoteDom(el, this.isComposing)
+
       // Already processed — just ensure marker still exists
       if (el.classList.contains('tpl-sidenote')) {
-        if (!el.previousElementSibling?.classList.contains('tpl-sn-num')) {
+        if (canMutateInlineDom) {
           this.insertMarker(el)
+        } else {
+          this.removeMarker(el)
         }
         continue
       }
+
+      if (!canMutateInlineDom) continue
+
       const before = el.querySelector('.md-meta.md-before')
       if (before && SIDENOTE_RE.test(before.textContent ?? '')) {
         el.classList.add('tpl-sidenote')
@@ -112,15 +129,52 @@ export default class SidenotePlugin extends Plugin {
   }
 
   private insertMarker(sidenote: HTMLElement): void {
+    if (sidenote.previousElementSibling?.classList.contains('tpl-sn-num')) return
     const marker = document.createElement('span')
     marker.className = 'tpl-sn-num'
     marker.setAttribute('contenteditable', 'false')
     sidenote.parentNode?.insertBefore(marker, sidenote)
   }
 
+  private removeMarker(sidenote: HTMLElement): void {
+    const marker = sidenote.previousElementSibling
+    if (marker?.classList.contains('tpl-sn-num')) {
+      marker.remove()
+    }
+  }
+
+  private removeMarkersFromFocusedBlocks(root: HTMLElement): void {
+    root.querySelectorAll('.md-focus > .tpl-sn-num').forEach(marker => marker.remove())
+  }
+
+  private handleCompositionStart(): void {
+    this.isComposing = true
+    if (this.writeEl) {
+      this.removeMarkersFromFocusedBlocks(this.writeEl)
+    }
+  }
+
+  private handleCompositionEnd(): void {
+    this.isComposing = false
+    if (this.pendingProcess) {
+      this.pendingProcess = false
+    }
+    this.scheduleProcess()
+  }
+
   private scheduleProcess(): void {
     cancelAnimationFrame(this.rafId)
+    if (this.isComposing) {
+      this.pendingProcess = true
+      return
+    }
+
+    this.pendingProcess = false
     this.rafId = requestAnimationFrame(() => {
+      if (this.isComposing) {
+        this.pendingProcess = true
+        return
+      }
       if (this.writeEl) this.processAll(this.writeEl)
     })
   }
@@ -136,13 +190,12 @@ export default class SidenotePlugin extends Plugin {
 
   private ensurePortalLayer(): void {
     if (this.portalLayerEl?.isConnected) return
-    if (!this.writeEl) return
 
     const layer = document.createElement('div')
     layer.id = 'tpl-sidenote-portal-layer'
     layer.setAttribute('aria-hidden', 'true')
     layer.setAttribute('contenteditable', 'false')
-    this.writeEl.appendChild(layer)
+    document.body.appendChild(layer)
     this.portalLayerEl = layer
   }
 
@@ -165,9 +218,22 @@ export default class SidenotePlugin extends Plugin {
         : sidenote
 
       const anchorRect = anchor.getBoundingClientRect()
-      const naturalTop = anchorRect.top - writeRect.top
       const portal = this.createPortal(sidenote)
-      portalItems.push({ naturalTop, el: portal })
+      const { top, left } = getPortalPagePosition(
+        anchorRect,
+        writeRect,
+        {
+          reserve: this.parseCssLength('--tpl-sidenote-reserve', 300),
+          offset: this.parseCssLength('--tpl-sidenote-offset', 280),
+          width: this.parseCssLength('--tpl-sidenote-width', 250),
+        },
+        {
+          scrollX: window.scrollX,
+          scrollY: window.scrollY,
+        },
+      )
+      portal.style.left = `${left}px`
+      portalItems.push({ naturalTop: top, el: portal })
     }
 
     portalItems.sort((a, b) => a.naturalTop - b.naturalTop)
@@ -204,6 +270,13 @@ export default class SidenotePlugin extends Plugin {
 
     const target = mutation.target
     return target === this.portalLayerEl || this.portalLayerEl.contains(target)
+  }
+
+  private parseCssLength(name: string, fallback: number): number {
+    if (!this.writeEl) return fallback
+
+    const parsed = Number.parseFloat(getComputedStyle(this.writeEl).getPropertyValue(name).trim())
+    return Number.isFinite(parsed) ? parsed : fallback
   }
 }
 
@@ -270,7 +343,10 @@ const EDITOR_CSS = /* css */ `
 }
   #tpl-sidenote-portal-layer {
     position: absolute;
-    inset: 0;
+    top: 0;
+    left: 0;
+    width: 0;
+    height: 0;
     overflow: visible;
     pointer-events: none;
     z-index: 3;
@@ -292,7 +368,6 @@ const EDITOR_CSS = /* css */ `
   .tpl-sidenote-portal {
     position: absolute;
     top: 0;
-    right: calc(var(--tpl-sidenote-reserve, 300px) - var(--tpl-sidenote-offset, 280px));
     width: var(--tpl-sidenote-width, 250px);
     font-size: 0.82rem;
     line-height: 1.45;
