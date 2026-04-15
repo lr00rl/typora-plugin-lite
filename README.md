@@ -50,6 +50,7 @@ Plugins never touch low-level APIs directly. They use `platform.fs`, `platform.s
 | `wider` | M | `startup` | Switch editor width between `default / wide / full` with sidenote-aware spacing. |
 | `title-shift` | S | `hotkey` | Quickly shift heading levels. |
 | `fuzzy-search` | M | `hotkey` | Quick-open with fzf-style ranking, relative-path matching, and rg/fallback indexing. |
+| `note-assistant` | M | `hotkey` | Show graph-based related notes and insert wiki-links from the current document. |
 
 ### `wider` at a glance
 
