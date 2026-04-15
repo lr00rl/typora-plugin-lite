@@ -799,7 +799,7 @@ export default class NoteAssistantPlugin extends Plugin {
     if (tags.length) {
       lines.push(`Tags: ${tags.map(tag => `#${tag}`).join(' ')}`, '')
     }
-    lines.push('Related Notes:', ...selected, BLOCK_END, '')
+    lines.push('Related Notes:', ...selected, '', BLOCK_END, '')
 
     const next = replaceNoteAssistantBlock(markdown, lines.join('\n'))
     editor.setMarkdown(next)
@@ -852,37 +852,38 @@ export default class NoteAssistantPlugin extends Plugin {
     this.clearNoteAssistantClasses(root)
 
     const blocks = Array.from(root.children).filter((node): node is HTMLElement => node instanceof HTMLElement)
+    const comments = Array.from(root.querySelectorAll<HTMLElement>('.md-comment'))
     let hasBlock = false
 
-    for (let index = 0; index < blocks.length; index += 1) {
-      const start = blocks[index]
-      if (!isMarkerParagraph(start, BLOCK_START)) continue
+    for (let index = 0; index < comments.length; index += 1) {
+      const startComment = comments[index]
+      if ((startComment.textContent || '').trim() !== BLOCK_START) continue
 
-      let endIndex = -1
-      for (let cursor = index + 1; cursor < blocks.length; cursor += 1) {
-        if (isMarkerParagraph(blocks[cursor], BLOCK_END)) {
-          endIndex = cursor
-          break
-        }
-      }
-      if (endIndex === -1) continue
+      const endComment = comments.slice(index + 1).find(el => (el.textContent || '').trim() === BLOCK_END)
+      if (!endComment) continue
+
+      const startBlock = getTopLevelBlock(startComment, root)
+      const endBlock = getTopLevelBlock(endComment, root)
+      if (!startBlock || !endBlock) continue
+
+      const startIndex = blocks.indexOf(startBlock)
+      const endIndex = blocks.indexOf(endBlock)
+      if (startIndex === -1 || endIndex === -1 || endIndex < startIndex) continue
 
       hasBlock = true
-      start.classList.add('tpl-note-assistant-comment')
-      blocks[endIndex].classList.add('tpl-note-assistant-comment')
+      startComment.classList.add('tpl-note-assistant-comment')
+      endComment.classList.add('tpl-note-assistant-comment')
 
-      for (let cursor = index + 1; cursor < endIndex; cursor += 1) {
+      for (let cursor = startIndex + 1; cursor <= endIndex; cursor += 1) {
         const block = blocks[cursor]
         block.classList.add('tpl-note-assistant-block')
-        if (cursor === index + 1) block.classList.add('tpl-note-assistant-first')
-        if (cursor === endIndex - 1) block.classList.add('tpl-note-assistant-last')
+        if (cursor === startIndex + 1) block.classList.add('tpl-note-assistant-first')
+        if (cursor === endIndex) block.classList.add('tpl-note-assistant-last')
         if (block.matches('h1,h2,h3,h4,h5,h6')) block.classList.add('tpl-note-assistant-title')
         if (isTagsParagraph(block)) block.classList.add('tpl-note-assistant-tags')
         if (isRelatedLabel(block)) block.classList.add('tpl-note-assistant-related-label')
         if (block.matches('ul,ol')) block.classList.add('tpl-note-assistant-related-list')
       }
-
-      index = endIndex
     }
 
     root.classList.toggle('tpl-has-note-assistant-block', hasBlock)
@@ -926,4 +927,12 @@ function replaceNoteAssistantBlock(markdown: string, section: string): string {
     return markdown.replace(blockRe, `${section}\n`)
   }
   return `${markdown.replace(/\s+$/u, '')}\n\n${section}`
+}
+
+function getTopLevelBlock(node: Node, root: HTMLElement): HTMLElement | null {
+  let current: Node | null = node
+  while (current && current.parentNode && current.parentNode !== root) {
+    current = current.parentNode
+  }
+  return current instanceof HTMLElement ? current : null
 }
