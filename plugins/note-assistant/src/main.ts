@@ -57,6 +57,12 @@ interface ParsedInlineBlock {
   items: InlineRelatedNote[]
 }
 
+interface InlineTargetResolution {
+  rawTarget: string
+  normalizedTarget: string
+  candidates: string[]
+}
+
 const HOTKEY = 'Mod+;'
 const GRAPH_DIR = '.note-assistant'
 const GRAPH_FILE = 'graph.json'
@@ -449,6 +455,8 @@ export default class NoteAssistantPlugin extends Plugin {
   private rafId = 0
   private writeEl: HTMLElement | null = null
   private pendingInlineFocusKey = ''
+  private observerConnected = false
+  private processRunId = 0
   private overlay: HTMLDivElement | null = null
   private bodyEl: HTMLDivElement | null = null
   private titleEl: HTMLDivElement | null = null
@@ -465,14 +473,19 @@ export default class NoteAssistantPlugin extends Plugin {
 
   onload(): void {
     this.registerCss(CSS)
+    this.logChannel('lifecycle', 'onload')
     this.writeEl = document.getElementById('write')
     if (this.writeEl) {
       this.processNoteAssistantBlocks(this.writeEl)
-      this.observer = new MutationObserver(() => this.scheduleProcess())
-      this.observer.observe(this.writeEl, {
-        childList: true,
-        subtree: true,
+      this.observer = new MutationObserver((mutations) => {
+        if (this.shouldIgnoreMutations(mutations)) {
+          this.debugChannel('observer', 'ignored self mutations', { count: mutations.length })
+          return
+        }
+        this.debugChannel('observer', 'schedule from mutations', { count: mutations.length })
+        this.scheduleProcess()
       })
+      this.connectObserver()
       this.registerDomEvent(this.writeEl, 'input', () => this.scheduleProcess())
       this.registerDomEvent(this.writeEl, 'focusin', () => this.scheduleProcess(), { capture: true })
     }
@@ -496,7 +509,7 @@ export default class NoteAssistantPlugin extends Plugin {
   }
 
   onunload(): void {
-    this.observer?.disconnect()
+    this.disconnectObserver()
     cancelAnimationFrame(this.rafId)
     if (this.writeEl) {
       this.writeEl.classList.remove('tpl-has-note-assistant-block')
@@ -507,6 +520,8 @@ export default class NoteAssistantPlugin extends Plugin {
 
   private scheduleProcess(): void {
     cancelAnimationFrame(this.rafId)
+    const runId = ++this.processRunId
+    this.debugChannel('observer', 'schedule process', { runId })
     this.rafId = requestAnimationFrame(() => {
       if (this.writeEl) this.processNoteAssistantBlocks(this.writeEl)
     })
@@ -978,53 +993,58 @@ export default class NoteAssistantPlugin extends Plugin {
   }
 
   private processNoteAssistantBlocks(root: HTMLElement): void {
-    this.clearNoteAssistantClasses(root)
+    this.withObserverPaused(() => {
+      this.clearNoteAssistantClasses(root)
 
-    const blocks = Array.from(root.children).filter((node): node is HTMLElement => node instanceof HTMLElement)
-    const comments = Array.from(root.querySelectorAll<HTMLElement>('.md-comment'))
-    let hasBlock = false
+      const blocks = Array.from(root.children).filter((node): node is HTMLElement => node instanceof HTMLElement)
+      const comments = Array.from(root.querySelectorAll<HTMLElement>('.md-comment'))
+      let hasBlock = false
+      let renderedPanels = 0
 
-    for (let index = 0; index < comments.length; index += 1) {
-      const startComment = comments[index]
-      if ((startComment.textContent || '').trim() !== BLOCK_START) continue
+      for (let index = 0; index < comments.length; index += 1) {
+        const startComment = comments[index]
+        if ((startComment.textContent || '').trim() !== BLOCK_START) continue
 
-      const endComment = comments.slice(index + 1).find(el => (el.textContent || '').trim() === BLOCK_END)
-      if (!endComment) continue
+        const endComment = comments.slice(index + 1).find(el => (el.textContent || '').trim() === BLOCK_END)
+        if (!endComment) continue
 
-      const startBlock = getTopLevelBlock(startComment, root)
-      const endBlock = getTopLevelBlock(endComment, root)
-      if (!startBlock || !endBlock) continue
+        const startBlock = getTopLevelBlock(startComment, root)
+        const endBlock = getTopLevelBlock(endComment, root)
+        if (!startBlock || !endBlock) continue
 
-      const startIndex = blocks.indexOf(startBlock)
-      const endIndex = blocks.indexOf(endBlock)
-      if (startIndex === -1 || endIndex === -1 || endIndex < startIndex) continue
+        const startIndex = blocks.indexOf(startBlock)
+        const endIndex = blocks.indexOf(endBlock)
+        if (startIndex === -1 || endIndex === -1 || endIndex < startIndex) continue
 
-      const key = startBlock.getAttribute('cid') || `note-assistant-${startIndex}`
-      const sourceBlocks = blocks.slice(startIndex, endIndex + 1)
-      const editing = sourceBlocks.some(block => this.isEditingSourceBlock(block))
-        || this.pendingInlineFocusKey === key
+        const key = startBlock.getAttribute('cid') || `note-assistant-${startIndex}`
+        const sourceBlocks = blocks.slice(startIndex, endIndex + 1)
+        const editing = sourceBlocks.some(block => this.isEditingSourceBlock(block))
+          || this.pendingInlineFocusKey === key
 
-      hasBlock = true
-      startComment.classList.add('tpl-note-assistant-comment')
-      endComment.classList.add('tpl-note-assistant-comment')
+        hasBlock = true
+        startComment.classList.add('tpl-note-assistant-comment')
+        endComment.classList.add('tpl-note-assistant-comment')
 
-      for (const block of sourceBlocks) {
-        block.classList.add('tpl-note-assistant-source')
-        block.dataset.tplNoteKey = key
+        for (const block of sourceBlocks) {
+          block.classList.add('tpl-note-assistant-source')
+          block.dataset.tplNoteKey = key
+          if (!editing) {
+            block.classList.add('tpl-note-assistant-source-hidden')
+          }
+        }
+
         if (!editing) {
-          block.classList.add('tpl-note-assistant-source-hidden')
+          const currentFile = editor.getFilePath()
+          const parsed = this.parseInlineBlock(sourceBlocks)
+          const panel = this.renderInlineBlock(parsed, key, currentFile)
+          endBlock.insertAdjacentElement('afterend', panel)
+          renderedPanels += 1
         }
       }
 
-      if (!editing) {
-        const currentFile = editor.getFilePath()
-        const parsed = this.parseInlineBlock(sourceBlocks)
-        const panel = this.renderInlineBlock(parsed, key, currentFile)
-        endBlock.insertAdjacentElement('afterend', panel)
-      }
-    }
-
-    root.classList.toggle('tpl-has-note-assistant-block', hasBlock)
+      root.classList.toggle('tpl-has-note-assistant-block', hasBlock)
+      this.debugChannel('render', 'processed blocks', { hasBlock, renderedPanels, comments: comments.length })
+    })
   }
 
   private clearNoteAssistantClasses(root: HTMLElement): void {
@@ -1163,9 +1183,15 @@ export default class NoteAssistantPlugin extends Plugin {
     button.className = 'tpl-note-assistant-inline-card'
     button.type = 'button'
     button.setAttribute('contenteditable', 'false')
+    button.title = this.buildInlineCardTooltip(item, currentFile)
+    button.addEventListener('mousedown', evt => {
+      evt.preventDefault()
+      evt.stopPropagation()
+    })
     button.addEventListener('click', evt => {
       evt.preventDefault()
       evt.stopPropagation()
+      this.logChannel('inline', 'card click', { target: item.rawTarget })
       void this.openInlineWikiTarget(item.rawTarget, currentFile)
     })
 
@@ -1211,21 +1237,51 @@ export default class NoteAssistantPlugin extends Plugin {
     return button
   }
 
+  private buildInlineCardTooltip(item: InlineRelatedNote, currentFile: string): string {
+    const resolution = this.buildInlineTargetResolution(item.rawTarget, currentFile)
+    const lines = [
+      `${item.displayTitle}`,
+      `target: ${item.rawTarget}`,
+    ]
+
+    if (item.reasonText) {
+      lines.push(`reason: ${item.reasonText}`)
+    }
+
+    if (resolution.candidates.length) {
+      lines.push('', 'Candidates:')
+      for (const candidate of resolution.candidates.slice(0, 8)) {
+        lines.push(candidate)
+      }
+      if (resolution.candidates.length > 8) {
+        lines.push(`... +${resolution.candidates.length - 8} more`)
+      }
+    }
+
+    return lines.join('\n')
+  }
+
   private makeInlineButton(label: string, onClick: () => void): HTMLButtonElement {
     const button = document.createElement('button')
     button.className = 'tpl-note-assistant-inline-btn'
     button.type = 'button'
     button.textContent = label
     button.setAttribute('contenteditable', 'false')
+    button.addEventListener('mousedown', evt => {
+      evt.preventDefault()
+      evt.stopPropagation()
+    })
     button.addEventListener('click', evt => {
       evt.preventDefault()
       evt.stopPropagation()
+      this.logChannel('inline', 'button click', { label })
       onClick()
     })
     return button
   }
 
   private beginInlineSourceEdit(key: string): void {
+    this.logChannel('inline', 'begin source edit', { key })
     this.pendingInlineFocusKey = key
     this.scheduleProcess()
     window.setTimeout(() => this.focusInlineSource(key), 40)
@@ -1235,11 +1291,13 @@ export default class NoteAssistantPlugin extends Plugin {
     if (!this.writeEl) return
     const block = this.writeEl.querySelector<HTMLElement>(`.tpl-note-assistant-source[data-tpl-note-key="${key}"]`)
     if (!block) {
+      this.warnChannel('inline', 'focus source target missing', { key })
       this.pendingInlineFocusKey = ''
       this.scheduleProcess()
       return
     }
 
+    this.debugChannel('inline', 'focus source', { key })
     block.scrollIntoView({ block: 'center', behavior: 'smooth' })
     const editable = block.querySelector<HTMLElement>('[contenteditable="true"]') || block
     editable.focus()
@@ -1247,31 +1305,19 @@ export default class NoteAssistantPlugin extends Plugin {
   }
 
   private async openInlineWikiTarget(rawTarget: string, currentFile: string): Promise<void> {
-    const target = rawTarget.split('#')[0].trim()
-    if (!target) return
+    const resolution = this.buildInlineTargetResolution(rawTarget, currentFile)
+    if (!resolution.normalizedTarget) return
 
-    const currentDir = platform.path.dirname(currentFile)
-    const candidates = new Set<string>()
-    const resolved = platform.path.resolve(currentDir, target)
-    candidates.add(resolved)
-    if (!platform.path.extname(resolved)) {
-      candidates.add(`${resolved}.md`)
-      candidates.add(`${resolved}.markdown`)
-    }
+    this.debugChannel('navigation', 'resolve inline target', {
+      rawTarget,
+      currentFile,
+      candidates: resolution.candidates,
+    })
 
-    const root = this.graphRoot || this.getFallbackRootDir()
-    if (root && !platform.path.isAbsolute(target)) {
-      const rootCandidate = platform.path.resolve(root, target)
-      candidates.add(rootCandidate)
-      if (!platform.path.extname(rootCandidate)) {
-        candidates.add(`${rootCandidate}.md`)
-        candidates.add(`${rootCandidate}.markdown`)
-      }
-    }
-
-    for (const candidate of candidates) {
+    for (const candidate of resolution.candidates) {
       if (await platform.fs.exists(candidate)) {
         try {
+          this.logChannel('navigation', 'open inline target resolved', { rawTarget, candidate })
           await editor.openFile(candidate)
           await this.renderCurrentNote()
           return
@@ -1282,6 +1328,119 @@ export default class NoteAssistantPlugin extends Plugin {
     }
 
     this.showNotice('Failed to resolve related note path')
+    this.warnChannel('navigation', 'failed to resolve inline target', {
+      rawTarget,
+      candidates: resolution.candidates,
+    })
+  }
+
+  private buildInlineTargetResolution(rawTarget: string, currentFile: string): InlineTargetResolution {
+    const normalizedTarget = rawTarget.split('#')[0].trim()
+    const candidates = new Set<string>()
+
+    if (!normalizedTarget) {
+      return { rawTarget, normalizedTarget, candidates: [] }
+    }
+
+    const currentDir = platform.path.dirname(currentFile)
+    const resolved = platform.path.resolve(currentDir, normalizedTarget)
+    candidates.add(resolved)
+    if (!platform.path.extname(resolved)) {
+      candidates.add(`${resolved}.md`)
+      candidates.add(`${resolved}.markdown`)
+    }
+
+    const root = this.graphRoot || this.getFallbackRootDir()
+    if (root && !platform.path.isAbsolute(normalizedTarget)) {
+      const rootCandidate = platform.path.resolve(root, normalizedTarget)
+      candidates.add(rootCandidate)
+      if (!platform.path.extname(rootCandidate)) {
+        candidates.add(`${rootCandidate}.md`)
+        candidates.add(`${rootCandidate}.markdown`)
+      }
+    }
+
+    return {
+      rawTarget,
+      normalizedTarget,
+      candidates: [...candidates],
+    }
+  }
+
+  private connectObserver(): void {
+    if (!this.observer || !this.writeEl || this.observerConnected) return
+    this.observer.observe(this.writeEl, {
+      childList: true,
+      subtree: true,
+    })
+    this.observerConnected = true
+  }
+
+  private disconnectObserver(): void {
+    if (!this.observerConnected) return
+    this.observer?.disconnect()
+    this.observerConnected = false
+  }
+
+  private withObserverPaused<T>(fn: () => T): T {
+    this.disconnectObserver()
+    try {
+      return fn()
+    } finally {
+      this.connectObserver()
+    }
+  }
+
+  private shouldIgnoreMutations(mutations: MutationRecord[]): boolean {
+    return mutations.every(mutation => {
+      const nodes = [...Array.from(mutation.addedNodes), ...Array.from(mutation.removedNodes)]
+      return nodes.length > 0 && nodes.every(node => this.isOwnInlineNode(node))
+    })
+  }
+
+  private isOwnInlineNode(node: Node): boolean {
+    if (!(node instanceof HTMLElement)) return false
+    return node.classList.contains('tpl-note-assistant-inline')
+      || !!node.closest('.tpl-note-assistant-inline')
+  }
+
+  private log(message: string, data?: unknown): void {
+    this.writeLog('core', 'info', message, data)
+  }
+
+  private debug(message: string, data?: unknown): void {
+    this.writeLog('core', 'debug', message, data)
+  }
+
+  private warn(message: string, data?: unknown): void {
+    this.writeLog('core', 'warn', message, data)
+  }
+
+  private logChannel(channel: string, message: string, data?: unknown): void {
+    this.writeLog(channel, 'info', message, data)
+  }
+
+  private debugChannel(channel: string, message: string, data?: unknown): void {
+    this.writeLog(channel, 'debug', message, data)
+  }
+
+  private warnChannel(channel: string, message: string, data?: unknown): void {
+    this.writeLog(channel, 'warn', message, data)
+  }
+
+  private writeLog(channel: string, level: 'info' | 'debug' | 'warn', message: string, data?: unknown): void {
+    const prefix = `[tpl:note-assistant:${channel}]`
+    const logger = level === 'warn'
+      ? console.warn
+      : level === 'debug'
+        ? console.debug
+        : console.info
+
+    if (data === undefined) {
+      logger(prefix, message)
+      return
+    }
+    logger(prefix, message, data)
   }
 }
 
