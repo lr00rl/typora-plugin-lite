@@ -48,6 +48,8 @@ const GRAPH_DIR = '.note-assistant'
 const GRAPH_FILE = 'graph.json'
 const BUILD_SCRIPT = 'tools/note-assistant/build-graph.mjs'
 const PANEL_ID = 'tpl-note-assistant'
+const BLOCK_START = '<!-- note-assistant:start -->'
+const BLOCK_END = '<!-- note-assistant:end -->'
 
 const CSS = `
 #${PANEL_ID}-overlay {
@@ -197,6 +199,51 @@ const CSS = `
   font-size: 12px;
   opacity: 0.66;
 }
+#write.tpl-has-note-assistant-block .tpl-note-assistant-comment {
+  display: none;
+}
+#write.tpl-has-note-assistant-block .tpl-note-assistant-block {
+  margin-left: 0;
+  margin-right: 0;
+  padding-left: 18px;
+  padding-right: 18px;
+  background: color-mix(in srgb, var(--bg-color, #fff) 92%, #7aa2f7 8%);
+  border-left: 3px solid color-mix(in srgb, #7aa2f7 72%, #4c7dd9 28%);
+}
+#write.tpl-has-note-assistant-block .tpl-note-assistant-first {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top-left-radius: 12px;
+  border-top-right-radius: 12px;
+}
+#write.tpl-has-note-assistant-block .tpl-note-assistant-last {
+  margin-bottom: 16px;
+  padding-bottom: 14px;
+  border-bottom-left-radius: 12px;
+  border-bottom-right-radius: 12px;
+}
+#write.tpl-has-note-assistant-block .tpl-note-assistant-title {
+  margin-top: 0;
+  margin-bottom: 10px;
+  font-size: 1.05em;
+  letter-spacing: 0.01em;
+}
+#write.tpl-has-note-assistant-block .tpl-note-assistant-tags {
+  color: var(--text-color, #333);
+  opacity: 0.88;
+}
+#write.tpl-has-note-assistant-block .tpl-note-assistant-related-label {
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+#write.tpl-has-note-assistant-block .tpl-note-assistant-related-list {
+  margin-top: 0;
+  padding-bottom: 4px;
+}
+#write.tpl-has-note-assistant-block .tpl-note-assistant-related-list .md-list-item p {
+  margin-top: 4px;
+  margin-bottom: 4px;
+}
 `
 
 function normalizePath(input: string): string {
@@ -270,6 +317,9 @@ function escapeHtml(text: string): string {
 }
 
 export default class NoteAssistantPlugin extends Plugin {
+  private observer: MutationObserver | null = null
+  private rafId = 0
+  private writeEl: HTMLElement | null = null
   private overlay: HTMLDivElement | null = null
   private bodyEl: HTMLDivElement | null = null
   private titleEl: HTMLDivElement | null = null
@@ -285,6 +335,19 @@ export default class NoteAssistantPlugin extends Plugin {
   private keydownHandler: ((evt: KeyboardEvent) => void) | null = null
 
   onload(): void {
+    this.registerCss(CSS)
+    this.writeEl = document.getElementById('write')
+    if (this.writeEl) {
+      this.processNoteAssistantBlocks(this.writeEl)
+      this.observer = new MutationObserver(() => this.scheduleProcess())
+      this.observer.observe(this.writeEl, {
+        childList: true,
+        subtree: true,
+      })
+      this.registerDomEvent(this.writeEl, 'input', () => this.scheduleProcess())
+      this.registerDomEvent(this.writeEl, 'focusin', () => this.scheduleProcess(), { capture: true })
+    }
+
     this.registerHotkey(HOTKEY, () => void this.open())
     this.registerCommand({
       id: 'note-assistant:open',
@@ -296,10 +359,28 @@ export default class NoteAssistantPlugin extends Plugin {
       name: 'Note Assistant: Rebuild Graph',
       callback: () => void this.rebuildGraph(),
     })
+    this.registerCommand({
+      id: 'note-assistant:reparse-document',
+      name: 'Note Assistant: Reparse Current Document',
+      callback: () => this.reparseDocument(),
+    })
   }
 
   onunload(): void {
+    this.observer?.disconnect()
+    cancelAnimationFrame(this.rafId)
+    if (this.writeEl) {
+      this.writeEl.classList.remove('tpl-has-note-assistant-block')
+      this.clearNoteAssistantClasses(this.writeEl)
+    }
     this.close()
+  }
+
+  private scheduleProcess(): void {
+    cancelAnimationFrame(this.rafId)
+    this.rafId = requestAnimationFrame(() => {
+      if (this.writeEl) this.processNoteAssistantBlocks(this.writeEl)
+    })
   }
 
   private async open(): Promise<void> {
@@ -326,13 +407,6 @@ export default class NoteAssistantPlugin extends Plugin {
   }
 
   private buildModal(): void {
-    if (!document.getElementById(`${PANEL_ID}-style`)) {
-      const style = document.createElement('style')
-      style.id = `${PANEL_ID}-style`
-      style.textContent = CSS
-      document.head.appendChild(style)
-    }
-
     const overlay = document.createElement('div')
     overlay.id = `${PANEL_ID}-overlay`
     overlay.addEventListener('click', evt => {
@@ -361,7 +435,7 @@ export default class NoteAssistantPlugin extends Plugin {
     actions.id = `${PANEL_ID}-actions`
     actions.appendChild(this.makeButton('Refresh', () => void this.renderCurrentNote(true)))
     actions.appendChild(this.makeButton('Rebuild Graph', () => void this.rebuildGraph()))
-    actions.appendChild(this.makeButton('Insert Selected', () => this.insertSelectedLinks()))
+    actions.appendChild(this.makeButton('Update Block', () => this.insertSelectedLinks()))
 
     header.appendChild(titleWrap)
     header.appendChild(actions)
@@ -695,7 +769,11 @@ export default class NoteAssistantPlugin extends Plugin {
         const relative = withoutMarkdownExt(
           relPathFromDir(platform.path.join(root, relPath), currentDir),
         )
-        return `- [[${relative}|${note.title}]]`
+        const related = this.graphCache
+          ? this.noteMap.get(relPath)
+          : null
+        const reason = related?.title ? '' : ''
+        return `- [[${relative}|${note.title}]]${reason}`
       })
       .filter(Boolean) as string[]
 
@@ -704,8 +782,40 @@ export default class NoteAssistantPlugin extends Plugin {
       return
     }
 
-    editor.insertText(`\n## Related Notes\n${selected.join('\n')}\n`)
-    this.showNotice(`Inserted ${selected.length} links`)
+    const markdown = editor.getMarkdown()
+    if (!markdown) {
+      this.showNotice('Cannot read document content')
+      return
+    }
+
+    const relPath = relPathFromRoot(currentFile, root)
+    const currentNote = this.noteMap.get(relPath)
+    const tags = (currentNote?.tags || []).slice(0, 5)
+    const lines = [
+      BLOCK_START,
+      '## Note Assistant',
+      '',
+    ]
+    if (tags.length) {
+      lines.push(`Tags: ${tags.map(tag => `#${tag}`).join(' ')}`, '')
+    }
+    lines.push('Related Notes:', ...selected, BLOCK_END, '')
+
+    const next = replaceNoteAssistantBlock(markdown, lines.join('\n'))
+    editor.setMarkdown(next)
+    this.showNotice(`Updated block with ${selected.length} links`)
+    window.setTimeout(() => this.scheduleProcess(), 60)
+  }
+
+  private reparseDocument(): void {
+    const markdown = editor.getMarkdown()
+    if (!markdown) {
+      this.showNotice('Cannot read document content')
+      return
+    }
+    editor.setMarkdown(markdown)
+    this.showNotice('Current document reparsed')
+    window.setTimeout(() => this.scheduleProcess(), 60)
   }
 
   private async rebuildGraph(): Promise<void> {
@@ -737,4 +847,83 @@ export default class NoteAssistantPlugin extends Plugin {
     if (!this.footerEl) return
     this.footerEl.innerHTML = `<div>${escapeHtml(root)}</div><div>${escapeHtml(detail)}</div>`
   }
+
+  private processNoteAssistantBlocks(root: HTMLElement): void {
+    this.clearNoteAssistantClasses(root)
+
+    const blocks = Array.from(root.children).filter((node): node is HTMLElement => node instanceof HTMLElement)
+    let hasBlock = false
+
+    for (let index = 0; index < blocks.length; index += 1) {
+      const start = blocks[index]
+      if (!isMarkerParagraph(start, BLOCK_START)) continue
+
+      let endIndex = -1
+      for (let cursor = index + 1; cursor < blocks.length; cursor += 1) {
+        if (isMarkerParagraph(blocks[cursor], BLOCK_END)) {
+          endIndex = cursor
+          break
+        }
+      }
+      if (endIndex === -1) continue
+
+      hasBlock = true
+      start.classList.add('tpl-note-assistant-comment')
+      blocks[endIndex].classList.add('tpl-note-assistant-comment')
+
+      for (let cursor = index + 1; cursor < endIndex; cursor += 1) {
+        const block = blocks[cursor]
+        block.classList.add('tpl-note-assistant-block')
+        if (cursor === index + 1) block.classList.add('tpl-note-assistant-first')
+        if (cursor === endIndex - 1) block.classList.add('tpl-note-assistant-last')
+        if (block.matches('h1,h2,h3,h4,h5,h6')) block.classList.add('tpl-note-assistant-title')
+        if (isTagsParagraph(block)) block.classList.add('tpl-note-assistant-tags')
+        if (isRelatedLabel(block)) block.classList.add('tpl-note-assistant-related-label')
+        if (block.matches('ul,ol')) block.classList.add('tpl-note-assistant-related-list')
+      }
+
+      index = endIndex
+    }
+
+    root.classList.toggle('tpl-has-note-assistant-block', hasBlock)
+  }
+
+  private clearNoteAssistantClasses(root: HTMLElement): void {
+    root.querySelectorAll('.tpl-note-assistant-comment').forEach(el => {
+      el.classList.remove('tpl-note-assistant-comment')
+    })
+    root.querySelectorAll('.tpl-note-assistant-block').forEach(el => {
+      el.classList.remove(
+        'tpl-note-assistant-block',
+        'tpl-note-assistant-first',
+        'tpl-note-assistant-last',
+        'tpl-note-assistant-title',
+        'tpl-note-assistant-tags',
+        'tpl-note-assistant-related-label',
+        'tpl-note-assistant-related-list',
+      )
+    })
+  }
+}
+
+function isMarkerParagraph(el: HTMLElement, marker: string): boolean {
+  if (!el.matches('p')) return false
+  const comment = el.querySelector('.md-comment')
+  return (comment?.textContent || '').trim() === marker
+}
+
+function isTagsParagraph(el: HTMLElement): boolean {
+  return el.matches('p') && (el.textContent || '').trim().startsWith('Tags:')
+}
+
+function isRelatedLabel(el: HTMLElement): boolean {
+  return el.matches('p') && (el.textContent || '').trim() === 'Related Notes:'
+}
+
+function replaceNoteAssistantBlock(markdown: string, section: string): string {
+  const blockRe = /<!-- note-assistant:start -->[\s\S]*?<!-- note-assistant:end -->\n?/g
+  if (blockRe.test(markdown)) {
+    return markdown.replace(blockRe, `${section}\n`)
+  }
+  return `${markdown.replace(/\s+$/u, '')}\n\n${section}`
 }

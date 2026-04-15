@@ -2,7 +2,7 @@
   "id": "note-assistant",
   "name": "Note Assistant",
   "version": "0.1.0",
-  "description": "Show related notes for the current file from a generated graph and insert wiki-links back into the document",
+  "description": "Show related notes for the current file from a generated graph and insert wiki-links back into the document; Decorate and reparse generated <!-- note-assistant --> blocks in Typora",
   "main": "main.js",
   "loading": {
     "startup": true
