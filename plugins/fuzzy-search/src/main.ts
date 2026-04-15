@@ -1260,7 +1260,7 @@ export default class QuickOpenPlugin extends Plugin {
     tabContent.addEventListener('click', () => { if (this.searchMode !== 'content') this.toggleSearchMode() })
     const tabHint = document.createElement('div')
     tabHint.className = 'tpl-qo-tab-hint'
-    tabHint.textContent = IS_MAC ? '⌘Tab 切换' : 'Ctrl+Tab 切换'
+    tabHint.textContent = IS_MAC ? '⌃Tab 切换' : 'Ctrl+Tab 切换'
     tabBar.appendChild(tabFiles)
     tabBar.appendChild(tabContent)
     tabBar.appendChild(tabHint)
