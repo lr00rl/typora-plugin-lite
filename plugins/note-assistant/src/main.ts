@@ -255,47 +255,47 @@ const CSS = `
 }
 #write .tpl-note-assistant-inline {
   position: relative;
-  margin: 22px 0 26px;
-  padding: 18px 18px 16px;
-  border-radius: 18px;
-  border: 1px solid color-mix(in srgb, var(--border-color, rgba(128, 128, 128, 0.16)) 88%, #7aa2f7 12%);
-  background:
-    radial-gradient(circle at top right, rgba(122, 162, 247, 0.16), transparent 36%),
-    linear-gradient(180deg, color-mix(in srgb, var(--bg-color, #fff) 92%, #eef4ff 8%), color-mix(in srgb, var(--bg-color, #fff) 97%, #dfeaff 3%));
-  box-shadow: 0 16px 36px rgba(15, 23, 42, 0.08);
+  margin: 14px 0 18px;
+  padding: 10px 12px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color, rgba(128, 128, 128, 0.08));
+  background: transparent;
+  box-shadow: none;
 }
 #write .tpl-note-assistant-inline::before {
-  content: 'NOTE ASSISTANT';
+  content: 'Note Assistant';
   position: absolute;
-  top: -10px;
-  left: 16px;
-  padding: 1px 8px;
-  border-radius: 999px;
-  font-size: 10px;
-  letter-spacing: 0.12em;
-  background: color-mix(in srgb, var(--bg-color, #fff) 74%, #7aa2f7 26%);
-  color: color-mix(in srgb, var(--text-color, #222) 65%, #284a8a 35%);
+  top: -7px;
+  left: 10px;
+  padding: 0 5px;
+  border-radius: 3px;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  background: var(--bg-color, #fff);
+  color: inherit;
+  opacity: 0.36;
 }
 #write .tpl-note-assistant-inline-header {
   display: flex;
   justify-content: space-between;
-  gap: 14px;
-  align-items: flex-start;
+  gap: 10px;
+  align-items: center;
 }
 #write .tpl-note-assistant-inline-title-wrap {
   min-width: 0;
 }
 #write .tpl-note-assistant-inline-title {
-  font-size: 18px;
-  font-weight: 700;
-  line-height: 1.2;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
   margin: 0;
+  opacity: 0.7;
 }
 #write .tpl-note-assistant-inline-subtitle {
-  margin-top: 5px;
-  font-size: 12px;
-  opacity: 0.66;
-  line-height: 1.45;
+  margin-top: 2px;
+  font-size: 11px;
+  opacity: 0.44;
+  line-height: 1.4;
 }
 #write .tpl-note-assistant-inline-actions {
   display: flex;
@@ -305,292 +305,221 @@ const CSS = `
 }
 #write .tpl-note-assistant-inline-btn {
   appearance: none;
-  border: 1px solid color-mix(in srgb, var(--border-color, rgba(128, 128, 128, 0.2)) 84%, #7aa2f7 16%);
-  background: color-mix(in srgb, var(--bg-color, #fff) 85%, #f6f9ff 15%);
+  border: 1px solid var(--border-color, rgba(128, 128, 128, 0.1));
+  background: transparent;
   color: inherit;
-  border-radius: 10px;
-  padding: 6px 10px;
+  border-radius: 6px;
+  padding: 3px 8px;
   font: inherit;
-  font-size: 12px;
+  font-size: 11px;
   cursor: pointer;
+  opacity: 0.54;
 }
 #write .tpl-note-assistant-inline-btn:hover {
-  background: color-mix(in srgb, var(--bg-color, #fff) 70%, #e8f0ff 30%);
+  opacity: 1;
+  background: rgba(127, 127, 127, 0.05);
 }
 #write .tpl-note-assistant-inline-tags {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 14px;
+  gap: 4px;
+  margin-top: 8px;
 }
 #write .tpl-note-assistant-inline-tag {
   display: inline-flex;
   align-items: center;
-  min-height: 24px;
-  padding: 0 10px;
+  min-height: 20px;
+  padding: 0 7px;
   border-radius: 999px;
-  border: 1px solid color-mix(in srgb, rgba(122, 162, 247, 0.22) 80%, transparent 20%);
-  background: color-mix(in srgb, var(--bg-color, #fff) 76%, #e7efff 24%);
-  font-size: 12px;
-  color: color-mix(in srgb, var(--text-color, #222) 82%, #365ea7 18%);
+  border: none;
+  background: rgba(127, 127, 127, 0.06);
+  font-size: 10px;
+  color: inherit;
+  opacity: 0.6;
 }
 #write .tpl-note-assistant-inline-list {
   display: grid;
-  gap: 10px;
-  margin-top: 16px;
+  gap: 4px;
+  margin-top: 8px;
 }
 #write .tpl-note-assistant-inline-card {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 14px;
+  gap: 8px;
   width: 100%;
-  padding: 12px 14px;
-  border-radius: 14px;
-  border: 1px solid color-mix(in srgb, var(--border-color, rgba(128, 128, 128, 0.14)) 86%, #7aa2f7 14%);
-  background: color-mix(in srgb, var(--bg-color, #fff) 94%, #f7faff 6%);
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
   text-align: left;
   color: inherit;
   cursor: pointer;
 }
 #write .tpl-note-assistant-inline-card:hover {
-  transform: translateY(-1px);
-  background: color-mix(in srgb, var(--bg-color, #fff) 82%, #eef4ff 18%);
-  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+  transform: none;
+  background: rgba(127, 127, 127, 0.04);
+  box-shadow: none;
 }
 #write .tpl-note-assistant-inline-card-main {
   min-width: 0;
   flex: 1;
 }
 #write .tpl-note-assistant-inline-card-title {
-  font-weight: 650;
+  font-weight: 600;
+  font-size: 12px;
   line-height: 1.35;
   word-break: break-word;
 }
 #write .tpl-note-assistant-inline-card-path {
-  margin-top: 4px;
-  font-size: 12px;
-  opacity: 0.62;
+  margin-top: 1px;
+  font-size: 10px;
+  opacity: 0.44;
   word-break: break-all;
 }
 #write .tpl-note-assistant-inline-card-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 8px;
+  gap: 4px;
+  margin-top: 4px;
 }
 #write .tpl-note-assistant-inline-badge {
   display: inline-flex;
   align-items: center;
-  min-height: 22px;
-  padding: 0 8px;
+  min-height: 16px;
+  padding: 0 5px;
   border-radius: 999px;
-  background: rgba(127, 127, 127, 0.1);
-  font-size: 11px;
-  opacity: 0.9;
+  background: rgba(127, 127, 127, 0.06);
+  font-size: 9px;
+  opacity: 0.6;
 }
 #write .tpl-note-assistant-inline-card-reason {
-  margin-top: 8px;
-  font-size: 12px;
-  line-height: 1.45;
-  opacity: 0.76;
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.4;
+  opacity: 0.5;
 }
 #write .tpl-note-assistant-inline-open {
-  font-size: 12px;
-  opacity: 0.56;
+  font-size: 10px;
+  opacity: 0.36;
   white-space: nowrap;
-  padding-top: 3px;
+  padding-top: 1px;
 }
 #write .tpl-note-assistant-inline-empty {
-  padding: 10px 0 2px;
-  font-size: 13px;
-  opacity: 0.66;
+  padding: 6px 0 2px;
+  font-size: 11px;
+  opacity: 0.44;
 }
 #${PANEL_ID}-overlay {
-  padding-top: 4vh;
-  backdrop-filter: blur(12px);
-  background: rgba(12, 18, 28, 0.48);
+  padding-top: 6vh;
+  backdrop-filter: blur(4px);
+  background: rgba(0, 0, 0, 0.32);
 }
 #${PANEL_ID}-panel {
-  width: min(1080px, 95vw);
-  max-height: 88vh;
-  border-radius: 24px;
-  border: 1px solid color-mix(in srgb, var(--border-color, rgba(128, 128, 128, 0.18)) 84%, #8cb4ff 16%);
-  background:
-    radial-gradient(circle at top right, rgba(140, 180, 255, 0.16), transparent 32%),
-    linear-gradient(180deg, color-mix(in srgb, var(--bg-color, #fff) 96%, #f5f8ff 4%), color-mix(in srgb, var(--bg-color, #fff) 98%, #eef3ff 2%));
-  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.26);
+  width: min(760px, 95vw);
+  max-height: 86vh;
+  border-radius: 14px;
+  border: 1px solid var(--border-color, rgba(128, 128, 128, 0.16));
+  background: var(--bg-color, #fff);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
 }
 #${PANEL_ID}-header {
-  padding: 22px 24px 18px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border-color, rgba(128, 128, 128, 0.16)) 78%, #9ebfff 22%);
+  padding: 14px 18px 12px;
+  border-bottom: 1px solid var(--border-color, rgba(128, 128, 128, 0.12));
+  flex-wrap: wrap;
 }
 #${PANEL_ID}-title {
-  font-size: 24px;
-  line-height: 1.15;
-  letter-spacing: -0.01em;
+  font-size: 17px;
+  line-height: 1.2;
 }
 #${PANEL_ID}-subtitle {
-  font-size: 13px;
-  opacity: 0.7;
+  font-size: 12px;
+  opacity: 0.6;
 }
 #${PANEL_ID}-body {
   display: grid;
-  gap: 16px;
-  padding: 18px 22px 24px;
+  gap: 10px;
+  padding: 12px 18px 18px;
 }
 .${PANEL_ID}-section {
   margin-top: 0;
-  padding: 16px;
-  border-radius: 20px;
-  border: 1px solid color-mix(in srgb, var(--border-color, rgba(128, 128, 128, 0.14)) 84%, #a9c5ff 16%);
-  background: color-mix(in srgb, var(--bg-color, #fff) 96%, #f8fbff 4%);
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color, rgba(128, 128, 128, 0.08));
+  background: transparent;
 }
 .${PANEL_ID}-section-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
+  gap: 10px;
+  margin-bottom: 10px;
 }
 .${PANEL_ID}-section-title {
   margin: 0;
-  font-size: 11px;
+  font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  opacity: 0.54;
+  opacity: 0.46;
 }
 .${PANEL_ID}-section-count {
-  min-width: 28px;
-  height: 28px;
-  padding: 0 10px;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 7px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--bg-color, #fff) 72%, #dfeaff 28%);
-  font-size: 12px;
+  background: rgba(127, 127, 127, 0.08);
+  font-size: 11px;
   font-weight: 600;
-}
-.${PANEL_ID}-hero {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px 12px;
-  padding: 12px 16px;
-}
-.${PANEL_ID}-hero-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.${PANEL_ID}-hero-stats {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-items: center;
-  margin-left: auto;
-}
-.${PANEL_ID}-hero-stat {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 10px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--bg-color, #fff) 82%, #e7efff 18%);
-  border: 1px solid color-mix(in srgb, rgba(140, 180, 255, 0.16) 80%, transparent 20%);
-  font-size: 12px;
-}
-.${PANEL_ID}-hero-stat strong {
-  display: inline;
-  font-size: 12px;
-  font-weight: 650;
-  line-height: 1;
-}
-.${PANEL_ID}-hero-stat span {
-  display: inline;
-  margin-top: 0;
-  font-size: 12px;
-  opacity: 0.56;
 }
 .${PANEL_ID}-list {
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 .${PANEL_ID}-section-toggle {
   justify-self: start;
   margin-top: 4px;
 }
 .${PANEL_ID}-card {
-  padding: 10px 12px;
+  padding: 8px 10px;
   margin-bottom: 0;
-  border-radius: 14px;
-  background: color-mix(in srgb, var(--bg-color, #fff) 98%, #eff5ff 2%);
+  border-radius: 8px;
+  background: transparent;
+}
+.${PANEL_ID}-card:hover {
+  background: rgba(127, 127, 127, 0.03);
 }
 .${PANEL_ID}-row-top {
-  gap: 12px;
+  gap: 10px;
 }
 .${PANEL_ID}-row-title {
   margin-bottom: 2px;
-  font-size: 14px;
+  font-size: 13px;
 }
 .${PANEL_ID}-row-path {
-  font-size: 12px;
+  font-size: 11px;
 }
 .${PANEL_ID}-row-meta {
-  gap: 6px;
-  margin-top: 6px;
+  gap: 5px;
+  margin-top: 5px;
 }
 .${PANEL_ID}-badge {
-  min-height: 22px;
+  min-height: 20px;
   display: inline-flex;
   align-items: center;
-  padding: 0 8px;
+  padding: 0 7px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--bg-color, #fff) 80%, #dde9ff 20%);
-  font-size: 11px;
+  background: rgba(127, 127, 127, 0.08);
+  font-size: 10px;
 }
 .${PANEL_ID}-row-actions .${PANEL_ID}-btn {
-  padding: 6px 9px;
-}
-#write .tpl-note-assistant-inline {
-  padding: 14px 14px 12px;
-  border-radius: 16px;
-}
-#write .tpl-note-assistant-inline-header {
-  align-items: center;
-}
-#write .tpl-note-assistant-inline-title {
-  font-size: 16px;
-}
-#write .tpl-note-assistant-inline-subtitle {
-  margin-top: 4px;
-}
-#write .tpl-note-assistant-inline-list {
-  gap: 8px;
-  margin-top: 14px;
-}
-#write .tpl-note-assistant-inline-card {
-  gap: 10px;
-  padding: 10px 12px;
-  border-radius: 12px;
-}
-#write .tpl-note-assistant-inline-card-title {
-  font-size: 14px;
-}
-#write .tpl-note-assistant-inline-card-path {
-  margin-top: 2px;
+  padding: 5px 8px;
   font-size: 11px;
-}
-#write .tpl-note-assistant-inline-card-meta {
-  margin-top: 6px;
 }
 #write .tpl-note-assistant-inline-card-reason {
   display: none;
-}
-#write .tpl-note-assistant-inline-open {
-  padding-top: 2px;
-  font-size: 11px;
 }
 #write .tpl-note-assistant-inline-toggle {
   justify-self: start;
@@ -608,19 +537,19 @@ const CSS = `
   backdrop-filter: blur(10px);
 }
 #${PANEL_ID}-editor-panel {
-  width: min(880px, 94vw);
-  max-height: 88vh;
+  width: min(720px, 94vw);
+  max-height: 86vh;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  border-radius: 22px;
-  border: 1px solid color-mix(in srgb, var(--border-color, rgba(128, 128, 128, 0.2)) 80%, #97bbff 20%);
-  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-color, #fff) 96%, #f5f9ff 4%), color-mix(in srgb, var(--bg-color, #fff) 99%, #eef3ff 1%));
-  box-shadow: 0 28px 72px rgba(0, 0, 0, 0.28);
+  border-radius: 14px;
+  border: 1px solid var(--border-color, rgba(128, 128, 128, 0.16));
+  background: var(--bg-color, #fff);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
 }
 .${PANEL_ID}-editor-header {
-  padding: 18px 20px 14px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border-color, rgba(128, 128, 128, 0.16)) 78%, #9ebfff 22%);
+  padding: 14px 18px 12px;
+  border-bottom: 1px solid var(--border-color, rgba(128, 128, 128, 0.12));
 }
 .${PANEL_ID}-editor-title {
   font-size: 20px;
@@ -645,14 +574,14 @@ const CSS = `
 }
 .${PANEL_ID}-editor-textarea {
   width: 100%;
-  min-height: min(58vh, 560px);
+  min-height: min(52vh, 480px);
   resize: vertical;
-  border: 1px solid color-mix(in srgb, var(--border-color, rgba(128, 128, 128, 0.2)) 78%, #97bbff 22%);
-  border-radius: 16px;
-  padding: 14px 16px;
-  background: color-mix(in srgb, var(--bg-color, #fff) 98%, #f8fbff 2%);
+  border: 1px solid var(--border-color, rgba(128, 128, 128, 0.12));
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: transparent;
   color: inherit;
-  font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace;
+  font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace;
 }
 .${PANEL_ID}-editor-actions {
   display: flex;
@@ -737,46 +666,42 @@ const CSS = `
   border-right: 1px solid rgba(128, 128, 128, 0.14);
   margin-right: 2px;
 }
-.${PANEL_ID}-mode-section {
-  padding: 10px 12px;
-}
 .${PANEL_ID}-mode-tabs {
   display: inline-flex;
-  gap: 6px;
-  padding: 4px;
-  border-radius: 14px;
-  background: color-mix(in srgb, var(--bg-color, #fff) 78%, #e4ecff 22%);
+  gap: 3px;
+  padding: 3px;
+  border-radius: 8px;
+  background: rgba(127, 127, 127, 0.06);
 }
 .${PANEL_ID}-mode-btn {
-  min-width: 92px;
+  min-width: 64px;
+  padding: 4px 10px;
+  font-size: 12px;
 }
 .${PANEL_ID}-mode-btn-active {
-  background: linear-gradient(180deg, #4f7dff, #3e68e9);
-  color: #fff;
+  background: rgba(127, 127, 127, 0.14);
   border-color: transparent;
-  box-shadow: 0 8px 18px rgba(79, 125, 255, 0.22);
+  box-shadow: none;
   opacity: 1;
-}
-.${PANEL_ID}-workspace-helper {
-  margin-bottom: 14px;
-  font-size: 13px;
-  line-height: 1.5;
-  opacity: 0.72;
+  font-weight: 600;
 }
 .${PANEL_ID}-workspace-group {
-  margin-top: 16px;
+  margin-top: 10px;
+}
+.${PANEL_ID}-workspace-group:first-child {
+  margin-top: 0;
 }
 .${PANEL_ID}-workspace-label {
-  margin-bottom: 10px;
-  font-size: 11px;
+  margin-bottom: 6px;
+  font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  opacity: 0.5;
+  opacity: 0.46;
 }
 .${PANEL_ID}-workspace-empty {
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1.5;
-  opacity: 0.68;
+  opacity: 0.56;
 }
 .${PANEL_ID}-tag-list {
   display: flex;
@@ -786,13 +711,13 @@ const CSS = `
 .${PANEL_ID}-editable-tag {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  min-height: 30px;
-  padding: 0 8px 0 10px;
+  gap: 6px;
+  min-height: 26px;
+  padding: 0 6px 0 8px;
   border-radius: 999px;
-  border: 1px solid color-mix(in srgb, rgba(122, 162, 247, 0.22) 80%, transparent 20%);
-  background: color-mix(in srgb, var(--bg-color, #fff) 80%, #e7efff 20%);
-  font-size: 12px;
+  border: 1px solid var(--border-color, rgba(128, 128, 128, 0.1));
+  background: rgba(127, 127, 127, 0.04);
+  font-size: 11px;
 }
 .${PANEL_ID}-chip-btn {
   padding: 4px 6px;
@@ -804,15 +729,19 @@ const CSS = `
   align-items: center;
   margin-top: 12px;
 }
+.${PANEL_ID}-input-row {
+  margin-top: 8px;
+}
 .${PANEL_ID}-input {
   flex: 1;
   min-width: 0;
-  border: 1px solid color-mix(in srgb, var(--border-color, rgba(128, 128, 128, 0.2)) 78%, #97bbff 22%);
-  border-radius: 12px;
-  padding: 9px 12px;
-  background: color-mix(in srgb, var(--bg-color, #fff) 98%, #f8fbff 2%);
+  border: 1px solid var(--border-color, rgba(128, 128, 128, 0.12));
+  border-radius: 8px;
+  padding: 6px 10px;
+  background: transparent;
   color: inherit;
   font: inherit;
+  font-size: 12px;
 }
 @media (max-width: 900px) {
   #${PANEL_ID}-header,
@@ -880,13 +809,6 @@ function withoutMarkdownExt(input: string): string {
   return input.replace(/\.(md|markdown)$/i, '')
 }
 
-function firstString(...values: unknown[]): string {
-  for (const value of values) {
-    if (typeof value === 'string' && value.trim()) return value.trim()
-  }
-  return ''
-}
-
 function escapeHtml(text: string): string {
   return text.replace(/[&<>"']/g, ch => (
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch] ?? ch
@@ -904,23 +826,17 @@ export default class NoteAssistantPlugin extends Plugin {
   private titleEl: HTMLDivElement | null = null
   private subtitleEl: HTMLDivElement | null = null
   private footerEl: HTMLDivElement | null = null
-  private panelStatusEl: HTMLDivElement | null = null
   private panelStatusBadgesEl: HTMLDivElement | null = null
   private panelStatusHintEl: HTMLDivElement | null = null
   private panelVaultEl: HTMLDivElement | null = null
-  private editorOverlay: HTMLDivElement | null = null
   private editorTextarea: HTMLTextAreaElement | null = null
   private editorInfoEl: HTMLDivElement | null = null
   private panelCloseBtn: HTMLButtonElement | null = null
   private panelSaveBtn: HTMLButtonElement | null = null
   private panelSaveRefreshBtn: HTMLButtonElement | null = null
   private panelRefreshBtn: HTMLButtonElement | null = null
-  private panelRebuildBtn: HTMLButtonElement | null = null
-  private panelEditBtn: HTMLButtonElement | null = null
-  private panelUpdateBtn: HTMLButtonElement | null = null
-  private editorCancelBtn: HTMLButtonElement | null = null
-  private editorSaveBtn: HTMLButtonElement | null = null
-  private editorSaveRefreshBtn: HTMLButtonElement | null = null
+  private panelVisualTab: HTMLButtonElement | null = null
+  private panelSourceTab: HTMLButtonElement | null = null
   private graphCache: GraphFile | null = null
   private graphPath = ''
   private graphRoot = ''
@@ -1027,7 +943,6 @@ export default class NoteAssistantPlugin extends Plugin {
     this.titleEl = null
     this.subtitleEl = null
     this.footerEl = null
-    this.panelStatusEl = null
     this.panelStatusBadgesEl = null
     this.panelStatusHintEl = null
     this.panelVaultEl = null
@@ -1035,9 +950,8 @@ export default class NoteAssistantPlugin extends Plugin {
     this.panelSaveBtn = null
     this.panelSaveRefreshBtn = null
     this.panelRefreshBtn = null
-    this.panelRebuildBtn = null
-    this.panelEditBtn = null
-    this.panelUpdateBtn = null
+    this.panelVisualTab = null
+    this.panelSourceTab = null
     this.editorTextarea = null
     this.editorInfoEl = null
     this.panelMode = 'visual'
@@ -1071,15 +985,20 @@ export default class NoteAssistantPlugin extends Plugin {
     titleWrap.appendChild(title)
     titleWrap.appendChild(subtitle)
 
+    const modeTabs = document.createElement('div')
+    modeTabs.className = `${PANEL_ID}-mode-tabs`
+    this.panelVisualTab = this.makeModeButton('Visual', 'visual')
+    this.panelSourceTab = this.makeModeButton('Source', 'source')
+    modeTabs.appendChild(this.panelVisualTab)
+    modeTabs.appendChild(this.panelSourceTab)
+
     const actions = document.createElement('div')
     actions.id = `${PANEL_ID}-actions`
-    this.panelRefreshBtn = this.makeButton('Refresh Suggestions', () => void this.rebuildGraph(), { variant: 'quiet' })
-    this.panelRebuildBtn = null
-    this.panelEditBtn = null
-    this.panelUpdateBtn = null
+    this.panelRefreshBtn = this.makeButton('Refresh', () => void this.rebuildGraph(), { variant: 'quiet' })
     actions.appendChild(this.panelRefreshBtn)
 
     header.appendChild(titleWrap)
+    header.appendChild(modeTabs)
     header.appendChild(actions)
 
     const body = document.createElement('div')
@@ -1124,7 +1043,6 @@ export default class NoteAssistantPlugin extends Plugin {
     this.titleEl = title
     this.subtitleEl = subtitle
     this.footerEl = footer
-    this.panelStatusEl = status
     this.panelStatusBadgesEl = badges
     this.panelStatusHintEl = hint
     this.panelVaultEl = vault
@@ -1263,9 +1181,8 @@ export default class NoteAssistantPlugin extends Plugin {
 
     this.selectionMap.clear()
     this.bodyEl.innerHTML = ''
+    this.updateModeTabState()
 
-    this.bodyEl.appendChild(this.renderWorkspaceHero(currentFile, relPath, note, graph))
-    this.bodyEl.appendChild(this.renderModeSwitch())
     if (this.panelMode === 'visual') {
       this.bodyEl.appendChild(this.renderCurrentBlockSection(currentFile))
       this.bodyEl.appendChild(this.renderSuggestionsWorkspaceSection(note, graph, currentFile))
@@ -1348,58 +1265,6 @@ export default class NoteAssistantPlugin extends Plugin {
     }
   }
 
-  private renderWorkspaceHero(
-    _currentFile: string,
-    _relPath: string,
-    note: GraphNote | null,
-    graph: GraphFile | null,
-  ): HTMLElement {
-    const section = document.createElement('section')
-    section.className = `${PANEL_ID}-section ${PANEL_ID}-hero`
-
-    const tags = document.createElement('div')
-    tags.className = `${PANEL_ID}-hero-tags`
-    for (const tag of this.panelDraft.tags.slice(0, 8)) {
-      tags.appendChild(this.makeBadge(`#${tag}`))
-    }
-    if (tags.childElementCount) section.appendChild(tags)
-
-    const stats = document.createElement('div')
-    stats.className = `${PANEL_ID}-hero-stats`
-    const statItems: Array<[string, string | number]> = [
-      ['Tags', this.panelDraft.tags.length],
-      ['Links', this.panelDraft.items.length],
-      ['Indexed', graph ? graph.stats.totalNotes : 'n/a'],
-      ['Graph', graph ? (note ? 'ready' : 'pending') : 'missing'],
-    ]
-    for (const [label, value] of statItems) {
-      const stat = document.createElement('div')
-      stat.className = `${PANEL_ID}-hero-stat`
-      const strong = document.createElement('strong')
-      strong.textContent = String(value)
-      const span = document.createElement('span')
-      span.textContent = label
-      stat.appendChild(strong)
-      stat.appendChild(span)
-      stats.appendChild(stat)
-    }
-    section.appendChild(stats)
-
-    return section
-  }
-
-  private renderModeSwitch(): HTMLElement {
-    const wrap = document.createElement('section')
-    wrap.className = `${PANEL_ID}-section ${PANEL_ID}-mode-section`
-
-    const tabs = document.createElement('div')
-    tabs.className = `${PANEL_ID}-mode-tabs`
-    tabs.appendChild(this.makeModeButton('Visual', 'visual'))
-    tabs.appendChild(this.makeModeButton('Source', 'source'))
-    wrap.appendChild(tabs)
-    return wrap
-  }
-
   private makeModeButton(label: string, mode: PanelMode): HTMLButtonElement {
     const button = this.makeButton(label, () => this.setPanelMode(mode), { variant: 'quiet' })
     button.classList.add(`${PANEL_ID}-mode-btn`)
@@ -1407,6 +1272,11 @@ export default class NoteAssistantPlugin extends Plugin {
       button.classList.add(`${PANEL_ID}-mode-btn-active`)
     }
     return button
+  }
+
+  private updateModeTabState(): void {
+    this.panelVisualTab?.classList.toggle(`${PANEL_ID}-mode-btn-active`, this.panelMode === 'visual')
+    this.panelSourceTab?.classList.toggle(`${PANEL_ID}-mode-btn-active`, this.panelMode === 'source')
   }
 
   private setPanelMode(mode: PanelMode): void {
@@ -1424,13 +1294,6 @@ export default class NoteAssistantPlugin extends Plugin {
     const section = document.createElement('section')
     section.className = `${PANEL_ID}-section`
     section.appendChild(this.makeSectionHeading('Current Block', this.panelDraft.items.length))
-
-    const helper = document.createElement('div')
-    helper.className = `${PANEL_ID}-workspace-helper`
-    helper.textContent = this.panelHasExistingBlock
-      ? 'These are the relationships currently stored in the document block.'
-      : 'No relationship block exists yet. Changes here will create one when you save.'
-    section.appendChild(helper)
 
     const tagWrap = document.createElement('div')
     tagWrap.className = `${PANEL_ID}-workspace-group`
@@ -1479,11 +1342,6 @@ export default class NoteAssistantPlugin extends Plugin {
     section.className = `${PANEL_ID}-section`
     section.appendChild(this.makeSectionHeading('Suggestions', note?.related?.length || 0))
 
-    const helper = document.createElement('div')
-    helper.className = `${PANEL_ID}-workspace-helper`
-    helper.textContent = 'Graph suggestions are optional. Add what helps, ignore what does not.'
-    section.appendChild(helper)
-
     if (!graph) {
       const empty = document.createElement('div')
       empty.className = `${PANEL_ID}-workspace-empty`
@@ -1527,11 +1385,6 @@ export default class NoteAssistantPlugin extends Plugin {
     const section = document.createElement('section')
     section.className = `${PANEL_ID}-section`
     section.appendChild(this.makeSectionHeading('Source', 0))
-
-    const helper = document.createElement('div')
-    helper.className = `${PANEL_ID}-workspace-helper`
-    helper.textContent = 'Edit the relationship block directly. Visual mode and Source mode edit the same object.'
-    section.appendChild(helper)
 
     const info = document.createElement('div')
     info.className = `${PANEL_ID}-editor-info`
@@ -1780,7 +1633,8 @@ export default class NoteAssistantPlugin extends Plugin {
     this.panelStatusBadgesEl.appendChild(this.makeFooterBadge(label, state))
 
     const vaultName = platform.path.basename(normalizePath(root)) || root
-    this.panelVaultEl.textContent = `Vault · ${vaultName}`
+    const indexedSuffix = graph ? ` · ${graph.stats.totalNotes} indexed` : ''
+    this.panelVaultEl.textContent = `${vaultName}${indexedSuffix}`
     this.panelVaultEl.title = root
     this.panelStatusHintEl.textContent = `${HOTKEY} · Mod+S · Esc`
   }
@@ -1800,195 +1654,6 @@ export default class NoteAssistantPlugin extends Plugin {
     badge.dataset.state = state
     badge.textContent = label
     return badge
-  }
-
-  private renderMetaSection(note: GraphNote, graph: GraphFile): HTMLElement {
-    const section = document.createElement('section')
-    section.className = `${PANEL_ID}-section ${PANEL_ID}-hero`
-
-    const main = document.createElement('div')
-    main.className = `${PANEL_ID}-hero-main`
-
-    const eyebrow = document.createElement('div')
-    eyebrow.className = `${PANEL_ID}-hero-eyebrow`
-    eyebrow.textContent = 'Current Note'
-
-    const title = document.createElement('div')
-    title.className = `${PANEL_ID}-hero-title`
-    title.textContent = note.title
-
-    const path = document.createElement('div')
-    path.className = `${PANEL_ID}-hero-path`
-    path.textContent = this.currentPanelNoteRelPath || note.relPath
-
-    main.appendChild(eyebrow)
-    main.appendChild(title)
-    main.appendChild(path)
-
-    if (note.tags?.length) {
-      const tags = document.createElement('div')
-      tags.className = `${PANEL_ID}-hero-tags`
-      for (const tag of note.tags.slice(0, 8)) {
-        tags.appendChild(this.makeBadge(`#${tag}`))
-      }
-      main.appendChild(tags)
-    }
-
-    const summary = document.createElement('div')
-    summary.className = `${PANEL_ID}-hero-summary`
-    summary.innerHTML = `
-      <div><strong>Aliases</strong><span>${escapeHtml((note.aliases || []).join(', ') || 'none')}</span></div>
-      <div><strong>Headings</strong><span>${escapeHtml((note.headings || []).slice(0, 4).join(' · ') || 'none')}</span></div>
-      <div><strong>Schema</strong><span>${graph.schemaVersion}</span></div>
-      <div><strong>Generated</strong><span>${escapeHtml(graph.generatedAt)}</span></div>
-    `
-    main.appendChild(summary)
-
-    const stats = document.createElement('div')
-    stats.className = `${PANEL_ID}-hero-stats`
-    const statItems: Array<[string, number]> = [
-      ['Related', note.related?.length || 0],
-      ['Backlinks', note.backlinks?.length || 0],
-      ['Explicit', note.explicitLinks?.length || 0],
-      ['Indexed', graph.stats.totalNotes],
-    ]
-    for (const [label, value] of statItems) {
-      const stat = document.createElement('div')
-      stat.className = `${PANEL_ID}-hero-stat`
-      stat.innerHTML = `<strong>${value}</strong><span>${escapeHtml(label)}</span>`
-      stats.appendChild(stat)
-    }
-
-    section.appendChild(main)
-    section.appendChild(stats)
-    return section
-  }
-
-  private renderLinkSection(label: string, notes: GraphNote[], currentFile: string): HTMLElement {
-    const section = document.createElement('section')
-    section.className = `${PANEL_ID}-section`
-    section.appendChild(this.makeSectionHeading(label, notes.length))
-
-    if (!notes.length) {
-      const empty = document.createElement('div')
-      empty.className = `${PANEL_ID}-status`
-      empty.textContent = `No ${label.toLowerCase()}.`
-      section.appendChild(empty)
-      return section
-    }
-
-    const list = document.createElement('div')
-    list.className = `${PANEL_ID}-list`
-    const sectionKey = `${this.currentPanelNoteRelPath}:${label.toLowerCase().replace(/\s+/g, '-')}`
-    const expanded = this.expandedPanelSections.has(sectionKey)
-    const visibleNotes = expanded ? notes : notes.slice(0, PANEL_COLLAPSE_LIMIT)
-
-    for (const note of visibleNotes) {
-      const item: RelatedItem = {
-        relPath: note.relPath,
-        title: note.title,
-        score: 0,
-        reasons: {},
-      }
-      list.appendChild(this.renderRelatedCard(item, currentFile, false))
-    }
-
-    if (notes.length > PANEL_COLLAPSE_LIMIT) {
-      list.appendChild(this.makePanelSectionToggle(sectionKey, expanded, notes.length))
-    }
-
-    section.appendChild(list)
-    return section
-  }
-
-  private renderRelatedSection(items: RelatedItem[], currentFile: string): HTMLElement {
-    const section = document.createElement('section')
-    section.className = `${PANEL_ID}-section`
-    section.appendChild(this.makeSectionHeading('Suggested Connections', items.length))
-
-    if (!items.length) {
-      const empty = document.createElement('div')
-      empty.className = `${PANEL_ID}-status`
-      empty.textContent = 'No related suggestions found for this note.'
-      section.appendChild(empty)
-      return section
-    }
-
-    const list = document.createElement('div')
-    list.className = `${PANEL_ID}-list`
-    const sectionKey = `${this.currentPanelNoteRelPath}:suggested`
-    const expanded = this.expandedPanelSections.has(sectionKey)
-    const visibleItems = expanded ? items : items.slice(0, PANEL_COLLAPSE_LIMIT)
-
-    for (const item of visibleItems) {
-      list.appendChild(this.renderRelatedCard(item, currentFile, true))
-    }
-
-    if (items.length > PANEL_COLLAPSE_LIMIT) {
-      list.appendChild(this.makePanelSectionToggle(sectionKey, expanded, items.length))
-    }
-
-    section.appendChild(list)
-    return section
-  }
-
-  private renderRelatedCard(item: RelatedItem, currentFile: string, selectable: boolean): HTMLElement {
-    const currentDir = normalizePath(platform.path.dirname(currentFile))
-    const root = this.graphRoot || this.getFallbackRootDir()
-    const absTarget = platform.path.join(root, item.relPath)
-    const relative = withoutMarkdownExt(relPathFromDir(absTarget, currentDir))
-    const note = this.noteMap.get(item.relPath)
-    const badges = this.collectPanelBadges(note, item)
-
-    const card = document.createElement('div')
-    card.className = `${PANEL_ID}-card`
-    card.title = selectable
-      ? `Insert: [[${relative}|${item.title}]]`
-      : item.relPath
-
-    const top = document.createElement('div')
-    top.className = `${PANEL_ID}-row-top`
-
-    if (selectable) {
-      const check = document.createElement('input')
-      check.className = `${PANEL_ID}-check`
-      check.type = 'checkbox'
-      check.checked = this.selectionMap.size < 3
-      this.selectionMap.set(item.relPath, check)
-      top.appendChild(check)
-    }
-
-    const main = document.createElement('div')
-    main.className = `${PANEL_ID}-row-main`
-
-    const title = document.createElement('div')
-    title.className = `${PANEL_ID}-row-title`
-    title.textContent = item.title
-
-    const relPath = document.createElement('div')
-    relPath.className = `${PANEL_ID}-row-path`
-    relPath.textContent = item.relPath
-
-    const meta = document.createElement('div')
-    meta.className = `${PANEL_ID}-row-meta`
-    for (const badge of badges) {
-      meta.appendChild(this.makeBadge(badge))
-    }
-
-    main.appendChild(title)
-    main.appendChild(relPath)
-    if (meta.childElementCount) {
-      main.appendChild(meta)
-    }
-
-    const actions = document.createElement('div')
-    actions.className = `${PANEL_ID}-row-actions`
-    actions.appendChild(this.makeButton('Open', () => void this.openNote(item.relPath), { variant: 'quiet' }))
-
-    top.appendChild(main)
-    top.appendChild(actions)
-    card.appendChild(top)
-    return card
   }
 
   private makeSectionHeading(label: string, count: number): HTMLElement {
@@ -2033,70 +1698,6 @@ export default class NoteAssistantPlugin extends Plugin {
     badge.className = `${PANEL_ID}-badge`
     badge.textContent = label
     return badge
-  }
-
-  private async openNote(relPath: string): Promise<void> {
-    const root = this.graphRoot || this.getFallbackRootDir()
-    if (!root) return
-    try {
-      await editor.openFile(platform.path.join(root, relPath))
-      await this.renderCurrentNote()
-    } catch (err) {
-      console.error('[tpl:note-assistant] openNote failed', err)
-      this.showNotice('Failed to open note')
-    }
-  }
-
-  private insertSelectedLinks(): void {
-    const currentFile = editor.getFilePath()
-    const root = this.graphRoot || this.getFallbackRootDir()
-    if (!currentFile || !root) return
-
-    const currentDir = normalizePath(platform.path.dirname(currentFile))
-    const selected = [...this.selectionMap.entries()]
-      .filter(([, input]) => input.checked)
-      .map(([relPath]) => {
-        const note = this.noteMap.get(relPath)
-        if (!note) return null
-        const relative = withoutMarkdownExt(
-          relPathFromDir(platform.path.join(root, relPath), currentDir),
-        )
-        const related = this.graphCache
-          ? this.noteMap.get(relPath)
-          : null
-        const reason = related?.title ? '' : ''
-        return `- [[${relative}|${note.title}]]${reason}`
-      })
-      .filter(Boolean) as string[]
-
-    if (!selected.length) {
-      this.showNotice('No links selected')
-      return
-    }
-
-    const markdown = editor.getMarkdown()
-    if (!markdown) {
-      this.showNotice('Cannot read document content')
-      return
-    }
-
-    const relPath = relPathFromRoot(currentFile, root)
-    const currentNote = this.noteMap.get(relPath)
-    const tags = (currentNote?.tags || []).slice(0, 5)
-    const lines = [
-      BLOCK_START,
-      '## Note Assistant',
-      '',
-    ]
-    if (tags.length) {
-      lines.push(`Tags: ${tags.map(tag => `#${tag}`).join(' ')}`, '')
-    }
-    lines.push('Related Notes:', ...selected, '', BLOCK_END, '')
-
-    const next = replaceNoteAssistantBlock(markdown, lines.join('\n'))
-    editor.setMarkdown(next)
-    this.showNotice(`Updated block with ${selected.length} links`)
-    window.setTimeout(() => this.scheduleProcess(), 60)
   }
 
   private reparseDocument(): void {
@@ -2144,11 +1745,6 @@ export default class NoteAssistantPlugin extends Plugin {
       this.rebuildInFlight = false
       this.setPanelBusyState(false)
     }
-  }
-
-  private setFooter(root: string, detail: string): void {
-    if (!this.footerEl) return
-    this.footerEl.innerHTML = `<div>${escapeHtml(root)}</div><div>${escapeHtml(detail)}</div>`
   }
 
   private processNoteAssistantBlocks(root: HTMLElement): void {
@@ -2469,48 +2065,10 @@ export default class NoteAssistantPlugin extends Plugin {
     return button
   }
 
-  private openBlockEditor(key = ''): void {
-    const initialMarkdown = this.overlay
-      ? this.composeNoteAssistantBlock(this.panelDraft)
-      : this.getEditableBlockMarkdown(key)
-    this.logChannel('inline', 'open source mode', { key, hasExistingBlock: !!initialMarkdown.trim() })
-    this.panelMode = 'source'
-    this.panelSourceDraft = initialMarkdown
-    this.panelDraft = this.normalizeParsedBlock(this.parseBlockMarkdown(initialMarkdown))
-    this.panelDraftDirty = false
-    if (!this.overlay) {
-      void this.openPanelMode('source')
-      return
-    }
-    void this.renderCurrentNote()
-  }
-
   private closeBlockEditor(): void {
-    this.editorOverlay = null
     this.editorTextarea = null
     this.editorInfoEl = null
-    this.editorCancelBtn = null
-    this.editorSaveBtn = null
-    this.editorSaveRefreshBtn = null
     this.editorSaveInFlight = false
-  }
-
-  private getEditableBlockMarkdown(key = ''): string {
-    if (key && this.writeEl) {
-      const sourceBlocks = Array.from(
-        this.writeEl.querySelectorAll<HTMLElement>(`.tpl-note-assistant-source[data-tpl-note-key="${key}"]`),
-      )
-      if (sourceBlocks.length) {
-        const parsed = this.parseInlineBlock(sourceBlocks)
-        return this.composeNoteAssistantBlock(parsed)
-      }
-    }
-
-    const markdown = editor.getMarkdown() || ''
-    const existing = markdown.match(/<!-- note-assistant:start -->[\s\S]*?<!-- note-assistant:end -->/)
-    if (existing?.[0]) return existing[0].trim()
-
-    return this.buildDefaultBlockMarkdown()
   }
 
   private buildDefaultBlockMarkdown(): string {
@@ -2733,18 +2291,6 @@ export default class NoteAssistantPlugin extends Plugin {
       || !!node.closest('.tpl-note-assistant-inline')
   }
 
-  private log(message: string, data?: unknown): void {
-    this.writeLog('core', 'info', message, data)
-  }
-
-  private debug(message: string, data?: unknown): void {
-    this.writeLog('core', 'debug', message, data)
-  }
-
-  private warn(message: string, data?: unknown): void {
-    this.writeLog('core', 'warn', message, data)
-  }
-
   private logChannel(channel: string, message: string, data?: unknown): void {
     this.writeLog(channel, 'info', message, data)
   }
@@ -2775,10 +2321,6 @@ export default class NoteAssistantPlugin extends Plugin {
 
 function isTagsParagraph(el: HTMLElement): boolean {
   return el.matches('p') && (el.textContent || '').trim().startsWith('Tags:')
-}
-
-function isRelatedLabel(el: HTMLElement): boolean {
-  return el.matches('p') && (el.textContent || '').trim() === 'Related Notes:'
 }
 
 function extractNoteAssistantBlock(markdown: string): string | null {
