@@ -70,6 +70,8 @@ const BUILD_SCRIPT = 'tools/note-assistant/build-graph.mjs'
 const PANEL_ID = 'tpl-note-assistant'
 const BLOCK_START = '<!-- note-assistant:start -->'
 const BLOCK_END = '<!-- note-assistant:end -->'
+const INLINE_COLLAPSE_LIMIT = 15
+const PANEL_COLLAPSE_LIMIT = 15
 
 const CSS = `
 #${PANEL_ID}-overlay {
@@ -135,6 +137,29 @@ const CSS = `
 }
 .${PANEL_ID}-btn:hover {
   background: rgba(127, 127, 127, 0.08);
+}
+.${PANEL_ID}-btn-primary {
+  border-color: color-mix(in srgb, rgba(83, 124, 255, 0.44) 84%, transparent 16%);
+  background: linear-gradient(180deg, #4f7dff, #3e68e9);
+  color: #fff;
+  box-shadow: 0 10px 24px rgba(79, 125, 255, 0.24);
+}
+.${PANEL_ID}-btn-primary:hover {
+  background: linear-gradient(180deg, #5d88ff, #466fef);
+}
+.${PANEL_ID}-btn-quiet {
+  border-color: transparent;
+  background: transparent;
+  opacity: 0.74;
+}
+.${PANEL_ID}-btn-quiet:hover {
+  opacity: 1;
+  background: rgba(127, 127, 127, 0.08);
+}
+.${PANEL_ID}-btn:disabled {
+  cursor: default;
+  opacity: 0.55;
+  box-shadow: none;
 }
 #${PANEL_ID}-body {
   overflow: auto;
@@ -378,6 +403,306 @@ const CSS = `
   font-size: 13px;
   opacity: 0.66;
 }
+#${PANEL_ID}-overlay {
+  padding-top: 4vh;
+  backdrop-filter: blur(12px);
+  background: rgba(12, 18, 28, 0.48);
+}
+#${PANEL_ID}-panel {
+  width: min(1080px, 95vw);
+  max-height: 88vh;
+  border-radius: 24px;
+  border: 1px solid color-mix(in srgb, var(--border-color, rgba(128, 128, 128, 0.18)) 84%, #8cb4ff 16%);
+  background:
+    radial-gradient(circle at top right, rgba(140, 180, 255, 0.16), transparent 32%),
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-color, #fff) 96%, #f5f8ff 4%), color-mix(in srgb, var(--bg-color, #fff) 98%, #eef3ff 2%));
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.26);
+}
+#${PANEL_ID}-header {
+  padding: 22px 24px 18px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border-color, rgba(128, 128, 128, 0.16)) 78%, #9ebfff 22%);
+}
+#${PANEL_ID}-title {
+  font-size: 24px;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+}
+#${PANEL_ID}-subtitle {
+  font-size: 13px;
+  opacity: 0.7;
+}
+#${PANEL_ID}-body {
+  display: grid;
+  gap: 16px;
+  padding: 18px 22px 24px;
+}
+.${PANEL_ID}-section {
+  margin-top: 0;
+  padding: 16px;
+  border-radius: 20px;
+  border: 1px solid color-mix(in srgb, var(--border-color, rgba(128, 128, 128, 0.14)) 84%, #a9c5ff 16%);
+  background: color-mix(in srgb, var(--bg-color, #fff) 96%, #f8fbff 4%);
+}
+.${PANEL_ID}-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.${PANEL_ID}-section-title {
+  margin: 0;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  opacity: 0.54;
+}
+.${PANEL_ID}-section-count {
+  min-width: 28px;
+  height: 28px;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-color, #fff) 72%, #dfeaff 28%);
+  font-size: 12px;
+  font-weight: 600;
+}
+.${PANEL_ID}-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(220px, 0.9fr);
+  gap: 18px;
+}
+.${PANEL_ID}-hero-main {
+  min-width: 0;
+}
+.${PANEL_ID}-hero-eyebrow {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.52;
+}
+.${PANEL_ID}-hero-title {
+  margin-top: 8px;
+  font-size: 26px;
+  line-height: 1.15;
+  font-weight: 720;
+  word-break: break-word;
+}
+.${PANEL_ID}-hero-path {
+  margin-top: 8px;
+  font-size: 13px;
+  line-height: 1.45;
+  opacity: 0.66;
+  word-break: break-all;
+}
+.${PANEL_ID}-hero-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+.${PANEL_ID}-hero-summary {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+}
+.${PANEL_ID}-hero-summary > div {
+  display: grid;
+  gap: 4px;
+}
+.${PANEL_ID}-hero-summary strong {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.5;
+}
+.${PANEL_ID}-hero-summary span {
+  font-size: 13px;
+  line-height: 1.45;
+  opacity: 0.82;
+  word-break: break-word;
+}
+.${PANEL_ID}-hero-stats {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+.${PANEL_ID}-hero-stat {
+  padding: 14px;
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--bg-color, #fff) 75%, #e7efff 25%);
+  border: 1px solid color-mix(in srgb, rgba(140, 180, 255, 0.2) 80%, transparent 20%);
+}
+.${PANEL_ID}-hero-stat strong {
+  display: block;
+  font-size: 22px;
+  line-height: 1.1;
+}
+.${PANEL_ID}-hero-stat span {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  opacity: 0.68;
+}
+.${PANEL_ID}-list {
+  display: grid;
+  gap: 8px;
+}
+.${PANEL_ID}-section-toggle {
+  justify-self: start;
+  margin-top: 4px;
+}
+.${PANEL_ID}-card {
+  padding: 10px 12px;
+  margin-bottom: 0;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--bg-color, #fff) 98%, #eff5ff 2%);
+}
+.${PANEL_ID}-row-top {
+  gap: 12px;
+}
+.${PANEL_ID}-row-title {
+  margin-bottom: 2px;
+  font-size: 14px;
+}
+.${PANEL_ID}-row-path {
+  font-size: 12px;
+}
+.${PANEL_ID}-row-meta {
+  gap: 6px;
+  margin-top: 6px;
+}
+.${PANEL_ID}-badge {
+  min-height: 22px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-color, #fff) 80%, #dde9ff 20%);
+  font-size: 11px;
+}
+.${PANEL_ID}-row-actions .${PANEL_ID}-btn {
+  padding: 6px 9px;
+}
+#write .tpl-note-assistant-inline {
+  padding: 14px 14px 12px;
+  border-radius: 16px;
+}
+#write .tpl-note-assistant-inline-header {
+  align-items: center;
+}
+#write .tpl-note-assistant-inline-title {
+  font-size: 16px;
+}
+#write .tpl-note-assistant-inline-subtitle {
+  margin-top: 4px;
+}
+#write .tpl-note-assistant-inline-list {
+  gap: 8px;
+  margin-top: 14px;
+}
+#write .tpl-note-assistant-inline-card {
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+}
+#write .tpl-note-assistant-inline-card-title {
+  font-size: 14px;
+}
+#write .tpl-note-assistant-inline-card-path {
+  margin-top: 2px;
+  font-size: 11px;
+}
+#write .tpl-note-assistant-inline-card-meta {
+  margin-top: 6px;
+}
+#write .tpl-note-assistant-inline-card-reason {
+  display: none;
+}
+#write .tpl-note-assistant-inline-open {
+  padding-top: 2px;
+  font-size: 11px;
+}
+#write .tpl-note-assistant-inline-toggle {
+  justify-self: start;
+  margin-top: 4px;
+}
+#${PANEL_ID}-editor-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 99999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(10, 14, 22, 0.58);
+  backdrop-filter: blur(10px);
+}
+#${PANEL_ID}-editor-panel {
+  width: min(880px, 94vw);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 22px;
+  border: 1px solid color-mix(in srgb, var(--border-color, rgba(128, 128, 128, 0.2)) 80%, #97bbff 20%);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-color, #fff) 96%, #f5f9ff 4%), color-mix(in srgb, var(--bg-color, #fff) 99%, #eef3ff 1%));
+  box-shadow: 0 28px 72px rgba(0, 0, 0, 0.28);
+}
+.${PANEL_ID}-editor-header {
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border-color, rgba(128, 128, 128, 0.16)) 78%, #9ebfff 22%);
+}
+.${PANEL_ID}-editor-title {
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+.${PANEL_ID}-editor-subtitle {
+  margin-top: 6px;
+  font-size: 12px;
+  opacity: 0.68;
+  line-height: 1.45;
+}
+.${PANEL_ID}-editor-body {
+  display: grid;
+  gap: 12px;
+  padding: 16px 20px 20px;
+}
+.${PANEL_ID}-editor-info {
+  font-size: 12px;
+  opacity: 0.66;
+  word-break: break-all;
+}
+.${PANEL_ID}-editor-textarea {
+  width: 100%;
+  min-height: min(58vh, 560px);
+  resize: vertical;
+  border: 1px solid color-mix(in srgb, var(--border-color, rgba(128, 128, 128, 0.2)) 78%, #97bbff 22%);
+  border-radius: 16px;
+  padding: 14px 16px;
+  background: color-mix(in srgb, var(--bg-color, #fff) 98%, #f8fbff 2%);
+  color: inherit;
+  font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace;
+}
+.${PANEL_ID}-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+@media (max-width: 900px) {
+  .${PANEL_ID}-hero {
+    grid-template-columns: 1fr;
+  }
+  #${PANEL_ID}-header,
+  #${PANEL_ID}-body {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+}
 `
 
 function normalizePath(input: string): string {
@@ -454,7 +779,6 @@ export default class NoteAssistantPlugin extends Plugin {
   private observer: MutationObserver | null = null
   private rafId = 0
   private writeEl: HTMLElement | null = null
-  private pendingInlineFocusKey = ''
   private observerConnected = false
   private processRunId = 0
   private overlay: HTMLDivElement | null = null
@@ -462,12 +786,26 @@ export default class NoteAssistantPlugin extends Plugin {
   private titleEl: HTMLDivElement | null = null
   private subtitleEl: HTMLDivElement | null = null
   private footerEl: HTMLDivElement | null = null
+  private editorOverlay: HTMLDivElement | null = null
+  private editorTextarea: HTMLTextAreaElement | null = null
+  private editorInfoEl: HTMLDivElement | null = null
+  private panelRefreshBtn: HTMLButtonElement | null = null
+  private panelRebuildBtn: HTMLButtonElement | null = null
+  private panelEditBtn: HTMLButtonElement | null = null
+  private panelUpdateBtn: HTMLButtonElement | null = null
+  private editorCancelBtn: HTMLButtonElement | null = null
+  private editorSaveBtn: HTMLButtonElement | null = null
+  private editorSaveRefreshBtn: HTMLButtonElement | null = null
   private graphCache: GraphFile | null = null
   private graphPath = ''
   private graphRoot = ''
   private graphMtime = 0
   private noteMap: Map<string, GraphNote> = new Map()
   private selectionMap = new Map<string, HTMLInputElement>()
+  private expandedInlineKeys = new Set<string>()
+  private expandedPanelSections = new Set<string>()
+  private currentPanelNoteRelPath = ''
+  private editorSaveInFlight = false
   private rebuildInFlight = false
   private keydownHandler: ((evt: KeyboardEvent) => void) | null = null
 
@@ -538,6 +876,7 @@ export default class NoteAssistantPlugin extends Plugin {
 
   private close(): void {
     this.selectionMap.clear()
+    this.closeBlockEditor()
     if (this.keydownHandler) {
       window.removeEventListener('keydown', this.keydownHandler)
       this.keydownHandler = null
@@ -548,6 +887,10 @@ export default class NoteAssistantPlugin extends Plugin {
     this.titleEl = null
     this.subtitleEl = null
     this.footerEl = null
+    this.panelRefreshBtn = null
+    this.panelRebuildBtn = null
+    this.panelEditBtn = null
+    this.panelUpdateBtn = null
   }
 
   private buildModal(): void {
@@ -577,9 +920,14 @@ export default class NoteAssistantPlugin extends Plugin {
 
     const actions = document.createElement('div')
     actions.id = `${PANEL_ID}-actions`
-    actions.appendChild(this.makeButton('Refresh', () => void this.renderCurrentNote(true)))
-    actions.appendChild(this.makeButton('Rebuild Graph', () => void this.rebuildGraph()))
-    actions.appendChild(this.makeButton('Update Block', () => this.insertSelectedLinks()))
+    this.panelRefreshBtn = this.makeButton('Refresh', () => void this.renderCurrentNote(true), { variant: 'quiet' })
+    this.panelRebuildBtn = this.makeButton('Rebuild Graph', () => void this.rebuildGraph(), { variant: 'quiet' })
+    this.panelEditBtn = this.makeButton('Edit Block', () => this.openBlockEditor())
+    this.panelUpdateBtn = this.makeButton('Update Block', () => this.insertSelectedLinks(), { variant: 'primary' })
+    actions.appendChild(this.panelRefreshBtn)
+    actions.appendChild(this.panelRebuildBtn)
+    actions.appendChild(this.panelEditBtn)
+    actions.appendChild(this.panelUpdateBtn)
 
     header.appendChild(titleWrap)
     header.appendChild(actions)
@@ -604,17 +952,36 @@ export default class NoteAssistantPlugin extends Plugin {
     this.footerEl = footer
 
     this.keydownHandler = (evt: KeyboardEvent) => {
-      if (evt.key === 'Escape') this.close()
+      if ((evt.metaKey || evt.ctrlKey) && evt.key.toLowerCase() === 's' && this.editorOverlay) {
+        evt.preventDefault()
+        void this.saveBlockEditor(false)
+        return
+      }
+      if (evt.key === 'Escape') {
+        if (this.editorOverlay) {
+          this.closeBlockEditor()
+          return
+        }
+        this.close()
+      }
     }
     window.addEventListener('keydown', this.keydownHandler)
   }
 
-  private makeButton(label: string, onClick: () => void): HTMLButtonElement {
+  private makeButton(
+    label: string,
+    onClick: () => void,
+    options: { variant?: 'primary' | 'quiet' } = {},
+  ): HTMLButtonElement {
     const btn = document.createElement('button')
     btn.className = `${PANEL_ID}-btn`
+    if (options.variant === 'primary') btn.classList.add(`${PANEL_ID}-btn-primary`)
+    if (options.variant === 'quiet') btn.classList.add(`${PANEL_ID}-btn-quiet`)
     btn.textContent = label
+    btn.dataset.label = label
     btn.addEventListener('click', evt => {
       evt.preventDefault()
+      if (btn.disabled) return
       onClick()
     })
     return btn
@@ -714,6 +1081,7 @@ export default class NoteAssistantPlugin extends Plugin {
 
     const relPath = relPathFromRoot(currentFile, root)
     const note = graph ? this.noteMap.get(relPath) : null
+    this.currentPanelNoteRelPath = relPath
 
     this.titleEl.textContent = note?.title || platform.path.basename(currentFile)
     this.subtitleEl.textContent = relPath
@@ -759,26 +1127,70 @@ export default class NoteAssistantPlugin extends Plugin {
 
   private renderMetaSection(note: GraphNote, graph: GraphFile): HTMLElement {
     const section = document.createElement('section')
-    section.className = `${PANEL_ID}-section`
-    section.innerHTML = `
-      <div class="${PANEL_ID}-section-title">Current Note</div>
-      <div class="${PANEL_ID}-card">
-        <div class="${PANEL_ID}-row-title">${escapeHtml(note.title)}</div>
-        <div class="${PANEL_ID}-reasons">
-          tags: ${escapeHtml((note.tags || []).join(', ') || 'none')}<br>
-          aliases: ${escapeHtml((note.aliases || []).join(', ') || 'none')}<br>
-          headings: ${escapeHtml((note.headings || []).slice(0, 4).join(' · ') || 'none')}<br>
-          graph schema: ${graph.schemaVersion}
-        </div>
-      </div>
+    section.className = `${PANEL_ID}-section ${PANEL_ID}-hero`
+
+    const main = document.createElement('div')
+    main.className = `${PANEL_ID}-hero-main`
+
+    const eyebrow = document.createElement('div')
+    eyebrow.className = `${PANEL_ID}-hero-eyebrow`
+    eyebrow.textContent = 'Current Note'
+
+    const title = document.createElement('div')
+    title.className = `${PANEL_ID}-hero-title`
+    title.textContent = note.title
+
+    const path = document.createElement('div')
+    path.className = `${PANEL_ID}-hero-path`
+    path.textContent = this.currentPanelNoteRelPath || note.relPath
+
+    main.appendChild(eyebrow)
+    main.appendChild(title)
+    main.appendChild(path)
+
+    if (note.tags?.length) {
+      const tags = document.createElement('div')
+      tags.className = `${PANEL_ID}-hero-tags`
+      for (const tag of note.tags.slice(0, 8)) {
+        tags.appendChild(this.makeBadge(`#${tag}`))
+      }
+      main.appendChild(tags)
+    }
+
+    const summary = document.createElement('div')
+    summary.className = `${PANEL_ID}-hero-summary`
+    summary.innerHTML = `
+      <div><strong>Aliases</strong><span>${escapeHtml((note.aliases || []).join(', ') || 'none')}</span></div>
+      <div><strong>Headings</strong><span>${escapeHtml((note.headings || []).slice(0, 4).join(' · ') || 'none')}</span></div>
+      <div><strong>Schema</strong><span>${graph.schemaVersion}</span></div>
+      <div><strong>Generated</strong><span>${escapeHtml(graph.generatedAt)}</span></div>
     `
+    main.appendChild(summary)
+
+    const stats = document.createElement('div')
+    stats.className = `${PANEL_ID}-hero-stats`
+    const statItems: Array<[string, number]> = [
+      ['Related', note.related?.length || 0],
+      ['Backlinks', note.backlinks?.length || 0],
+      ['Explicit', note.explicitLinks?.length || 0],
+      ['Indexed', graph.stats.totalNotes],
+    ]
+    for (const [label, value] of statItems) {
+      const stat = document.createElement('div')
+      stat.className = `${PANEL_ID}-hero-stat`
+      stat.innerHTML = `<strong>${value}</strong><span>${escapeHtml(label)}</span>`
+      stats.appendChild(stat)
+    }
+
+    section.appendChild(main)
+    section.appendChild(stats)
     return section
   }
 
   private renderLinkSection(label: string, notes: GraphNote[], currentFile: string): HTMLElement {
     const section = document.createElement('section')
     section.className = `${PANEL_ID}-section`
-    section.innerHTML = `<div class="${PANEL_ID}-section-title">${escapeHtml(label)}</div>`
+    section.appendChild(this.makeSectionHeading(label, notes.length))
 
     if (!notes.length) {
       const empty = document.createElement('div')
@@ -788,22 +1200,34 @@ export default class NoteAssistantPlugin extends Plugin {
       return section
     }
 
-    for (const note of notes.slice(0, 10)) {
+    const list = document.createElement('div')
+    list.className = `${PANEL_ID}-list`
+    const sectionKey = `${this.currentPanelNoteRelPath}:${label.toLowerCase().replace(/\s+/g, '-')}`
+    const expanded = this.expandedPanelSections.has(sectionKey)
+    const visibleNotes = expanded ? notes : notes.slice(0, PANEL_COLLAPSE_LIMIT)
+
+    for (const note of visibleNotes) {
       const item: RelatedItem = {
         relPath: note.relPath,
         title: note.title,
         score: 0,
         reasons: {},
       }
-      section.appendChild(this.renderRelatedCard(item, currentFile, false))
+      list.appendChild(this.renderRelatedCard(item, currentFile, false))
     }
+
+    if (notes.length > PANEL_COLLAPSE_LIMIT) {
+      list.appendChild(this.makePanelSectionToggle(sectionKey, expanded, notes.length))
+    }
+
+    section.appendChild(list)
     return section
   }
 
   private renderRelatedSection(items: RelatedItem[], currentFile: string): HTMLElement {
     const section = document.createElement('section')
     section.className = `${PANEL_ID}-section`
-    section.innerHTML = `<div class="${PANEL_ID}-section-title">Suggested Connections</div>`
+    section.appendChild(this.makeSectionHeading('Suggested Connections', items.length))
 
     if (!items.length) {
       const empty = document.createElement('div')
@@ -813,9 +1237,21 @@ export default class NoteAssistantPlugin extends Plugin {
       return section
     }
 
-    for (const item of items) {
-      section.appendChild(this.renderRelatedCard(item, currentFile, true))
+    const list = document.createElement('div')
+    list.className = `${PANEL_ID}-list`
+    const sectionKey = `${this.currentPanelNoteRelPath}:suggested`
+    const expanded = this.expandedPanelSections.has(sectionKey)
+    const visibleItems = expanded ? items : items.slice(0, PANEL_COLLAPSE_LIMIT)
+
+    for (const item of visibleItems) {
+      list.appendChild(this.renderRelatedCard(item, currentFile, true))
     }
+
+    if (items.length > PANEL_COLLAPSE_LIMIT) {
+      list.appendChild(this.makePanelSectionToggle(sectionKey, expanded, items.length))
+    }
+
+    section.appendChild(list)
     return section
   }
 
@@ -824,9 +1260,14 @@ export default class NoteAssistantPlugin extends Plugin {
     const root = this.graphRoot || this.getFallbackRootDir()
     const absTarget = platform.path.join(root, item.relPath)
     const relative = withoutMarkdownExt(relPathFromDir(absTarget, currentDir))
+    const note = this.noteMap.get(item.relPath)
+    const badges = this.collectPanelBadges(note, item)
 
     const card = document.createElement('div')
     card.className = `${PANEL_ID}-card`
+    card.title = selectable
+      ? `Insert: [[${relative}|${item.title}]]`
+      : item.relPath
 
     const top = document.createElement('div')
     top.className = `${PANEL_ID}-row-top`
@@ -853,31 +1294,61 @@ export default class NoteAssistantPlugin extends Plugin {
 
     const meta = document.createElement('div')
     meta.className = `${PANEL_ID}-row-meta`
-    if (item.score) meta.appendChild(this.makeBadge(`score ${item.score}`))
-    if (item.reasons.explicitLink) meta.appendChild(this.makeBadge('explicit'))
-    if (item.reasons.backlink) meta.appendChild(this.makeBadge('backlink'))
-    if (item.reasons.sameDirectory) meta.appendChild(this.makeBadge('same dir'))
-    if (item.reasons.sameTopLevel) meta.appendChild(this.makeBadge('same top'))
-
-    const reasons = document.createElement('div')
-    reasons.className = `${PANEL_ID}-reasons`
-    reasons.textContent = item.reasons.sharedTerms?.length
-      ? `shared: ${item.reasons.sharedTerms.slice(0, 6).join(', ')}`
-      : `insert: [[${relative}|${item.title}]]`
+    for (const badge of badges) {
+      meta.appendChild(this.makeBadge(badge))
+    }
 
     main.appendChild(title)
     main.appendChild(relPath)
-    main.appendChild(meta)
-    main.appendChild(reasons)
+    if (meta.childElementCount) {
+      main.appendChild(meta)
+    }
 
     const actions = document.createElement('div')
     actions.className = `${PANEL_ID}-row-actions`
-    actions.appendChild(this.makeButton('Open', () => void this.openNote(item.relPath)))
+    actions.appendChild(this.makeButton('Open', () => void this.openNote(item.relPath), { variant: 'quiet' }))
 
     top.appendChild(main)
     top.appendChild(actions)
     card.appendChild(top)
     return card
+  }
+
+  private makeSectionHeading(label: string, count: number): HTMLElement {
+    const header = document.createElement('div')
+    header.className = `${PANEL_ID}-section-header`
+    header.innerHTML = `
+      <div class="${PANEL_ID}-section-title">${escapeHtml(label)}</div>
+      <div class="${PANEL_ID}-section-count">${count}</div>
+    `
+    return header
+  }
+
+  private makePanelSectionToggle(sectionKey: string, expanded: boolean, total: number): HTMLButtonElement {
+    const hiddenCount = Math.max(0, total - PANEL_COLLAPSE_LIMIT)
+    const button = this.makeButton(
+      expanded ? 'Collapse' : `Show ${hiddenCount} More`,
+      () => {
+        if (expanded) this.expandedPanelSections.delete(sectionKey)
+        else this.expandedPanelSections.add(sectionKey)
+        void this.renderCurrentNote()
+      },
+      { variant: 'quiet' },
+    )
+    button.classList.add(`${PANEL_ID}-section-toggle`)
+    return button
+  }
+
+  private collectPanelBadges(note: GraphNote | undefined, item: RelatedItem): string[] {
+    const values = [
+      ...(note?.tags || []).slice(0, 3).map(tag => `#${tag}`),
+      ...(item.reasons.sharedTerms || []).slice(0, 3),
+      item.reasons.explicitLink ? 'explicit' : '',
+      item.reasons.backlink ? 'backlink' : '',
+      item.reasons.sameDirectory ? 'same dir' : '',
+      item.reasons.sameTopLevel ? 'same top' : '',
+    ].filter(Boolean)
+    return [...new Set(values)].slice(0, 4)
   }
 
   private makeBadge(label: string): HTMLElement {
@@ -962,28 +1433,39 @@ export default class NoteAssistantPlugin extends Plugin {
     window.setTimeout(() => this.scheduleProcess(), 60)
   }
 
-  private async rebuildGraph(): Promise<void> {
-    if (this.rebuildInFlight) return
+  private async rebuildGraph(options: {
+    onStatus?: (message: string) => void
+    quietNotice?: boolean
+  } = {}): Promise<boolean> {
+    if (this.rebuildInFlight) return false
 
     const located = await this.findUpwardsForFile(BUILD_SCRIPT)
     if (!located) {
-      this.showNotice(`Missing ${BUILD_SCRIPT}`)
-      return
+      options.onStatus?.(`Missing ${BUILD_SCRIPT}`)
+      if (!options.quietNotice) this.showNotice(`Missing ${BUILD_SCRIPT}`)
+      return false
     }
 
     this.rebuildInFlight = true
-    this.showNotice('Rebuilding note graph...')
+    this.setPanelBusyState(true)
+    options.onStatus?.('Running graph rebuild...')
+    if (!options.quietNotice) this.showNotice('Rebuilding note graph...')
     try {
       const cmd = `node ${platform.shell.escape(located.absPath)} --root ${platform.shell.escape(located.root)}`
       await platform.shell.run(cmd, { cwd: located.root, timeout: 120_000 })
+      options.onStatus?.('Reloading refreshed graph...')
       this.graphCache = null
       await this.renderCurrentNote(true)
-      this.showNotice('Graph rebuilt')
+      if (!options.quietNotice) this.showNotice('Graph rebuilt')
+      return true
     } catch (err) {
       console.error('[tpl:note-assistant] rebuildGraph failed', err)
-      this.showNotice('Graph rebuild failed')
+      options.onStatus?.('Graph rebuild failed')
+      if (!options.quietNotice) this.showNotice('Graph rebuild failed')
+      return false
     } finally {
       this.rebuildInFlight = false
+      this.setPanelBusyState(false)
     }
   }
 
@@ -1018,8 +1500,6 @@ export default class NoteAssistantPlugin extends Plugin {
 
         const key = startBlock.getAttribute('cid') || `note-assistant-${startIndex}`
         const sourceBlocks = blocks.slice(startIndex, endIndex + 1)
-        const editing = sourceBlocks.some(block => this.isEditingSourceBlock(block))
-          || this.pendingInlineFocusKey === key
 
         hasBlock = true
         startComment.classList.add('tpl-note-assistant-comment')
@@ -1028,18 +1508,14 @@ export default class NoteAssistantPlugin extends Plugin {
         for (const block of sourceBlocks) {
           block.classList.add('tpl-note-assistant-source')
           block.dataset.tplNoteKey = key
-          if (!editing) {
-            block.classList.add('tpl-note-assistant-source-hidden')
-          }
+          block.classList.add('tpl-note-assistant-source-hidden')
         }
 
-        if (!editing) {
-          const currentFile = editor.getFilePath()
-          const parsed = this.parseInlineBlock(sourceBlocks)
-          const panel = this.renderInlineBlock(parsed, key, currentFile)
-          endBlock.insertAdjacentElement('afterend', panel)
-          renderedPanels += 1
-        }
+        const currentFile = editor.getFilePath()
+        const parsed = this.parseInlineBlock(sourceBlocks)
+        const panel = this.renderInlineBlock(parsed, key, currentFile)
+        endBlock.insertAdjacentElement('afterend', panel)
+        renderedPanels += 1
       }
 
       root.classList.toggle('tpl-has-note-assistant-block', hasBlock)
@@ -1066,12 +1542,6 @@ export default class NoteAssistantPlugin extends Plugin {
       )
       delete (el as HTMLElement).dataset.tplNoteKey
     })
-  }
-
-  private isEditingSourceBlock(block: HTMLElement): boolean {
-    if (block.classList.contains('md-focus') || block.classList.contains('md-focus-container')) return true
-    if (block.querySelector('.md-focus, .md-focus-container')) return true
-    return document.activeElement instanceof Node && block.contains(document.activeElement)
   }
 
   private parseInlineBlock(sourceBlocks: HTMLElement[]): ParsedInlineBlock {
@@ -1121,6 +1591,8 @@ export default class NoteAssistantPlugin extends Plugin {
     const panel = document.createElement('section')
     panel.className = 'tpl-note-assistant-inline'
     panel.setAttribute('contenteditable', 'false')
+    const expanded = this.expandedInlineKeys.has(key)
+    const visibleItems = expanded ? data.items : data.items.slice(0, INLINE_COLLAPSE_LIMIT)
 
     const header = document.createElement('div')
     header.className = 'tpl-note-assistant-inline-header'
@@ -1135,7 +1607,9 @@ export default class NoteAssistantPlugin extends Plugin {
     const subtitle = document.createElement('div')
     subtitle.className = 'tpl-note-assistant-inline-subtitle'
     subtitle.textContent = data.items.length
-      ? `${data.items.length} related notes · click a card to open`
+      ? expanded || data.items.length <= INLINE_COLLAPSE_LIMIT
+        ? `${data.items.length} related notes · click a card to open`
+        : `${INLINE_COLLAPSE_LIMIT} of ${data.items.length} related notes shown`
       : 'No related notes yet'
 
     titleWrap.appendChild(title)
@@ -1144,7 +1618,7 @@ export default class NoteAssistantPlugin extends Plugin {
     const actions = document.createElement('div')
     actions.className = 'tpl-note-assistant-inline-actions'
     actions.appendChild(this.makeInlineButton('Open Panel', () => void this.open()))
-    actions.appendChild(this.makeInlineButton('Edit Markdown', () => this.beginInlineSourceEdit(key)))
+    actions.appendChild(this.makeInlineButton('Edit Block', () => this.openBlockEditor(key)))
 
     header.appendChild(titleWrap)
     header.appendChild(actions)
@@ -1170,8 +1644,11 @@ export default class NoteAssistantPlugin extends Plugin {
       empty.textContent = 'No related notes available yet.'
       list.appendChild(empty)
     } else {
-      for (const item of data.items) {
+      for (const item of visibleItems) {
         list.appendChild(this.renderInlineRelatedCard(item, currentFile))
+      }
+      if (data.items.length > INLINE_COLLAPSE_LIMIT) {
+        list.appendChild(this.makeInlineListToggle(key, expanded, data.items.length))
       }
     }
     panel.appendChild(list)
@@ -1221,19 +1698,65 @@ export default class NoteAssistantPlugin extends Plugin {
       main.appendChild(meta)
     }
 
-    if (item.reasonText) {
-      const reason = document.createElement('div')
-      reason.className = 'tpl-note-assistant-inline-card-reason'
-      reason.textContent = item.reasonText
-      main.appendChild(reason)
-    }
-
     const open = document.createElement('div')
     open.className = 'tpl-note-assistant-inline-open'
     open.textContent = 'Open'
 
     button.appendChild(main)
     button.appendChild(open)
+    return button
+  }
+
+  private setButtonState(button: HTMLButtonElement | null, state: {
+    disabled?: boolean
+    busyLabel?: string
+  } = {}): void {
+    if (!button) return
+    const originalLabel = button.dataset.label || button.textContent || ''
+    button.disabled = !!state.disabled
+    button.textContent = state.busyLabel || originalLabel
+  }
+
+  private setPanelBusyState(busy: boolean): void {
+    this.setButtonState(this.panelRefreshBtn, { disabled: busy })
+    this.setButtonState(this.panelRebuildBtn, { disabled: busy, busyLabel: busy ? 'Rebuilding...' : undefined })
+    this.setButtonState(this.panelEditBtn, { disabled: busy })
+    this.setButtonState(this.panelUpdateBtn, { disabled: busy })
+  }
+
+  private setEditorStatus(message: string): void {
+    if (this.editorInfoEl) {
+      this.editorInfoEl.textContent = message
+    }
+  }
+
+  private setEditorBusyState(mode: 'idle' | 'saving' | 'rebuilding'): void {
+    const disabled = mode !== 'idle'
+    this.setButtonState(this.editorCancelBtn, { disabled })
+    this.setButtonState(this.editorSaveBtn, {
+      disabled,
+      busyLabel: mode === 'saving' ? 'Saving...' : undefined,
+    })
+    this.setButtonState(this.editorSaveRefreshBtn, {
+      disabled,
+      busyLabel: mode === 'rebuilding' ? 'Refreshing Graph...' : mode === 'saving' ? 'Saving...' : undefined,
+    })
+    if (this.editorTextarea) {
+      this.editorTextarea.disabled = disabled
+    }
+  }
+
+  private makeInlineListToggle(key: string, expanded: boolean, total: number): HTMLButtonElement {
+    const hiddenCount = Math.max(0, total - INLINE_COLLAPSE_LIMIT)
+    const button = this.makeInlineButton(
+      expanded ? 'Collapse' : `Show ${hiddenCount} More`,
+      () => {
+        if (expanded) this.expandedInlineKeys.delete(key)
+        else this.expandedInlineKeys.add(key)
+        this.scheduleProcess()
+      },
+    )
+    button.classList.add('tpl-note-assistant-inline-toggle')
     return button
   }
 
@@ -1280,28 +1803,210 @@ export default class NoteAssistantPlugin extends Plugin {
     return button
   }
 
-  private beginInlineSourceEdit(key: string): void {
-    this.logChannel('inline', 'begin source edit', { key })
-    this.pendingInlineFocusKey = key
-    this.scheduleProcess()
-    window.setTimeout(() => this.focusInlineSource(key), 40)
+  private openBlockEditor(key = ''): void {
+    const initialMarkdown = this.getEditableBlockMarkdown(key)
+    this.logChannel('inline', 'open block editor', { key, hasExistingBlock: !!initialMarkdown.trim() })
+    this.closeBlockEditor()
+
+    const overlay = document.createElement('div')
+    overlay.id = `${PANEL_ID}-editor-overlay`
+    overlay.addEventListener('click', evt => {
+      if (evt.target === overlay) this.closeBlockEditor()
+    })
+
+    const panel = document.createElement('div')
+    panel.id = `${PANEL_ID}-editor-panel`
+    panel.addEventListener('click', evt => evt.stopPropagation())
+
+    const header = document.createElement('div')
+    header.className = `${PANEL_ID}-editor-header`
+    header.innerHTML = `
+      <div>
+        <div class="${PANEL_ID}-editor-title">Edit Note Assistant Block</div>
+        <div class="${PANEL_ID}-editor-subtitle">Save directly, or save and rebuild graph after Typora flushes the file.</div>
+      </div>
+    `
+
+    const body = document.createElement('div')
+    body.className = `${PANEL_ID}-editor-body`
+
+    const info = document.createElement('div')
+    info.className = `${PANEL_ID}-editor-info`
+    info.textContent = `Current file: ${editor.getFilePath() || 'unknown'}`
+
+    const textarea = document.createElement('textarea')
+    textarea.className = `${PANEL_ID}-editor-textarea`
+    textarea.value = initialMarkdown
+    textarea.spellcheck = false
+
+    const actions = document.createElement('div')
+    actions.className = `${PANEL_ID}-editor-actions`
+    this.editorCancelBtn = this.makeButton('Cancel', () => this.closeBlockEditor(), { variant: 'quiet' })
+    this.editorSaveBtn = this.makeButton('Save', () => void this.saveBlockEditor(false))
+    this.editorSaveRefreshBtn = this.makeButton('Save + Refresh Graph', () => void this.saveBlockEditor(true), { variant: 'primary' })
+    actions.appendChild(this.editorCancelBtn)
+    actions.appendChild(this.editorSaveBtn)
+    actions.appendChild(this.editorSaveRefreshBtn)
+
+    body.appendChild(info)
+    body.appendChild(textarea)
+    body.appendChild(actions)
+    panel.appendChild(header)
+    panel.appendChild(body)
+    overlay.appendChild(panel)
+    document.body.appendChild(overlay)
+
+    this.editorOverlay = overlay
+    this.editorTextarea = textarea
+    this.editorInfoEl = info
+
+    window.setTimeout(() => {
+      textarea.focus()
+      textarea.setSelectionRange(textarea.value.length, textarea.value.length)
+    }, 20)
   }
 
-  private focusInlineSource(key: string): void {
-    if (!this.writeEl) return
-    const block = this.writeEl.querySelector<HTMLElement>(`.tpl-note-assistant-source[data-tpl-note-key="${key}"]`)
-    if (!block) {
-      this.warnChannel('inline', 'focus source target missing', { key })
-      this.pendingInlineFocusKey = ''
-      this.scheduleProcess()
+  private closeBlockEditor(): void {
+    this.editorOverlay?.remove()
+    this.editorOverlay = null
+    this.editorTextarea = null
+    this.editorInfoEl = null
+    this.editorCancelBtn = null
+    this.editorSaveBtn = null
+    this.editorSaveRefreshBtn = null
+    this.editorSaveInFlight = false
+  }
+
+  private getEditableBlockMarkdown(key = ''): string {
+    if (key && this.writeEl) {
+      const sourceBlocks = Array.from(
+        this.writeEl.querySelectorAll<HTMLElement>(`.tpl-note-assistant-source[data-tpl-note-key="${key}"]`),
+      )
+      if (sourceBlocks.length) {
+        const parsed = this.parseInlineBlock(sourceBlocks)
+        return this.composeNoteAssistantBlock(parsed)
+      }
+    }
+
+    const markdown = editor.getMarkdown() || ''
+    const existing = markdown.match(/<!-- note-assistant:start -->[\s\S]*?<!-- note-assistant:end -->/)
+    if (existing?.[0]) return existing[0].trim()
+
+    return this.buildDefaultBlockMarkdown()
+  }
+
+  private buildDefaultBlockMarkdown(): string {
+    const currentFile = editor.getFilePath()
+    const root = this.graphRoot || this.getFallbackRootDir()
+    const relPath = currentFile && root ? relPathFromRoot(currentFile, root) : ''
+    const note = relPath ? this.noteMap.get(relPath) : null
+    return this.composeNoteAssistantBlock({
+      title: 'Note Assistant',
+      tags: (note?.tags || []).slice(0, 5),
+      items: [],
+    })
+  }
+
+  private composeNoteAssistantBlock(data: ParsedInlineBlock): string {
+    const lines = [
+      BLOCK_START,
+      `## ${data.title || 'Note Assistant'}`,
+      '',
+    ]
+
+    if (data.tags.length) {
+      lines.push(`Tags: ${data.tags.map(tag => `#${tag}`).join(' ')}`, '')
+    }
+
+    lines.push('Related Notes:')
+
+    for (const item of data.items) {
+      const link = `[[${item.rawTarget}|${item.displayTitle}]]`
+      lines.push(item.reasonText ? `- ${link} - ${item.reasonText}` : `- ${link}`)
+    }
+
+    lines.push('', BLOCK_END)
+    return lines.join('\n')
+  }
+
+  private normalizeEditedBlockMarkdown(rawMarkdown: string): string {
+    let text = rawMarkdown.replace(/\r\n/g, '\n').trim()
+    if (!text) {
+      return this.buildDefaultBlockMarkdown()
+    }
+    if (!text.includes(BLOCK_START)) {
+      text = `${BLOCK_START}\n${text}`
+    }
+    if (!text.includes(BLOCK_END)) {
+      text = `${text}\n${BLOCK_END}`
+    }
+    return text
+  }
+
+  private async saveBlockEditor(rebuildGraphAfterSave: boolean): Promise<void> {
+    if (!this.editorTextarea || this.editorSaveInFlight) return
+
+    this.editorSaveInFlight = true
+    this.setEditorBusyState(rebuildGraphAfterSave ? 'rebuilding' : 'saving')
+    this.setEditorStatus(
+      rebuildGraphAfterSave
+        ? 'Saving block before refreshing graph index...'
+        : 'Saving note assistant block...',
+    )
+
+    const markdown = editor.getMarkdown()
+    if (!markdown) {
+      this.setEditorStatus('Cannot read current document content.')
+      this.showNotice('Cannot read document content')
+      this.setEditorBusyState('idle')
+      this.editorSaveInFlight = false
       return
     }
 
-    this.debugChannel('inline', 'focus source', { key })
-    block.scrollIntoView({ block: 'center', behavior: 'smooth' })
-    const editable = block.querySelector<HTMLElement>('[contenteditable="true"]') || block
-    editable.focus()
-    this.pendingInlineFocusKey = ''
+    const normalizedBlock = this.normalizeEditedBlockMarkdown(this.editorTextarea.value)
+    this.logChannel('inline', 'save block editor', {
+      rebuildGraphAfterSave,
+      blockLength: normalizedBlock.length,
+    })
+    const next = replaceNoteAssistantBlock(markdown, normalizedBlock)
+    editor.setMarkdown(next)
+    window.setTimeout(() => this.scheduleProcess(), 60)
+    window.setTimeout(() => {
+      void this.renderCurrentNote(true)
+    }, 80)
+
+    if (!rebuildGraphAfterSave) {
+      this.showNotice('Saved note assistant block')
+      this.setEditorStatus('Saved note assistant block.')
+      this.setEditorBusyState('idle')
+      this.editorSaveInFlight = false
+      this.closeBlockEditor()
+      return
+    }
+
+    this.showNotice('Saved block, waiting to rebuild graph...')
+    this.setEditorStatus('Block saved. Waiting for Typora to flush file to disk...')
+
+    try {
+      await new Promise(resolve => window.setTimeout(resolve, 500))
+      const rebuilt = await this.rebuildGraph({
+        quietNotice: true,
+        onStatus: message => this.setEditorStatus(message),
+      })
+      if (rebuilt) {
+        this.showNotice('Saved block and refreshed graph')
+        this.setEditorStatus('Graph refreshed successfully.')
+        this.closeBlockEditor()
+        return
+      }
+      this.showNotice('Block saved, but graph refresh failed')
+      this.setEditorStatus('Block saved, but graph refresh failed. You can retry now.')
+    } finally {
+      if (this.editorOverlay) {
+        this.setEditorBusyState('idle')
+      }
+      this.editorSaveInFlight = false
+    }
   }
 
   private async openInlineWikiTarget(rawTarget: string, currentFile: string): Promise<void> {
