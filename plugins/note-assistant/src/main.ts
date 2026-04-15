@@ -43,6 +43,20 @@ interface GraphFile {
   notes: GraphNote[]
 }
 
+interface InlineRelatedNote {
+  rawTarget: string
+  displayTitle: string
+  pathLabel: string
+  reasonText: string
+  badges: string[]
+}
+
+interface ParsedInlineBlock {
+  title: string
+  tags: string[]
+  items: InlineRelatedNote[]
+}
+
 const HOTKEY = 'Mod+;'
 const GRAPH_DIR = '.note-assistant'
 const GRAPH_FILE = 'graph.json'
@@ -202,47 +216,161 @@ const CSS = `
 #write.tpl-has-note-assistant-block .tpl-note-assistant-comment {
   display: none;
 }
-#write.tpl-has-note-assistant-block .tpl-note-assistant-block {
-  margin-left: 0;
-  margin-right: 0;
-  padding-left: 18px;
-  padding-right: 18px;
-  background: color-mix(in srgb, var(--bg-color, #fff) 92%, #7aa2f7 8%);
-  border-left: 3px solid color-mix(in srgb, #7aa2f7 72%, #4c7dd9 28%);
+#write.tpl-has-note-assistant-block .tpl-note-assistant-source-hidden {
+  display: none !important;
 }
-#write.tpl-has-note-assistant-block .tpl-note-assistant-first {
+#write .tpl-note-assistant-inline {
+  position: relative;
+  margin: 22px 0 26px;
+  padding: 18px 18px 16px;
+  border-radius: 18px;
+  border: 1px solid color-mix(in srgb, var(--border-color, rgba(128, 128, 128, 0.16)) 88%, #7aa2f7 12%);
+  background:
+    radial-gradient(circle at top right, rgba(122, 162, 247, 0.16), transparent 36%),
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-color, #fff) 92%, #eef4ff 8%), color-mix(in srgb, var(--bg-color, #fff) 97%, #dfeaff 3%));
+  box-shadow: 0 16px 36px rgba(15, 23, 42, 0.08);
+}
+#write .tpl-note-assistant-inline::before {
+  content: 'NOTE ASSISTANT';
+  position: absolute;
+  top: -10px;
+  left: 16px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  background: color-mix(in srgb, var(--bg-color, #fff) 74%, #7aa2f7 26%);
+  color: color-mix(in srgb, var(--text-color, #222) 65%, #284a8a 35%);
+}
+#write .tpl-note-assistant-inline-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: flex-start;
+}
+#write .tpl-note-assistant-inline-title-wrap {
+  min-width: 0;
+}
+#write .tpl-note-assistant-inline-title {
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.2;
+  margin: 0;
+}
+#write .tpl-note-assistant-inline-subtitle {
+  margin-top: 5px;
+  font-size: 12px;
+  opacity: 0.66;
+  line-height: 1.45;
+}
+#write .tpl-note-assistant-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+#write .tpl-note-assistant-inline-btn {
+  appearance: none;
+  border: 1px solid color-mix(in srgb, var(--border-color, rgba(128, 128, 128, 0.2)) 84%, #7aa2f7 16%);
+  background: color-mix(in srgb, var(--bg-color, #fff) 85%, #f6f9ff 15%);
+  color: inherit;
+  border-radius: 10px;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+#write .tpl-note-assistant-inline-btn:hover {
+  background: color-mix(in srgb, var(--bg-color, #fff) 70%, #e8f0ff 30%);
+}
+#write .tpl-note-assistant-inline-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+#write .tpl-note-assistant-inline-tag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, rgba(122, 162, 247, 0.22) 80%, transparent 20%);
+  background: color-mix(in srgb, var(--bg-color, #fff) 76%, #e7efff 24%);
+  font-size: 12px;
+  color: color-mix(in srgb, var(--text-color, #222) 82%, #365ea7 18%);
+}
+#write .tpl-note-assistant-inline-list {
+  display: grid;
+  gap: 10px;
   margin-top: 16px;
-  padding-top: 14px;
-  border-top-left-radius: 12px;
-  border-top-right-radius: 12px;
 }
-#write.tpl-has-note-assistant-block .tpl-note-assistant-last {
-  margin-bottom: 16px;
-  padding-bottom: 14px;
-  border-bottom-left-radius: 12px;
-  border-bottom-right-radius: 12px;
+#write .tpl-note-assistant-inline-card {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--border-color, rgba(128, 128, 128, 0.14)) 86%, #7aa2f7 14%);
+  background: color-mix(in srgb, var(--bg-color, #fff) 94%, #f7faff 6%);
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
 }
-#write.tpl-has-note-assistant-block .tpl-note-assistant-title {
-  margin-top: 0;
-  margin-bottom: 10px;
-  font-size: 1.05em;
-  letter-spacing: 0.01em;
+#write .tpl-note-assistant-inline-card:hover {
+  transform: translateY(-1px);
+  background: color-mix(in srgb, var(--bg-color, #fff) 82%, #eef4ff 18%);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
 }
-#write.tpl-has-note-assistant-block .tpl-note-assistant-tags {
-  color: var(--text-color, #333);
-  opacity: 0.88;
+#write .tpl-note-assistant-inline-card-main {
+  min-width: 0;
+  flex: 1;
 }
-#write.tpl-has-note-assistant-block .tpl-note-assistant-related-label {
-  margin-bottom: 6px;
-  font-weight: 600;
+#write .tpl-note-assistant-inline-card-title {
+  font-weight: 650;
+  line-height: 1.35;
+  word-break: break-word;
 }
-#write.tpl-has-note-assistant-block .tpl-note-assistant-related-list {
-  margin-top: 0;
-  padding-bottom: 4px;
-}
-#write.tpl-has-note-assistant-block .tpl-note-assistant-related-list .md-list-item p {
+#write .tpl-note-assistant-inline-card-path {
   margin-top: 4px;
-  margin-bottom: 4px;
+  font-size: 12px;
+  opacity: 0.62;
+  word-break: break-all;
+}
+#write .tpl-note-assistant-inline-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+#write .tpl-note-assistant-inline-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: rgba(127, 127, 127, 0.1);
+  font-size: 11px;
+  opacity: 0.9;
+}
+#write .tpl-note-assistant-inline-card-reason {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.45;
+  opacity: 0.76;
+}
+#write .tpl-note-assistant-inline-open {
+  font-size: 12px;
+  opacity: 0.56;
+  white-space: nowrap;
+  padding-top: 3px;
+}
+#write .tpl-note-assistant-inline-empty {
+  padding: 10px 0 2px;
+  font-size: 13px;
+  opacity: 0.66;
 }
 `
 
@@ -320,6 +448,7 @@ export default class NoteAssistantPlugin extends Plugin {
   private observer: MutationObserver | null = null
   private rafId = 0
   private writeEl: HTMLElement | null = null
+  private pendingInlineFocusKey = ''
   private overlay: HTMLDivElement | null = null
   private bodyEl: HTMLDivElement | null = null
   private titleEl: HTMLDivElement | null = null
@@ -870,19 +999,28 @@ export default class NoteAssistantPlugin extends Plugin {
       const endIndex = blocks.indexOf(endBlock)
       if (startIndex === -1 || endIndex === -1 || endIndex < startIndex) continue
 
+      const key = startBlock.getAttribute('cid') || `note-assistant-${startIndex}`
+      const sourceBlocks = blocks.slice(startIndex, endIndex + 1)
+      const editing = sourceBlocks.some(block => this.isEditingSourceBlock(block))
+        || this.pendingInlineFocusKey === key
+
       hasBlock = true
       startComment.classList.add('tpl-note-assistant-comment')
       endComment.classList.add('tpl-note-assistant-comment')
 
-      for (let cursor = startIndex + 1; cursor <= endIndex; cursor += 1) {
-        const block = blocks[cursor]
-        block.classList.add('tpl-note-assistant-block')
-        if (cursor === startIndex + 1) block.classList.add('tpl-note-assistant-first')
-        if (cursor === endIndex) block.classList.add('tpl-note-assistant-last')
-        if (block.matches('h1,h2,h3,h4,h5,h6')) block.classList.add('tpl-note-assistant-title')
-        if (isTagsParagraph(block)) block.classList.add('tpl-note-assistant-tags')
-        if (isRelatedLabel(block)) block.classList.add('tpl-note-assistant-related-label')
-        if (block.matches('ul,ol')) block.classList.add('tpl-note-assistant-related-list')
+      for (const block of sourceBlocks) {
+        block.classList.add('tpl-note-assistant-source')
+        block.dataset.tplNoteKey = key
+        if (!editing) {
+          block.classList.add('tpl-note-assistant-source-hidden')
+        }
+      }
+
+      if (!editing) {
+        const currentFile = editor.getFilePath()
+        const parsed = this.parseInlineBlock(sourceBlocks)
+        const panel = this.renderInlineBlock(parsed, key, currentFile)
+        endBlock.insertAdjacentElement('afterend', panel)
       }
     }
 
@@ -893,8 +1031,11 @@ export default class NoteAssistantPlugin extends Plugin {
     root.querySelectorAll('.tpl-note-assistant-comment').forEach(el => {
       el.classList.remove('tpl-note-assistant-comment')
     })
-    root.querySelectorAll('.tpl-note-assistant-block').forEach(el => {
+    root.querySelectorAll('.tpl-note-assistant-inline').forEach(el => el.remove())
+    root.querySelectorAll('.tpl-note-assistant-source, .tpl-note-assistant-block').forEach(el => {
       el.classList.remove(
+        'tpl-note-assistant-source',
+        'tpl-note-assistant-source-hidden',
         'tpl-note-assistant-block',
         'tpl-note-assistant-first',
         'tpl-note-assistant-last',
@@ -903,14 +1044,245 @@ export default class NoteAssistantPlugin extends Plugin {
         'tpl-note-assistant-related-label',
         'tpl-note-assistant-related-list',
       )
+      delete (el as HTMLElement).dataset.tplNoteKey
     })
   }
-}
 
-function isMarkerParagraph(el: HTMLElement, marker: string): boolean {
-  if (!el.matches('p')) return false
-  const comment = el.querySelector('.md-comment')
-  return (comment?.textContent || '').trim() === marker
+  private isEditingSourceBlock(block: HTMLElement): boolean {
+    if (block.classList.contains('md-focus') || block.classList.contains('md-focus-container')) return true
+    if (block.querySelector('.md-focus, .md-focus-container')) return true
+    return document.activeElement instanceof Node && block.contains(document.activeElement)
+  }
+
+  private parseInlineBlock(sourceBlocks: HTMLElement[]): ParsedInlineBlock {
+    const title = sourceBlocks.find(block => block.matches('h1,h2,h3,h4,h5,h6'))?.textContent?.trim() || 'Note Assistant'
+    const tagsText = sourceBlocks.find(block => isTagsParagraph(block))?.textContent || ''
+    const tags = [...new Set((tagsText.match(/#([^\s#]+)/g) || []).map(item => item.slice(1)).filter(Boolean))]
+    const listBlock = sourceBlocks.find(block => block.matches('ul,ol'))
+    const items = listBlock
+      ? Array.from(listBlock.children)
+          .filter((child): child is HTMLElement => child instanceof HTMLElement && child.matches('li'))
+          .map(item => this.parseInlineRelatedNote(item.textContent || ''))
+          .filter((item): item is InlineRelatedNote => !!item)
+      : []
+    return { title, tags, items }
+  }
+
+  private parseInlineRelatedNote(rawText: string): InlineRelatedNote | null {
+    const text = rawText
+      .replace(BLOCK_END, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+
+    const match = text.match(/\[\[([^|\]]+)(?:\|([^\]]+))?\]\](?:\s*-\s*(.+))?$/)
+    if (!match) return null
+
+    const rawTarget = match[1].trim()
+    const displayTitle = (match[2] || deriveTitleFromTarget(rawTarget)).trim()
+    const reasonText = (match[3] || '').trim()
+    const badges = [...new Set(
+      reasonText
+        .split(/\s*[|,]\s*/g)
+        .map(item => item.trim())
+        .filter(Boolean)
+        .slice(0, 4),
+    )]
+
+    return {
+      rawTarget,
+      displayTitle,
+      pathLabel: rawTarget,
+      reasonText,
+      badges,
+    }
+  }
+
+  private renderInlineBlock(data: ParsedInlineBlock, key: string, currentFile: string): HTMLElement {
+    const panel = document.createElement('section')
+    panel.className = 'tpl-note-assistant-inline'
+    panel.setAttribute('contenteditable', 'false')
+
+    const header = document.createElement('div')
+    header.className = 'tpl-note-assistant-inline-header'
+
+    const titleWrap = document.createElement('div')
+    titleWrap.className = 'tpl-note-assistant-inline-title-wrap'
+
+    const title = document.createElement('div')
+    title.className = 'tpl-note-assistant-inline-title'
+    title.textContent = data.title
+
+    const subtitle = document.createElement('div')
+    subtitle.className = 'tpl-note-assistant-inline-subtitle'
+    subtitle.textContent = data.items.length
+      ? `${data.items.length} related notes · click a card to open`
+      : 'No related notes yet'
+
+    titleWrap.appendChild(title)
+    titleWrap.appendChild(subtitle)
+
+    const actions = document.createElement('div')
+    actions.className = 'tpl-note-assistant-inline-actions'
+    actions.appendChild(this.makeInlineButton('Open Panel', () => void this.open()))
+    actions.appendChild(this.makeInlineButton('Edit Markdown', () => this.beginInlineSourceEdit(key)))
+
+    header.appendChild(titleWrap)
+    header.appendChild(actions)
+    panel.appendChild(header)
+
+    if (data.tags.length) {
+      const tags = document.createElement('div')
+      tags.className = 'tpl-note-assistant-inline-tags'
+      for (const tag of data.tags) {
+        const chip = document.createElement('span')
+        chip.className = 'tpl-note-assistant-inline-tag'
+        chip.textContent = `#${tag}`
+        tags.appendChild(chip)
+      }
+      panel.appendChild(tags)
+    }
+
+    const list = document.createElement('div')
+    list.className = 'tpl-note-assistant-inline-list'
+    if (!data.items.length) {
+      const empty = document.createElement('div')
+      empty.className = 'tpl-note-assistant-inline-empty'
+      empty.textContent = 'No related notes available yet.'
+      list.appendChild(empty)
+    } else {
+      for (const item of data.items) {
+        list.appendChild(this.renderInlineRelatedCard(item, currentFile))
+      }
+    }
+    panel.appendChild(list)
+    return panel
+  }
+
+  private renderInlineRelatedCard(item: InlineRelatedNote, currentFile: string): HTMLElement {
+    const button = document.createElement('button')
+    button.className = 'tpl-note-assistant-inline-card'
+    button.type = 'button'
+    button.setAttribute('contenteditable', 'false')
+    button.addEventListener('click', evt => {
+      evt.preventDefault()
+      evt.stopPropagation()
+      void this.openInlineWikiTarget(item.rawTarget, currentFile)
+    })
+
+    const main = document.createElement('div')
+    main.className = 'tpl-note-assistant-inline-card-main'
+
+    const title = document.createElement('div')
+    title.className = 'tpl-note-assistant-inline-card-title'
+    title.textContent = item.displayTitle
+
+    const path = document.createElement('div')
+    path.className = 'tpl-note-assistant-inline-card-path'
+    path.textContent = item.pathLabel
+
+    main.appendChild(title)
+    main.appendChild(path)
+
+    if (item.badges.length) {
+      const meta = document.createElement('div')
+      meta.className = 'tpl-note-assistant-inline-card-meta'
+      for (const badge of item.badges) {
+        const chip = document.createElement('span')
+        chip.className = 'tpl-note-assistant-inline-badge'
+        chip.textContent = badge
+        meta.appendChild(chip)
+      }
+      main.appendChild(meta)
+    }
+
+    if (item.reasonText) {
+      const reason = document.createElement('div')
+      reason.className = 'tpl-note-assistant-inline-card-reason'
+      reason.textContent = item.reasonText
+      main.appendChild(reason)
+    }
+
+    const open = document.createElement('div')
+    open.className = 'tpl-note-assistant-inline-open'
+    open.textContent = 'Open'
+
+    button.appendChild(main)
+    button.appendChild(open)
+    return button
+  }
+
+  private makeInlineButton(label: string, onClick: () => void): HTMLButtonElement {
+    const button = document.createElement('button')
+    button.className = 'tpl-note-assistant-inline-btn'
+    button.type = 'button'
+    button.textContent = label
+    button.setAttribute('contenteditable', 'false')
+    button.addEventListener('click', evt => {
+      evt.preventDefault()
+      evt.stopPropagation()
+      onClick()
+    })
+    return button
+  }
+
+  private beginInlineSourceEdit(key: string): void {
+    this.pendingInlineFocusKey = key
+    this.scheduleProcess()
+    window.setTimeout(() => this.focusInlineSource(key), 40)
+  }
+
+  private focusInlineSource(key: string): void {
+    if (!this.writeEl) return
+    const block = this.writeEl.querySelector<HTMLElement>(`.tpl-note-assistant-source[data-tpl-note-key="${key}"]`)
+    if (!block) {
+      this.pendingInlineFocusKey = ''
+      this.scheduleProcess()
+      return
+    }
+
+    block.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    const editable = block.querySelector<HTMLElement>('[contenteditable="true"]') || block
+    editable.focus()
+    this.pendingInlineFocusKey = ''
+  }
+
+  private async openInlineWikiTarget(rawTarget: string, currentFile: string): Promise<void> {
+    const target = rawTarget.split('#')[0].trim()
+    if (!target) return
+
+    const currentDir = platform.path.dirname(currentFile)
+    const candidates = new Set<string>()
+    const resolved = platform.path.resolve(currentDir, target)
+    candidates.add(resolved)
+    if (!platform.path.extname(resolved)) {
+      candidates.add(`${resolved}.md`)
+      candidates.add(`${resolved}.markdown`)
+    }
+
+    const root = this.graphRoot || this.getFallbackRootDir()
+    if (root && !platform.path.isAbsolute(target)) {
+      const rootCandidate = platform.path.resolve(root, target)
+      candidates.add(rootCandidate)
+      if (!platform.path.extname(rootCandidate)) {
+        candidates.add(`${rootCandidate}.md`)
+        candidates.add(`${rootCandidate}.markdown`)
+      }
+    }
+
+    for (const candidate of candidates) {
+      if (await platform.fs.exists(candidate)) {
+        try {
+          await editor.openFile(candidate)
+          await this.renderCurrentNote()
+          return
+        } catch (err) {
+          console.error('[tpl:note-assistant] openInlineWikiTarget failed', err)
+        }
+      }
+    }
+
+    this.showNotice('Failed to resolve related note path')
+  }
 }
 
 function isTagsParagraph(el: HTMLElement): boolean {
@@ -927,6 +1299,13 @@ function replaceNoteAssistantBlock(markdown: string, section: string): string {
     return markdown.replace(blockRe, `${section}\n`)
   }
   return `${markdown.replace(/\s+$/u, '')}\n\n${section}`
+}
+
+function deriveTitleFromTarget(rawTarget: string): string {
+  const withoutHeading = rawTarget.split('#')[0]
+  const base = withoutMarkdownExt(withoutHeading)
+  const name = normalizePath(base).split('/').filter(Boolean).pop() || base
+  return name.replace(/[_-]+/g, ' ').trim() || name
 }
 
 function getTopLevelBlock(node: Node, root: HTMLElement): HTMLElement | null {
