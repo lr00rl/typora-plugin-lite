@@ -237,14 +237,15 @@ const CSS = `
   display: flex;
   gap: 8px;
 }
-.${PANEL_ID}-footer {
+#${PANEL_ID}-footer {
   display: flex;
+  align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 10px 18px 14px;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 10px 18px 12px;
   border-top: 1px solid var(--border-color, rgba(128, 128, 128, 0.16));
   font-size: 12px;
-  opacity: 0.66;
 }
 #write.tpl-has-note-assistant-block .tpl-note-assistant-comment {
   display: none;
@@ -472,81 +473,45 @@ const CSS = `
   font-weight: 600;
 }
 .${PANEL_ID}-hero {
-  display: grid;
-  grid-template-columns: minmax(0, 1.6fr) minmax(220px, 0.9fr);
-  gap: 18px;
-}
-.${PANEL_ID}-hero-main {
-  min-width: 0;
-}
-.${PANEL_ID}-hero-eyebrow {
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  opacity: 0.52;
-}
-.${PANEL_ID}-hero-title {
-  margin-top: 8px;
-  font-size: 26px;
-  line-height: 1.15;
-  font-weight: 720;
-  word-break: break-word;
-}
-.${PANEL_ID}-hero-path {
-  margin-top: 8px;
-  font-size: 13px;
-  line-height: 1.45;
-  opacity: 0.66;
-  word-break: break-all;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 12px 16px;
 }
 .${PANEL_ID}-hero-tags {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 14px;
-}
-.${PANEL_ID}-hero-summary {
-  display: grid;
-  gap: 10px;
-  margin-top: 16px;
-}
-.${PANEL_ID}-hero-summary > div {
-  display: grid;
-  gap: 4px;
-}
-.${PANEL_ID}-hero-summary strong {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  opacity: 0.5;
-}
-.${PANEL_ID}-hero-summary span {
-  font-size: 13px;
-  line-height: 1.45;
-  opacity: 0.82;
-  word-break: break-word;
+  gap: 6px;
 }
 .${PANEL_ID}-hero-stats {
-  display: grid;
-  gap: 10px;
-  align-content: start;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-left: auto;
 }
 .${PANEL_ID}-hero-stat {
-  padding: 14px;
-  border-radius: 16px;
-  background: color-mix(in srgb, var(--bg-color, #fff) 75%, #e7efff 25%);
-  border: 1px solid color-mix(in srgb, rgba(140, 180, 255, 0.2) 80%, transparent 20%);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-color, #fff) 82%, #e7efff 18%);
+  border: 1px solid color-mix(in srgb, rgba(140, 180, 255, 0.16) 80%, transparent 20%);
+  font-size: 12px;
 }
 .${PANEL_ID}-hero-stat strong {
-  display: block;
-  font-size: 22px;
-  line-height: 1.1;
+  display: inline;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1;
 }
 .${PANEL_ID}-hero-stat span {
-  display: block;
-  margin-top: 4px;
+  display: inline;
+  margin-top: 0;
   font-size: 12px;
-  opacity: 0.68;
+  opacity: 0.56;
 }
 .${PANEL_ID}-list {
   display: grid;
@@ -696,14 +661,81 @@ const CSS = `
   gap: 8px;
 }
 .${PANEL_ID}-footer-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 14px;
   min-width: 0;
-  word-break: break-word;
+  flex: 1;
 }
 .${PANEL_ID}-footer-actions {
   display: flex;
-  flex-wrap: wrap;
   gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
   justify-content: flex-end;
+}
+.${PANEL_ID}-footer-badges {
+  display: flex;
+  gap: 6px;
+}
+.${PANEL_ID}-footer-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  background: rgba(127, 127, 127, 0.06);
+  border: none;
+  color: inherit;
+  opacity: 0.72;
+}
+.${PANEL_ID}-footer-badge::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.${PANEL_ID}-footer-badge[data-state="dirty"]::before {
+  background: #fbbf24;
+}
+.${PANEL_ID}-footer-badge[data-state="ready"]::before {
+  background: #34d399;
+}
+.${PANEL_ID}-footer-badge[data-state="pending"]::before {
+  background: #60a5fa;
+}
+.${PANEL_ID}-footer-badge[data-state="missing"]::before {
+  background: #94a3b8;
+}
+.${PANEL_ID}-footer-meta {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.${PANEL_ID}-footer-vault {
+  min-width: 0;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+  opacity: 0.44;
+  color: inherit;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.${PANEL_ID}-footer-hint {
+  font-size: 11px;
+  opacity: 0.36;
+  line-height: 1;
+  white-space: nowrap;
+  padding-right: 6px;
+  border-right: 1px solid rgba(128, 128, 128, 0.14);
+  margin-right: 2px;
 }
 .${PANEL_ID}-mode-section {
   padding: 10px 12px;
@@ -783,9 +815,6 @@ const CSS = `
   font: inherit;
 }
 @media (max-width: 900px) {
-  .${PANEL_ID}-hero {
-    grid-template-columns: 1fr;
-  }
   #${PANEL_ID}-header,
   #${PANEL_ID}-body {
     padding-left: 16px;
@@ -876,6 +905,9 @@ export default class NoteAssistantPlugin extends Plugin {
   private subtitleEl: HTMLDivElement | null = null
   private footerEl: HTMLDivElement | null = null
   private panelStatusEl: HTMLDivElement | null = null
+  private panelStatusBadgesEl: HTMLDivElement | null = null
+  private panelStatusHintEl: HTMLDivElement | null = null
+  private panelVaultEl: HTMLDivElement | null = null
   private editorOverlay: HTMLDivElement | null = null
   private editorTextarea: HTMLTextAreaElement | null = null
   private editorInfoEl: HTMLDivElement | null = null
@@ -996,6 +1028,9 @@ export default class NoteAssistantPlugin extends Plugin {
     this.subtitleEl = null
     this.footerEl = null
     this.panelStatusEl = null
+    this.panelStatusBadgesEl = null
+    this.panelStatusHintEl = null
+    this.panelVaultEl = null
     this.panelCloseBtn = null
     this.panelSaveBtn = null
     this.panelSaveRefreshBtn = null
@@ -1054,12 +1089,24 @@ export default class NoteAssistantPlugin extends Plugin {
     footer.id = `${PANEL_ID}-footer`
     const status = document.createElement('div')
     status.className = `${PANEL_ID}-footer-status`
-    status.textContent = `${HOTKEY} to open, Esc to close`
+    const badges = document.createElement('div')
+    badges.className = `${PANEL_ID}-footer-badges`
+    const meta = document.createElement('div')
+    meta.className = `${PANEL_ID}-footer-meta`
+    const vault = document.createElement('div')
+    vault.className = `${PANEL_ID}-footer-vault`
+    const hint = document.createElement('div')
+    hint.className = `${PANEL_ID}-footer-hint`
+    hint.textContent = `${HOTKEY} · Mod+S · Esc`
+    meta.appendChild(vault)
+    status.appendChild(badges)
+    status.appendChild(meta)
     const footerActions = document.createElement('div')
     footerActions.className = `${PANEL_ID}-footer-actions`
     this.panelCloseBtn = this.makeButton('Close', () => this.close(), { variant: 'quiet' })
     this.panelSaveBtn = this.makeButton('Save', () => void this.saveBlockEditor(false))
     this.panelSaveRefreshBtn = this.makeButton('Save & Refresh', () => void this.saveBlockEditor(true), { variant: 'primary' })
+    footerActions.appendChild(hint)
     footerActions.appendChild(this.panelCloseBtn)
     footerActions.appendChild(this.panelSaveBtn)
     footerActions.appendChild(this.panelSaveRefreshBtn)
@@ -1078,6 +1125,9 @@ export default class NoteAssistantPlugin extends Plugin {
     this.subtitleEl = subtitle
     this.footerEl = footer
     this.panelStatusEl = status
+    this.panelStatusBadgesEl = badges
+    this.panelStatusHintEl = hint
+    this.panelVaultEl = vault
 
     this.keydownHandler = (evt: KeyboardEvent) => {
       if ((evt.metaKey || evt.ctrlKey) && evt.key.toLowerCase() === 's' && this.overlay) {
@@ -1299,36 +1349,20 @@ export default class NoteAssistantPlugin extends Plugin {
   }
 
   private renderWorkspaceHero(
-    currentFile: string,
-    relPath: string,
+    _currentFile: string,
+    _relPath: string,
     note: GraphNote | null,
     graph: GraphFile | null,
   ): HTMLElement {
     const section = document.createElement('section')
     section.className = `${PANEL_ID}-section ${PANEL_ID}-hero`
 
-    const main = document.createElement('div')
-    main.className = `${PANEL_ID}-hero-main`
-    main.innerHTML = `
-      <div class="${PANEL_ID}-hero-eyebrow">Relationships</div>
-      <div class="${PANEL_ID}-hero-title">${escapeHtml(note?.title || platform.path.basename(currentFile))}</div>
-      <div class="${PANEL_ID}-hero-path">${escapeHtml(relPath)}</div>
-    `
-
     const tags = document.createElement('div')
     tags.className = `${PANEL_ID}-hero-tags`
     for (const tag of this.panelDraft.tags.slice(0, 8)) {
       tags.appendChild(this.makeBadge(`#${tag}`))
     }
-    if (tags.childElementCount) main.appendChild(tags)
-
-    const summary = document.createElement('div')
-    summary.className = `${PANEL_ID}-hero-summary`
-    summary.innerHTML = `
-      <div><strong>Current Block</strong><span>${this.panelHasExistingBlock ? 'Present in document' : 'Not created yet'}</span></div>
-      <div><strong>Suggestions</strong><span>${graph ? (note ? 'Graph suggestions available' : 'Refresh graph to index this note') : 'Graph unavailable'}</span></div>
-      <div><strong>Mode</strong><span>${this.panelMode === 'visual' ? 'Visual editing' : 'Source editing'}</span></div>
-    `
+    if (tags.childElementCount) section.appendChild(tags)
 
     const stats = document.createElement('div')
     stats.className = `${PANEL_ID}-hero-stats`
@@ -1341,13 +1375,16 @@ export default class NoteAssistantPlugin extends Plugin {
     for (const [label, value] of statItems) {
       const stat = document.createElement('div')
       stat.className = `${PANEL_ID}-hero-stat`
-      stat.innerHTML = `<strong>${escapeHtml(String(value))}</strong><span>${escapeHtml(label)}</span>`
+      const strong = document.createElement('strong')
+      strong.textContent = String(value)
+      const span = document.createElement('span')
+      span.textContent = label
+      stat.appendChild(strong)
+      stat.appendChild(span)
       stats.appendChild(stat)
     }
-
-    section.appendChild(main)
-    main.appendChild(summary)
     section.appendChild(stats)
+
     return section
   }
 
@@ -1717,16 +1754,35 @@ export default class NoteAssistantPlugin extends Plugin {
   }
 
   private setPanelFooterStatus(root: string, note: GraphNote | null, graph: GraphFile | null): void {
-    if (!this.panelStatusEl) return
-    const state = this.panelDraftDirty
-      ? 'Unsaved changes'
-      : this.panelHasExistingBlock
-        ? 'Block ready'
-        : 'No block yet'
-    const graphState = graph
-      ? note ? 'suggestions ready' : 'graph pending for this note'
-      : 'graph unavailable'
-    this.panelStatusEl.textContent = `${state} · ${graphState} · ${root}`
+    if (!this.panelStatusBadgesEl || !this.panelVaultEl || !this.panelStatusHintEl) return
+
+    // Single smart badge: show the most important state
+    let label: string
+    let state: 'dirty' | 'ready' | 'pending' | 'missing'
+    if (this.panelDraftDirty) {
+      label = 'Unsaved changes'
+      state = 'dirty'
+    } else if (!graph) {
+      label = 'Graph unavailable'
+      state = 'missing'
+    } else if (!note) {
+      label = 'Graph pending'
+      state = 'pending'
+    } else if (!this.panelHasExistingBlock) {
+      label = 'No block yet'
+      state = 'pending'
+    } else {
+      label = 'Ready'
+      state = 'ready'
+    }
+
+    this.panelStatusBadgesEl.textContent = ''
+    this.panelStatusBadgesEl.appendChild(this.makeFooterBadge(label, state))
+
+    const vaultName = platform.path.basename(normalizePath(root)) || root
+    this.panelVaultEl.textContent = `Vault · ${vaultName}`
+    this.panelVaultEl.title = root
+    this.panelStatusHintEl.textContent = `${HOTKEY} · Mod+S · Esc`
   }
 
   private setPanelSaveState(busy: boolean): void {
@@ -1736,6 +1792,14 @@ export default class NoteAssistantPlugin extends Plugin {
       disabled: busy,
       busyLabel: busy ? 'Refreshing...' : undefined,
     })
+  }
+
+  private makeFooterBadge(label: string, state: 'dirty' | 'ready' | 'pending' | 'missing'): HTMLElement {
+    const badge = document.createElement('span')
+    badge.className = `${PANEL_ID}-footer-badge`
+    badge.dataset.state = state
+    badge.textContent = label
+    return badge
   }
 
   private renderMetaSection(note: GraphNote, graph: GraphFile): HTMLElement {
@@ -2231,7 +2295,6 @@ export default class NoteAssistantPlugin extends Plugin {
     const actions = document.createElement('div')
     actions.className = 'tpl-note-assistant-inline-actions'
     actions.appendChild(this.makeInlineButton('Manage', () => void this.openPanelMode('visual')))
-    actions.appendChild(this.makeInlineButton('Source', () => this.openBlockEditor(key)))
 
     header.appendChild(titleWrap)
     header.appendChild(actions)
