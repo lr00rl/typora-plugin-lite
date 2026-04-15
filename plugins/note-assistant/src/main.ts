@@ -63,6 +63,8 @@ interface InlineTargetResolution {
   candidates: string[]
 }
 
+type PanelMode = 'visual' | 'source'
+
 const HOTKEY = 'Mod+;'
 const GRAPH_DIR = '.note-assistant'
 const GRAPH_FILE = 'graph.json'
@@ -693,6 +695,93 @@ const CSS = `
   flex-wrap: wrap;
   gap: 8px;
 }
+.${PANEL_ID}-footer-status {
+  min-width: 0;
+  word-break: break-word;
+}
+.${PANEL_ID}-footer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.${PANEL_ID}-mode-section {
+  padding: 10px 12px;
+}
+.${PANEL_ID}-mode-tabs {
+  display: inline-flex;
+  gap: 6px;
+  padding: 4px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--bg-color, #fff) 78%, #e4ecff 22%);
+}
+.${PANEL_ID}-mode-btn {
+  min-width: 92px;
+}
+.${PANEL_ID}-mode-btn-active {
+  background: linear-gradient(180deg, #4f7dff, #3e68e9);
+  color: #fff;
+  border-color: transparent;
+  box-shadow: 0 8px 18px rgba(79, 125, 255, 0.22);
+  opacity: 1;
+}
+.${PANEL_ID}-workspace-helper {
+  margin-bottom: 14px;
+  font-size: 13px;
+  line-height: 1.5;
+  opacity: 0.72;
+}
+.${PANEL_ID}-workspace-group {
+  margin-top: 16px;
+}
+.${PANEL_ID}-workspace-label {
+  margin-bottom: 10px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  opacity: 0.5;
+}
+.${PANEL_ID}-workspace-empty {
+  font-size: 13px;
+  line-height: 1.5;
+  opacity: 0.68;
+}
+.${PANEL_ID}-tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.${PANEL_ID}-editable-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 0 8px 0 10px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, rgba(122, 162, 247, 0.22) 80%, transparent 20%);
+  background: color-mix(in srgb, var(--bg-color, #fff) 80%, #e7efff 20%);
+  font-size: 12px;
+}
+.${PANEL_ID}-chip-btn {
+  padding: 4px 6px;
+  font-size: 11px;
+}
+.${PANEL_ID}-input-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 12px;
+}
+.${PANEL_ID}-input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--border-color, rgba(128, 128, 128, 0.2)) 78%, #97bbff 22%);
+  border-radius: 12px;
+  padding: 9px 12px;
+  background: color-mix(in srgb, var(--bg-color, #fff) 98%, #f8fbff 2%);
+  color: inherit;
+  font: inherit;
+}
 @media (max-width: 900px) {
   .${PANEL_ID}-hero {
     grid-template-columns: 1fr;
@@ -786,9 +875,13 @@ export default class NoteAssistantPlugin extends Plugin {
   private titleEl: HTMLDivElement | null = null
   private subtitleEl: HTMLDivElement | null = null
   private footerEl: HTMLDivElement | null = null
+  private panelStatusEl: HTMLDivElement | null = null
   private editorOverlay: HTMLDivElement | null = null
   private editorTextarea: HTMLTextAreaElement | null = null
   private editorInfoEl: HTMLDivElement | null = null
+  private panelCloseBtn: HTMLButtonElement | null = null
+  private panelSaveBtn: HTMLButtonElement | null = null
+  private panelSaveRefreshBtn: HTMLButtonElement | null = null
   private panelRefreshBtn: HTMLButtonElement | null = null
   private panelRebuildBtn: HTMLButtonElement | null = null
   private panelEditBtn: HTMLButtonElement | null = null
@@ -805,6 +898,13 @@ export default class NoteAssistantPlugin extends Plugin {
   private expandedInlineKeys = new Set<string>()
   private expandedPanelSections = new Set<string>()
   private currentPanelNoteRelPath = ''
+  private panelMode: PanelMode = 'visual'
+  private panelDraft: ParsedInlineBlock = { title: 'Note Assistant', tags: [], items: [] }
+  private panelSourceDraft = ''
+  private panelDraftDirty = false
+  private panelHasExistingBlock = false
+  private panelLoadedFile = ''
+  private panelLoadedBlockMarkdown = ''
   private editorSaveInFlight = false
   private rebuildInFlight = false
   private keydownHandler: ((evt: KeyboardEvent) => void) | null = null
@@ -874,6 +974,14 @@ export default class NoteAssistantPlugin extends Plugin {
     await this.renderCurrentNote()
   }
 
+  private async openPanelMode(mode: PanelMode): Promise<void> {
+    this.panelMode = mode
+    if (!this.overlay) {
+      this.buildModal()
+    }
+    await this.renderCurrentNote()
+  }
+
   private close(): void {
     this.selectionMap.clear()
     this.closeBlockEditor()
@@ -887,10 +995,20 @@ export default class NoteAssistantPlugin extends Plugin {
     this.titleEl = null
     this.subtitleEl = null
     this.footerEl = null
+    this.panelStatusEl = null
+    this.panelCloseBtn = null
+    this.panelSaveBtn = null
+    this.panelSaveRefreshBtn = null
     this.panelRefreshBtn = null
     this.panelRebuildBtn = null
     this.panelEditBtn = null
     this.panelUpdateBtn = null
+    this.editorTextarea = null
+    this.editorInfoEl = null
+    this.panelMode = 'visual'
+    this.panelDraftDirty = false
+    this.panelLoadedFile = ''
+    this.panelLoadedBlockMarkdown = ''
   }
 
   private buildModal(): void {
@@ -920,14 +1038,11 @@ export default class NoteAssistantPlugin extends Plugin {
 
     const actions = document.createElement('div')
     actions.id = `${PANEL_ID}-actions`
-    this.panelRefreshBtn = this.makeButton('Refresh', () => void this.renderCurrentNote(true), { variant: 'quiet' })
-    this.panelRebuildBtn = this.makeButton('Rebuild Graph', () => void this.rebuildGraph(), { variant: 'quiet' })
-    this.panelEditBtn = this.makeButton('Edit Block', () => this.openBlockEditor())
-    this.panelUpdateBtn = this.makeButton('Update Block', () => this.insertSelectedLinks(), { variant: 'primary' })
+    this.panelRefreshBtn = this.makeButton('Refresh Suggestions', () => void this.rebuildGraph(), { variant: 'quiet' })
+    this.panelRebuildBtn = null
+    this.panelEditBtn = null
+    this.panelUpdateBtn = null
     actions.appendChild(this.panelRefreshBtn)
-    actions.appendChild(this.panelRebuildBtn)
-    actions.appendChild(this.panelEditBtn)
-    actions.appendChild(this.panelUpdateBtn)
 
     header.appendChild(titleWrap)
     header.appendChild(actions)
@@ -937,7 +1052,19 @@ export default class NoteAssistantPlugin extends Plugin {
 
     const footer = document.createElement('div')
     footer.id = `${PANEL_ID}-footer`
-    footer.innerHTML = `<div>${escapeHtml(HOTKEY)} to open, Esc to close</div><div></div>`
+    const status = document.createElement('div')
+    status.className = `${PANEL_ID}-footer-status`
+    status.textContent = `${HOTKEY} to open, Esc to close`
+    const footerActions = document.createElement('div')
+    footerActions.className = `${PANEL_ID}-footer-actions`
+    this.panelCloseBtn = this.makeButton('Close', () => this.close(), { variant: 'quiet' })
+    this.panelSaveBtn = this.makeButton('Save', () => void this.saveBlockEditor(false))
+    this.panelSaveRefreshBtn = this.makeButton('Save & Refresh', () => void this.saveBlockEditor(true), { variant: 'primary' })
+    footerActions.appendChild(this.panelCloseBtn)
+    footerActions.appendChild(this.panelSaveBtn)
+    footerActions.appendChild(this.panelSaveRefreshBtn)
+    footer.appendChild(status)
+    footer.appendChild(footerActions)
 
     panel.appendChild(header)
     panel.appendChild(body)
@@ -950,18 +1077,15 @@ export default class NoteAssistantPlugin extends Plugin {
     this.titleEl = title
     this.subtitleEl = subtitle
     this.footerEl = footer
+    this.panelStatusEl = status
 
     this.keydownHandler = (evt: KeyboardEvent) => {
-      if ((evt.metaKey || evt.ctrlKey) && evt.key.toLowerCase() === 's' && this.editorOverlay) {
+      if ((evt.metaKey || evt.ctrlKey) && evt.key.toLowerCase() === 's' && this.overlay) {
         evt.preventDefault()
         void this.saveBlockEditor(false)
         return
       }
       if (evt.key === 'Escape') {
-        if (this.editorOverlay) {
-          this.closeBlockEditor()
-          return
-        }
         this.close()
       }
     }
@@ -1080,49 +1204,538 @@ export default class NoteAssistantPlugin extends Plugin {
     }
 
     const relPath = relPathFromRoot(currentFile, root)
-    const note = graph ? this.noteMap.get(relPath) : null
+    const note = graph ? (this.noteMap.get(relPath) || null) : null
     this.currentPanelNoteRelPath = relPath
+    this.ensurePanelDraftInitialized(currentFile, relPath)
 
     this.titleEl.textContent = note?.title || platform.path.basename(currentFile)
     this.subtitleEl.textContent = relPath
 
-    if (!graph) {
-      this.renderStatus(
-        `Missing ${GRAPH_DIR}/${GRAPH_FILE}. Run the vault generator first or use “Rebuild Graph” if ${BUILD_SCRIPT} exists in the vault.`,
-      )
-      this.setFooter(root, 'graph missing')
-      return
-    }
-
-    if (!note) {
-      this.renderStatus(
-        'The current file is not present in the generated graph. Refresh or rebuild the graph after adding this file.',
-      )
-      this.setFooter(root, `${graph.stats.totalNotes} indexed notes`)
-      return
-    }
-
     this.selectionMap.clear()
     this.bodyEl.innerHTML = ''
 
-    const explicit = (note.explicitLinks || [])
-      .map(item => this.noteMap.get(item))
-      .filter(Boolean) as GraphNote[]
-    const backlinks = (note.backlinks || [])
-      .map(item => this.noteMap.get(item))
-      .filter(Boolean) as GraphNote[]
+    this.bodyEl.appendChild(this.renderWorkspaceHero(currentFile, relPath, note, graph))
+    this.bodyEl.appendChild(this.renderModeSwitch())
+    if (this.panelMode === 'visual') {
+      this.bodyEl.appendChild(this.renderCurrentBlockSection(currentFile))
+      this.bodyEl.appendChild(this.renderSuggestionsWorkspaceSection(note, graph, currentFile))
+    } else {
+      this.bodyEl.appendChild(this.renderSourceWorkspace())
+    }
 
-    this.bodyEl.appendChild(this.renderMetaSection(note, graph))
-    this.bodyEl.appendChild(this.renderLinkSection('Backlinks', backlinks, currentFile))
-    this.bodyEl.appendChild(this.renderLinkSection('Explicit Links', explicit, currentFile))
-    this.bodyEl.appendChild(this.renderRelatedSection(note.related || [], currentFile))
-
-    this.setFooter(root, `${graph.stats.totalNotes} indexed · generated ${graph.generatedAt}`)
+    this.setPanelFooterStatus(root, note, graph)
+    this.setPanelSaveState(this.editorSaveInFlight)
   }
 
   private renderStatus(message: string): void {
     if (!this.bodyEl) return
     this.bodyEl.innerHTML = `<div class="${PANEL_ID}-status">${escapeHtml(message)}</div>`
+  }
+
+  private ensurePanelDraftInitialized(currentFile: string, relPath: string): void {
+    const markdown = editor.getMarkdown() || ''
+    const blockMarkdown = extractNoteAssistantBlock(markdown) || ''
+    const shouldReset = this.panelLoadedFile !== currentFile
+      || (!this.panelDraftDirty && blockMarkdown !== this.panelLoadedBlockMarkdown)
+
+    if (!shouldReset) return
+
+    this.panelLoadedFile = currentFile
+    this.panelLoadedBlockMarkdown = blockMarkdown
+    this.panelHasExistingBlock = !!blockMarkdown
+    this.panelDraft = this.normalizeParsedBlock(
+      blockMarkdown
+        ? this.parseBlockMarkdown(blockMarkdown)
+        : this.buildDefaultParsedBlock(relPath),
+    )
+    this.panelSourceDraft = this.composeNoteAssistantBlock(this.panelDraft)
+    this.panelDraftDirty = false
+  }
+
+  private buildDefaultParsedBlock(relPath: string): ParsedInlineBlock {
+    const note = relPath ? this.noteMap.get(relPath) : null
+    return {
+      title: 'Note Assistant',
+      tags: (note?.tags || []).slice(0, 5),
+      items: [],
+    }
+  }
+
+  private parseBlockMarkdown(blockMarkdown: string): ParsedInlineBlock {
+    const normalized = blockMarkdown
+      .replace(/\r\n/g, '\n')
+      .replace(BLOCK_START, '')
+      .replace(BLOCK_END, '')
+
+    const title = normalized.match(/^#{1,6}\s+(.+)$/m)?.[1]?.trim() || 'Note Assistant'
+    const tagsLine = normalized
+      .split('\n')
+      .map(line => line.trim())
+      .find(line => line.startsWith('Tags:')) || ''
+    const tags = [...new Set((tagsLine.match(/#([^\s#]+)/g) || []).map(item => item.slice(1)).filter(Boolean))]
+    const items = normalized
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => /^[-*+]\s+/.test(line))
+      .map(line => this.parseInlineRelatedNote(line.replace(/^[-*+]\s+/, '')))
+      .filter((item): item is InlineRelatedNote => !!item)
+
+    return { title, tags, items }
+  }
+
+  private normalizeParsedBlock(data: ParsedInlineBlock): ParsedInlineBlock {
+    const seen = new Set<string>()
+    const items = data.items.filter(item => {
+      const key = withoutMarkdownExt(item.rawTarget.split('#')[0].trim())
+      if (!key || seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+    return {
+      title: firstNonEmpty(data.title, 'Note Assistant'),
+      tags: [...new Set(data.tags.map(tag => tag.trim()).filter(Boolean))],
+      items,
+    }
+  }
+
+  private renderWorkspaceHero(
+    currentFile: string,
+    relPath: string,
+    note: GraphNote | null,
+    graph: GraphFile | null,
+  ): HTMLElement {
+    const section = document.createElement('section')
+    section.className = `${PANEL_ID}-section ${PANEL_ID}-hero`
+
+    const main = document.createElement('div')
+    main.className = `${PANEL_ID}-hero-main`
+    main.innerHTML = `
+      <div class="${PANEL_ID}-hero-eyebrow">Relationships</div>
+      <div class="${PANEL_ID}-hero-title">${escapeHtml(note?.title || platform.path.basename(currentFile))}</div>
+      <div class="${PANEL_ID}-hero-path">${escapeHtml(relPath)}</div>
+    `
+
+    const tags = document.createElement('div')
+    tags.className = `${PANEL_ID}-hero-tags`
+    for (const tag of this.panelDraft.tags.slice(0, 8)) {
+      tags.appendChild(this.makeBadge(`#${tag}`))
+    }
+    if (tags.childElementCount) main.appendChild(tags)
+
+    const summary = document.createElement('div')
+    summary.className = `${PANEL_ID}-hero-summary`
+    summary.innerHTML = `
+      <div><strong>Current Block</strong><span>${this.panelHasExistingBlock ? 'Present in document' : 'Not created yet'}</span></div>
+      <div><strong>Suggestions</strong><span>${graph ? (note ? 'Graph suggestions available' : 'Refresh graph to index this note') : 'Graph unavailable'}</span></div>
+      <div><strong>Mode</strong><span>${this.panelMode === 'visual' ? 'Visual editing' : 'Source editing'}</span></div>
+    `
+
+    const stats = document.createElement('div')
+    stats.className = `${PANEL_ID}-hero-stats`
+    const statItems: Array<[string, string | number]> = [
+      ['Tags', this.panelDraft.tags.length],
+      ['Links', this.panelDraft.items.length],
+      ['Indexed', graph ? graph.stats.totalNotes : 'n/a'],
+      ['Graph', graph ? (note ? 'ready' : 'pending') : 'missing'],
+    ]
+    for (const [label, value] of statItems) {
+      const stat = document.createElement('div')
+      stat.className = `${PANEL_ID}-hero-stat`
+      stat.innerHTML = `<strong>${escapeHtml(String(value))}</strong><span>${escapeHtml(label)}</span>`
+      stats.appendChild(stat)
+    }
+
+    section.appendChild(main)
+    main.appendChild(summary)
+    section.appendChild(stats)
+    return section
+  }
+
+  private renderModeSwitch(): HTMLElement {
+    const wrap = document.createElement('section')
+    wrap.className = `${PANEL_ID}-section ${PANEL_ID}-mode-section`
+
+    const tabs = document.createElement('div')
+    tabs.className = `${PANEL_ID}-mode-tabs`
+    tabs.appendChild(this.makeModeButton('Visual', 'visual'))
+    tabs.appendChild(this.makeModeButton('Source', 'source'))
+    wrap.appendChild(tabs)
+    return wrap
+  }
+
+  private makeModeButton(label: string, mode: PanelMode): HTMLButtonElement {
+    const button = this.makeButton(label, () => this.setPanelMode(mode), { variant: 'quiet' })
+    button.classList.add(`${PANEL_ID}-mode-btn`)
+    if (this.panelMode === mode) {
+      button.classList.add(`${PANEL_ID}-mode-btn-active`)
+    }
+    return button
+  }
+
+  private setPanelMode(mode: PanelMode): void {
+    if (mode === this.panelMode) return
+    if (mode === 'source') {
+      this.panelSourceDraft = this.composeNoteAssistantBlock(this.panelDraft)
+    } else {
+      this.panelDraft = this.normalizeParsedBlock(this.parseBlockMarkdown(this.panelSourceDraft))
+    }
+    this.panelMode = mode
+    void this.renderCurrentNote()
+  }
+
+  private renderCurrentBlockSection(currentFile: string): HTMLElement {
+    const section = document.createElement('section')
+    section.className = `${PANEL_ID}-section`
+    section.appendChild(this.makeSectionHeading('Current Block', this.panelDraft.items.length))
+
+    const helper = document.createElement('div')
+    helper.className = `${PANEL_ID}-workspace-helper`
+    helper.textContent = this.panelHasExistingBlock
+      ? 'These are the relationships currently stored in the document block.'
+      : 'No relationship block exists yet. Changes here will create one when you save.'
+    section.appendChild(helper)
+
+    const tagWrap = document.createElement('div')
+    tagWrap.className = `${PANEL_ID}-workspace-group`
+    tagWrap.appendChild(this.makeWorkspaceLabel('Tags'))
+    const tagList = document.createElement('div')
+    tagList.className = `${PANEL_ID}-tag-list`
+    for (const tag of this.panelDraft.tags) {
+      tagList.appendChild(this.makeEditableTagChip(tag))
+    }
+    if (!tagList.childElementCount) {
+      const empty = document.createElement('div')
+      empty.className = `${PANEL_ID}-workspace-empty`
+      empty.textContent = 'No tags yet.'
+      tagList.appendChild(empty)
+    }
+    tagWrap.appendChild(tagList)
+    tagWrap.appendChild(this.makeTagAddRow())
+    section.appendChild(tagWrap)
+
+    const linksWrap = document.createElement('div')
+    linksWrap.className = `${PANEL_ID}-workspace-group`
+    linksWrap.appendChild(this.makeWorkspaceLabel('Links'))
+    if (!this.panelDraft.items.length) {
+      const empty = document.createElement('div')
+      empty.className = `${PANEL_ID}-workspace-empty`
+      empty.textContent = 'No related links in the block yet.'
+      linksWrap.appendChild(empty)
+    } else {
+      const list = document.createElement('div')
+      list.className = `${PANEL_ID}-list`
+      for (const [index, item] of this.panelDraft.items.entries()) {
+        list.appendChild(this.renderDraftLinkCard(item, index, currentFile))
+      }
+      linksWrap.appendChild(list)
+    }
+    section.appendChild(linksWrap)
+    return section
+  }
+
+  private renderSuggestionsWorkspaceSection(
+    note: GraphNote | null,
+    graph: GraphFile | null,
+    currentFile: string,
+  ): HTMLElement {
+    const section = document.createElement('section')
+    section.className = `${PANEL_ID}-section`
+    section.appendChild(this.makeSectionHeading('Suggestions', note?.related?.length || 0))
+
+    const helper = document.createElement('div')
+    helper.className = `${PANEL_ID}-workspace-helper`
+    helper.textContent = 'Graph suggestions are optional. Add what helps, ignore what does not.'
+    section.appendChild(helper)
+
+    if (!graph) {
+      const empty = document.createElement('div')
+      empty.className = `${PANEL_ID}-workspace-empty`
+      empty.textContent = `Suggestions unavailable until ${GRAPH_DIR}/${GRAPH_FILE} exists.`
+      section.appendChild(empty)
+      return section
+    }
+
+    if (!note) {
+      const empty = document.createElement('div')
+      empty.className = `${PANEL_ID}-workspace-empty`
+      empty.textContent = 'This note is not indexed yet. Save the block and refresh suggestions when ready.'
+      section.appendChild(empty)
+      return section
+    }
+
+    if (!note.related?.length) {
+      const empty = document.createElement('div')
+      empty.className = `${PANEL_ID}-workspace-empty`
+      empty.textContent = 'No graph suggestions for this note yet.'
+      section.appendChild(empty)
+      return section
+    }
+
+    const list = document.createElement('div')
+    list.className = `${PANEL_ID}-list`
+    const sectionKey = `${this.currentPanelNoteRelPath}:workspace-suggestions`
+    const expanded = this.expandedPanelSections.has(sectionKey)
+    const visible = expanded ? note.related : note.related.slice(0, PANEL_COLLAPSE_LIMIT)
+    for (const item of visible) {
+      list.appendChild(this.renderSuggestionCard(item, currentFile))
+    }
+    if (note.related.length > PANEL_COLLAPSE_LIMIT) {
+      list.appendChild(this.makePanelSectionToggle(sectionKey, expanded, note.related.length))
+    }
+    section.appendChild(list)
+    return section
+  }
+
+  private renderSourceWorkspace(): HTMLElement {
+    const section = document.createElement('section')
+    section.className = `${PANEL_ID}-section`
+    section.appendChild(this.makeSectionHeading('Source', 0))
+
+    const helper = document.createElement('div')
+    helper.className = `${PANEL_ID}-workspace-helper`
+    helper.textContent = 'Edit the relationship block directly. Visual mode and Source mode edit the same object.'
+    section.appendChild(helper)
+
+    const info = document.createElement('div')
+    info.className = `${PANEL_ID}-editor-info`
+    info.textContent = this.panelDraftDirty
+      ? 'Unsaved changes in source mode.'
+      : 'Source is in sync with the document.'
+    section.appendChild(info)
+    this.editorInfoEl = info
+
+    const textarea = document.createElement('textarea')
+    textarea.className = `${PANEL_ID}-editor-textarea`
+    textarea.value = this.panelSourceDraft
+    textarea.spellcheck = false
+    textarea.addEventListener('input', () => {
+      this.panelSourceDraft = textarea.value
+      this.panelDraftDirty = true
+      this.setEditorStatus('Unsaved source changes.')
+      this.setPanelSaveState(false)
+    })
+    this.editorTextarea = textarea
+    section.appendChild(textarea)
+    window.setTimeout(() => {
+      if (this.panelMode === 'source' && this.editorTextarea === textarea) {
+        textarea.focus()
+      }
+    }, 20)
+    return section
+  }
+
+  private makeWorkspaceLabel(label: string): HTMLElement {
+    const el = document.createElement('div')
+    el.className = `${PANEL_ID}-workspace-label`
+    el.textContent = label
+    return el
+  }
+
+  private makeTagAddRow(): HTMLElement {
+    const row = document.createElement('div')
+    row.className = `${PANEL_ID}-input-row`
+    const input = document.createElement('input')
+    input.className = `${PANEL_ID}-input`
+    input.type = 'text'
+    input.placeholder = 'Add tag'
+    const add = this.makeButton('Add Tag', () => {
+      this.addDraftTag(input.value)
+      input.value = ''
+    }, { variant: 'quiet' })
+    input.addEventListener('keydown', evt => {
+      if (evt.key === 'Enter') {
+        evt.preventDefault()
+        this.addDraftTag(input.value)
+        input.value = ''
+      }
+    })
+    row.appendChild(input)
+    row.appendChild(add)
+    return row
+  }
+
+  private makeEditableTagChip(tag: string): HTMLElement {
+    const chip = document.createElement('div')
+    chip.className = `${PANEL_ID}-editable-tag`
+    const label = document.createElement('span')
+    label.textContent = `#${tag}`
+    const remove = this.makeButton('Remove', () => this.removeDraftTag(tag), { variant: 'quiet' })
+    remove.classList.add(`${PANEL_ID}-chip-btn`)
+    chip.appendChild(label)
+    chip.appendChild(remove)
+    return chip
+  }
+
+  private renderDraftLinkCard(item: InlineRelatedNote, index: number, currentFile: string): HTMLElement {
+    const card = document.createElement('div')
+    card.className = `${PANEL_ID}-card`
+    card.title = this.buildInlineCardTooltip(item, currentFile)
+
+    const top = document.createElement('div')
+    top.className = `${PANEL_ID}-row-top`
+
+    const main = document.createElement('div')
+    main.className = `${PANEL_ID}-row-main`
+
+    const title = document.createElement('div')
+    title.className = `${PANEL_ID}-row-title`
+    title.textContent = item.displayTitle
+    const path = document.createElement('div')
+    path.className = `${PANEL_ID}-row-path`
+    path.textContent = item.pathLabel
+    main.appendChild(title)
+    main.appendChild(path)
+
+    if (item.badges.length) {
+      const meta = document.createElement('div')
+      meta.className = `${PANEL_ID}-row-meta`
+      for (const badge of item.badges.slice(0, 4)) {
+        meta.appendChild(this.makeBadge(badge))
+      }
+      main.appendChild(meta)
+    }
+
+    const actions = document.createElement('div')
+    actions.className = `${PANEL_ID}-row-actions`
+    actions.appendChild(this.makeButton('Open', () => void this.openInlineWikiTarget(item.rawTarget, currentFile), { variant: 'quiet' }))
+    actions.appendChild(this.makeButton('Remove', () => this.removeDraftItem(index), { variant: 'quiet' }))
+
+    top.appendChild(main)
+    top.appendChild(actions)
+    card.appendChild(top)
+    return card
+  }
+
+  private renderSuggestionCard(item: RelatedItem, currentFile: string): HTMLElement {
+    const suggestion = this.buildSuggestedInlineItem(item, currentFile)
+    const card = document.createElement('div')
+    card.className = `${PANEL_ID}-card`
+    card.title = this.buildInlineCardTooltip(suggestion, currentFile)
+
+    const top = document.createElement('div')
+    top.className = `${PANEL_ID}-row-top`
+
+    const main = document.createElement('div')
+    main.className = `${PANEL_ID}-row-main`
+
+    const title = document.createElement('div')
+    title.className = `${PANEL_ID}-row-title`
+    title.textContent = suggestion.displayTitle
+    const path = document.createElement('div')
+    path.className = `${PANEL_ID}-row-path`
+    path.textContent = suggestion.pathLabel
+    main.appendChild(title)
+    main.appendChild(path)
+
+    if (suggestion.badges.length) {
+      const meta = document.createElement('div')
+      meta.className = `${PANEL_ID}-row-meta`
+      for (const badge of suggestion.badges.slice(0, 4)) {
+        meta.appendChild(this.makeBadge(badge))
+      }
+      main.appendChild(meta)
+    }
+
+    const actions = document.createElement('div')
+    actions.className = `${PANEL_ID}-row-actions`
+    actions.appendChild(this.makeButton('Open', () => void this.openInlineWikiTarget(suggestion.rawTarget, currentFile), { variant: 'quiet' }))
+    const alreadyAdded = this.hasDraftItem(suggestion.rawTarget)
+    const add = this.makeButton(alreadyAdded ? 'Added' : 'Add', () => this.addDraftItem(suggestion), {
+      variant: alreadyAdded ? 'quiet' : 'primary',
+    })
+    add.disabled = alreadyAdded
+    actions.appendChild(add)
+
+    top.appendChild(main)
+    top.appendChild(actions)
+    card.appendChild(top)
+    return card
+  }
+
+  private buildSuggestedInlineItem(item: RelatedItem, currentFile: string): InlineRelatedNote {
+    const currentDir = normalizePath(platform.path.dirname(currentFile))
+    const root = this.graphRoot || this.getFallbackRootDir()
+    const absTarget = platform.path.join(root, item.relPath)
+    const relative = withoutMarkdownExt(relPathFromDir(absTarget, currentDir))
+    const note = this.noteMap.get(item.relPath)
+    return {
+      rawTarget: relative,
+      displayTitle: item.title,
+      pathLabel: item.relPath,
+      reasonText: item.reasons.sharedTerms?.join(', ') || '',
+      badges: this.collectPanelBadges(note, item),
+    }
+  }
+
+  private hasDraftItem(rawTarget: string): boolean {
+    const normalized = withoutMarkdownExt(rawTarget.split('#')[0].trim())
+    return this.panelDraft.items.some(item => withoutMarkdownExt(item.rawTarget.split('#')[0].trim()) === normalized)
+  }
+
+  private addDraftTag(rawValue: string): void {
+    const tag = rawValue.trim().replace(/^#/, '')
+    if (!tag) return
+    if (this.panelDraft.tags.includes(tag)) return
+    this.panelDraft = this.normalizeParsedBlock({
+      ...this.panelDraft,
+      tags: [...this.panelDraft.tags, tag],
+    })
+    this.panelSourceDraft = this.composeNoteAssistantBlock(this.panelDraft)
+    this.panelDraftDirty = true
+    void this.renderCurrentNote()
+  }
+
+  private removeDraftTag(tag: string): void {
+    this.panelDraft = this.normalizeParsedBlock({
+      ...this.panelDraft,
+      tags: this.panelDraft.tags.filter(item => item !== tag),
+    })
+    this.panelSourceDraft = this.composeNoteAssistantBlock(this.panelDraft)
+    this.panelDraftDirty = true
+    void this.renderCurrentNote()
+  }
+
+  private addDraftItem(item: InlineRelatedNote): void {
+    if (this.hasDraftItem(item.rawTarget)) return
+    this.panelDraft = this.normalizeParsedBlock({
+      ...this.panelDraft,
+      items: [...this.panelDraft.items, item],
+    })
+    this.panelSourceDraft = this.composeNoteAssistantBlock(this.panelDraft)
+    this.panelDraftDirty = true
+    void this.renderCurrentNote()
+  }
+
+  private removeDraftItem(index: number): void {
+    this.panelDraft = this.normalizeParsedBlock({
+      ...this.panelDraft,
+      items: this.panelDraft.items.filter((_, itemIndex) => itemIndex !== index),
+    })
+    this.panelSourceDraft = this.composeNoteAssistantBlock(this.panelDraft)
+    this.panelDraftDirty = true
+    void this.renderCurrentNote()
+  }
+
+  private setPanelFooterStatus(root: string, note: GraphNote | null, graph: GraphFile | null): void {
+    if (!this.panelStatusEl) return
+    const state = this.panelDraftDirty
+      ? 'Unsaved changes'
+      : this.panelHasExistingBlock
+        ? 'Block ready'
+        : 'No block yet'
+    const graphState = graph
+      ? note ? 'suggestions ready' : 'graph pending for this note'
+      : 'graph unavailable'
+    this.panelStatusEl.textContent = `${state} · ${graphState} · ${root}`
+  }
+
+  private setPanelSaveState(busy: boolean): void {
+    this.setButtonState(this.panelCloseBtn, { disabled: busy })
+    this.setButtonState(this.panelSaveBtn, { disabled: busy, busyLabel: busy ? 'Saving...' : undefined })
+    this.setButtonState(this.panelSaveRefreshBtn, {
+      disabled: busy,
+      busyLabel: busy ? 'Refreshing...' : undefined,
+    })
   }
 
   private renderMetaSection(note: GraphNote, graph: GraphFile): HTMLElement {
@@ -1617,8 +2230,8 @@ export default class NoteAssistantPlugin extends Plugin {
 
     const actions = document.createElement('div')
     actions.className = 'tpl-note-assistant-inline-actions'
-    actions.appendChild(this.makeInlineButton('Open Panel', () => void this.open()))
-    actions.appendChild(this.makeInlineButton('Edit Block', () => this.openBlockEditor(key)))
+    actions.appendChild(this.makeInlineButton('Manage', () => void this.openPanelMode('visual')))
+    actions.appendChild(this.makeInlineButton('Source', () => this.openBlockEditor(key)))
 
     header.appendChild(titleWrap)
     header.appendChild(actions)
@@ -1718,10 +2331,8 @@ export default class NoteAssistantPlugin extends Plugin {
   }
 
   private setPanelBusyState(busy: boolean): void {
-    this.setButtonState(this.panelRefreshBtn, { disabled: busy })
-    this.setButtonState(this.panelRebuildBtn, { disabled: busy, busyLabel: busy ? 'Rebuilding...' : undefined })
-    this.setButtonState(this.panelEditBtn, { disabled: busy })
-    this.setButtonState(this.panelUpdateBtn, { disabled: busy })
+    this.setButtonState(this.panelRefreshBtn, { disabled: busy, busyLabel: busy ? 'Refreshing...' : undefined })
+    this.setPanelSaveState(busy)
   }
 
   private setEditorStatus(message: string): void {
@@ -1732,15 +2343,7 @@ export default class NoteAssistantPlugin extends Plugin {
 
   private setEditorBusyState(mode: 'idle' | 'saving' | 'rebuilding'): void {
     const disabled = mode !== 'idle'
-    this.setButtonState(this.editorCancelBtn, { disabled })
-    this.setButtonState(this.editorSaveBtn, {
-      disabled,
-      busyLabel: mode === 'saving' ? 'Saving...' : undefined,
-    })
-    this.setButtonState(this.editorSaveRefreshBtn, {
-      disabled,
-      busyLabel: mode === 'rebuilding' ? 'Refreshing Graph...' : mode === 'saving' ? 'Saving...' : undefined,
-    })
+    this.setPanelSaveState(disabled)
     if (this.editorTextarea) {
       this.editorTextarea.disabled = disabled
     }
@@ -1804,70 +2407,22 @@ export default class NoteAssistantPlugin extends Plugin {
   }
 
   private openBlockEditor(key = ''): void {
-    const initialMarkdown = this.getEditableBlockMarkdown(key)
-    this.logChannel('inline', 'open block editor', { key, hasExistingBlock: !!initialMarkdown.trim() })
-    this.closeBlockEditor()
-
-    const overlay = document.createElement('div')
-    overlay.id = `${PANEL_ID}-editor-overlay`
-    overlay.addEventListener('click', evt => {
-      if (evt.target === overlay) this.closeBlockEditor()
-    })
-
-    const panel = document.createElement('div')
-    panel.id = `${PANEL_ID}-editor-panel`
-    panel.addEventListener('click', evt => evt.stopPropagation())
-
-    const header = document.createElement('div')
-    header.className = `${PANEL_ID}-editor-header`
-    header.innerHTML = `
-      <div>
-        <div class="${PANEL_ID}-editor-title">Edit Note Assistant Block</div>
-        <div class="${PANEL_ID}-editor-subtitle">Save directly, or save and rebuild graph after Typora flushes the file.</div>
-      </div>
-    `
-
-    const body = document.createElement('div')
-    body.className = `${PANEL_ID}-editor-body`
-
-    const info = document.createElement('div')
-    info.className = `${PANEL_ID}-editor-info`
-    info.textContent = `Current file: ${editor.getFilePath() || 'unknown'}`
-
-    const textarea = document.createElement('textarea')
-    textarea.className = `${PANEL_ID}-editor-textarea`
-    textarea.value = initialMarkdown
-    textarea.spellcheck = false
-
-    const actions = document.createElement('div')
-    actions.className = `${PANEL_ID}-editor-actions`
-    this.editorCancelBtn = this.makeButton('Cancel', () => this.closeBlockEditor(), { variant: 'quiet' })
-    this.editorSaveBtn = this.makeButton('Save', () => void this.saveBlockEditor(false))
-    this.editorSaveRefreshBtn = this.makeButton('Save + Refresh Graph', () => void this.saveBlockEditor(true), { variant: 'primary' })
-    actions.appendChild(this.editorCancelBtn)
-    actions.appendChild(this.editorSaveBtn)
-    actions.appendChild(this.editorSaveRefreshBtn)
-
-    body.appendChild(info)
-    body.appendChild(textarea)
-    body.appendChild(actions)
-    panel.appendChild(header)
-    panel.appendChild(body)
-    overlay.appendChild(panel)
-    document.body.appendChild(overlay)
-
-    this.editorOverlay = overlay
-    this.editorTextarea = textarea
-    this.editorInfoEl = info
-
-    window.setTimeout(() => {
-      textarea.focus()
-      textarea.setSelectionRange(textarea.value.length, textarea.value.length)
-    }, 20)
+    const initialMarkdown = this.overlay
+      ? this.composeNoteAssistantBlock(this.panelDraft)
+      : this.getEditableBlockMarkdown(key)
+    this.logChannel('inline', 'open source mode', { key, hasExistingBlock: !!initialMarkdown.trim() })
+    this.panelMode = 'source'
+    this.panelSourceDraft = initialMarkdown
+    this.panelDraft = this.normalizeParsedBlock(this.parseBlockMarkdown(initialMarkdown))
+    this.panelDraftDirty = false
+    if (!this.overlay) {
+      void this.openPanelMode('source')
+      return
+    }
+    void this.renderCurrentNote()
   }
 
   private closeBlockEditor(): void {
-    this.editorOverlay?.remove()
     this.editorOverlay = null
     this.editorTextarea = null
     this.editorInfoEl = null
@@ -1944,7 +2499,7 @@ export default class NoteAssistantPlugin extends Plugin {
   }
 
   private async saveBlockEditor(rebuildGraphAfterSave: boolean): Promise<void> {
-    if (!this.editorTextarea || this.editorSaveInFlight) return
+    if (this.editorSaveInFlight) return
 
     this.editorSaveInFlight = true
     this.setEditorBusyState(rebuildGraphAfterSave ? 'rebuilding' : 'saving')
@@ -1963,7 +2518,15 @@ export default class NoteAssistantPlugin extends Plugin {
       return
     }
 
-    const normalizedBlock = this.normalizeEditedBlockMarkdown(this.editorTextarea.value)
+    const rawBlock = this.panelMode === 'source'
+      ? this.panelSourceDraft
+      : this.composeNoteAssistantBlock(this.panelDraft)
+    const normalizedBlock = this.normalizeEditedBlockMarkdown(rawBlock)
+    this.panelDraft = this.normalizeParsedBlock(this.parseBlockMarkdown(normalizedBlock))
+    this.panelSourceDraft = normalizedBlock
+    this.panelHasExistingBlock = true
+    this.panelLoadedBlockMarkdown = normalizedBlock
+    this.panelDraftDirty = false
     this.logChannel('inline', 'save block editor', {
       rebuildGraphAfterSave,
       blockLength: normalizedBlock.length,
@@ -1980,7 +2543,7 @@ export default class NoteAssistantPlugin extends Plugin {
       this.setEditorStatus('Saved note assistant block.')
       this.setEditorBusyState('idle')
       this.editorSaveInFlight = false
-      this.closeBlockEditor()
+      void this.renderCurrentNote(true)
       return
     }
 
@@ -1996,15 +2559,13 @@ export default class NoteAssistantPlugin extends Plugin {
       if (rebuilt) {
         this.showNotice('Saved block and refreshed graph')
         this.setEditorStatus('Graph refreshed successfully.')
-        this.closeBlockEditor()
+        void this.renderCurrentNote(true)
         return
       }
       this.showNotice('Block saved, but graph refresh failed')
       this.setEditorStatus('Block saved, but graph refresh failed. You can retry now.')
     } finally {
-      if (this.editorOverlay) {
-        this.setEditorBusyState('idle')
-      }
+      this.setEditorBusyState('idle')
       this.editorSaveInFlight = false
     }
   }
@@ -2155,6 +2716,10 @@ function isTagsParagraph(el: HTMLElement): boolean {
 
 function isRelatedLabel(el: HTMLElement): boolean {
   return el.matches('p') && (el.textContent || '').trim() === 'Related Notes:'
+}
+
+function extractNoteAssistantBlock(markdown: string): string | null {
+  return markdown.match(/<!-- note-assistant:start -->[\s\S]*?<!-- note-assistant:end -->/)?.[0] || null
 }
 
 function replaceNoteAssistantBlock(markdown: string, section: string): string {
