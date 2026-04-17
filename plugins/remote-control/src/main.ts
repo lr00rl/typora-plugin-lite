@@ -264,6 +264,12 @@ export default class RemoteControlPlugin extends Plugin<RemoteControlSettings> {
       await editor.openFile(filePath)
       return this.getContext()
     })
+    rpc.registerMethod('typora.openFolder', async (params) => {
+      const input = asRecord(params)
+      const folderPath = expectString(input.folderPath, 'folderPath')
+      await editor.openFolder(folderPath)
+      return this.getContext()
+    })
     rpc.registerMethod('typora.setSourceMode', async (params) => {
       const input = asRecord(params)
       if (typeof input.enabled !== 'boolean') {
@@ -423,6 +429,7 @@ export default class RemoteControlPlugin extends Plugin<RemoteControlSettings> {
     return {
       filePath: editor.getFilePath(),
       fileName: editor.getFileName(),
+      mountFolder: editor.getMountFolder(),
       watchedFolder: editor.getWatchedFolder() ?? null,
       sourceMode: editor.isSourceMode(),
       hasUnsavedChanges: editor.hasUnsavedChanges(),

@@ -12,6 +12,7 @@ declare var _options: {
 
 interface FileConstructorExtensions {
   editor?: TyporaEditor
+  getMountFolder?: () => string
   bundle?: {
     fileName?: string
     filePath: string
@@ -119,6 +120,10 @@ interface Window {
     (moduleName: 'fs'): typeof import('node:fs')
     (moduleName: 'path'): typeof import('node:path')
     (moduleName: string): unknown
+  }
+  JSBridge?: {
+    invoke(method: string, ...args: unknown[]): Promise<unknown>
+    openFolder?(path: string): Promise<unknown> | unknown
   }
   bridge?: {
     callHandler(type: 'library.fetchAllDocs', folder: string): void

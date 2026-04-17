@@ -11,6 +11,10 @@ function getSourceView() {
   return getEditor()?.sourceView
 }
 
+function getJsBridge() {
+  return (window as { JSBridge?: { invoke(method: string, ...args: unknown[]): Promise<unknown> } }).JSBridge
+}
+
 export const editor = {
   /** Get the current markdown content of the document. */
   getMarkdown(): string {
@@ -113,6 +117,11 @@ export const editor = {
     return getEditor()?.library?.watchedFolder
   },
 
+  /** Get Typora's current mount/root folder if available. */
+  getMountFolder(): string {
+    return window.File?.getMountFolder?.() ?? ''
+  },
+
   /** Open a file by path. Times out after 10s if callback not invoked. */
   openFile(filepath: string, timeout = 10_000): Promise<void> {
     return new Promise<void>((resolve, reject) => {
@@ -129,6 +138,15 @@ export const editor = {
         resolve()
       })
     })
+  },
+
+  /** Switch Typora to a different folder root. */
+  async openFolder(folderPath: string): Promise<void> {
+    const bridge = getJsBridge()
+    if (!bridge?.invoke) {
+      throw new Error('[tpl:editor] JSBridge.invoke not available')
+    }
+    await bridge.invoke('controller.switchFolder', folderPath)
   },
 
   /** Insert text at the current cursor position. */

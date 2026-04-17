@@ -55,6 +55,7 @@ export interface ExecListEntry {
 export interface TyporaContext {
   filePath: string
   fileName: string
+  mountFolder: string
   watchedFolder: string | null
   sourceMode: boolean
   hasUnsavedChanges: boolean
@@ -270,6 +271,10 @@ export class TyporaRemoteControlClient {
 
   async openFile(filePath: string): Promise<TyporaContext> {
     return await this.call('typora.openFile', { filePath })
+  }
+
+  async openFolder(folderPath: string): Promise<TyporaContext> {
+    return await this.call('typora.openFolder', { folderPath })
   }
 
   async listTyporaCommands(): Promise<TyporaContext['commands']> {

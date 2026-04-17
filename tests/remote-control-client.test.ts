@@ -92,6 +92,7 @@ test('node client authenticates, runs commands, and consumes typora methods', as
   typora.handle('typora.getContext', () => ({
     filePath: '/tmp/demo.md',
     fileName: 'demo.md',
+    mountFolder: '/tmp',
     watchedFolder: '/tmp',
     sourceMode: false,
     hasUnsavedChanges: false,
@@ -140,6 +141,15 @@ test('node client authenticates, runs commands, and consumes typora methods', as
   typora.handle('typora.setSourceMode', params => ({
     sourceMode: Boolean((params as { enabled?: boolean }).enabled),
   }))
+  typora.handle('typora.openFolder', params => ({
+    filePath: '',
+    fileName: '',
+    mountFolder: (params as { folderPath: string }).folderPath,
+    watchedFolder: (params as { folderPath: string }).folderPath,
+    sourceMode: false,
+    hasUnsavedChanges: false,
+    commands: [{ id: 'demo.run', name: 'Demo Run', pluginId: 'demo' }],
+  }))
   typora.handle('typora.commands.list', () => [
     { id: 'demo.run', name: 'Demo Run', pluginId: 'demo' },
   ])
@@ -168,6 +178,9 @@ test('node client authenticates, runs commands, and consumes typora methods', as
 
   const sourceModeState = await client.setSourceMode(true)
   assert.deepEqual(sourceModeState, { sourceMode: true })
+
+  const folderState = await client.openFolder('/tmp/demo-folder')
+  assert.equal(folderState.watchedFolder, '/tmp/demo-folder')
 
   const plugins = await client.listPlugins()
   assert.deepEqual(plugins.map(plugin => plugin.id), ['note-assistant', 'wider'])

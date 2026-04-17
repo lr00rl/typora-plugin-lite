@@ -352,6 +352,7 @@ export async function createSidecarServer(options: SidecarServerOptions): Promis
       'typora.setSourceMode',
       'typora.insertText',
       'typora.openFile',
+      'typora.openFolder',
       'typora.commands.list',
       'typora.commands.invoke',
       'typora.plugins.list',
