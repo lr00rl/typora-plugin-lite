@@ -58,6 +58,9 @@ interface TyporaEditor {
   sourceView: {
     cm: CodeMirrorLike | null
     inSourceMode: boolean
+    prep?: () => void
+    show?: () => void
+    hide?: () => void
   }
   selection: {
     getRangy: () => unknown

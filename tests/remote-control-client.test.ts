@@ -102,6 +102,9 @@ test('node client authenticates, runs commands, and consumes typora methods', as
     fileName: 'demo.md',
     markdown: '# demo',
   }))
+  typora.handle('typora.setSourceMode', params => ({
+    sourceMode: Boolean((params as { enabled?: boolean }).enabled),
+  }))
   typora.handle('typora.commands.list', () => [
     { id: 'demo.run', name: 'Demo Run', pluginId: 'demo' },
   ])
@@ -127,6 +130,9 @@ test('node client authenticates, runs commands, and consumes typora methods', as
 
   const documentState = await client.getDocument()
   assert.equal(documentState.markdown, '# demo')
+
+  const sourceModeState = await client.setSourceMode(true)
+  assert.deepEqual(sourceModeState, { sourceMode: true })
 
   const commands = await client.listTyporaCommands()
   assert.deepEqual(commands, [

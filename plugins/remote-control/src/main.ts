@@ -264,6 +264,14 @@ export default class RemoteControlPlugin extends Plugin<RemoteControlSettings> {
       await editor.openFile(filePath)
       return this.getContext()
     })
+    rpc.registerMethod('typora.setSourceMode', async (params) => {
+      const input = asRecord(params)
+      if (typeof input.enabled !== 'boolean') {
+        throw new JsonRpcRemoteError(-32602, 'Invalid enabled')
+      }
+      const sourceMode = await editor.setSourceMode(input.enabled)
+      return { sourceMode }
+    })
     rpc.registerMethod('typora.commands.list', async () => {
       return getApp().commands.list()
     })

@@ -7,6 +7,10 @@ function getEditor(): TyporaEditor | undefined {
   return (window as any).File?.editor
 }
 
+function getSourceView() {
+  return getEditor()?.sourceView
+}
+
 export const editor = {
   /** Get the current markdown content of the document. */
   getMarkdown(): string {
@@ -64,7 +68,44 @@ export const editor = {
 
   /** Check if source mode is active. */
   isSourceMode(): boolean {
-    return getEditor()?.sourceView?.inSourceMode ?? false
+    return getSourceView()?.inSourceMode ?? false
+  },
+
+  /** Set source mode on or off. Resolves with the resulting state. */
+  async setSourceMode(enabled: boolean, timeout = 5_000): Promise<boolean> {
+    const sourceView = getSourceView()
+    if (!sourceView) {
+      throw new Error('[tpl:editor] sourceView not available')
+    }
+
+    if (sourceView.inSourceMode === enabled) {
+      return sourceView.inSourceMode
+    }
+
+    if (enabled) {
+      if (!sourceView.cm) {
+        sourceView.prep?.()
+      }
+      if (typeof sourceView.show !== 'function') {
+        throw new Error('[tpl:editor] sourceView.show not available')
+      }
+      sourceView.show()
+    } else {
+      if (typeof sourceView.hide !== 'function') {
+        throw new Error('[tpl:editor] sourceView.hide not available')
+      }
+      sourceView.hide()
+    }
+
+    const startedAt = Date.now()
+    while (Date.now() - startedAt < timeout) {
+      if ((getSourceView()?.inSourceMode ?? false) === enabled) {
+        return enabled
+      }
+      await new Promise(resolve => setTimeout(resolve, 50))
+    }
+
+    throw new Error(`[tpl:editor] source mode did not switch to ${enabled ? 'on' : 'off'} before timeout`)
   },
 
   /** Get the library/sidebar's watched folder. */

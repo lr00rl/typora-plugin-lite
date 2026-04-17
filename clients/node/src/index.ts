@@ -67,6 +67,10 @@ export interface TyporaDocument {
   markdown: string
 }
 
+export interface TyporaSourceModeState {
+  sourceMode: boolean
+}
+
 export class TyporaRemoteControlError extends Error {
   readonly code: number
   readonly data?: unknown
@@ -230,6 +234,10 @@ export class TyporaRemoteControlClient {
 
   async setDocument(markdown: string): Promise<TyporaDocument> {
     return await this.call('typora.setDocument', { markdown })
+  }
+
+  async setSourceMode(enabled: boolean): Promise<TyporaSourceModeState> {
+    return await this.call('typora.setSourceMode', { enabled })
   }
 
   async insertText(text: string): Promise<{ inserted: boolean }> {
