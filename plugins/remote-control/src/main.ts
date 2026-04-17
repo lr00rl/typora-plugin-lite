@@ -174,6 +174,12 @@ export default class RemoteControlPlugin extends Plugin<RemoteControlSettings> {
 
     await platform.fs.mkdir(platform.path.dirname(logPath))
 
+    // Parent PID for sidecar liveness watchdog. In Electron renderers,
+    // process.ppid is the main (host-app) process — exactly the lifetime we
+    // want the sidecar tied to. Fall back to renderer pid, then 0 (watcher
+    // skips invalid pids).
+    const parentPid = this.resolveParentPid()
+
     if (IS_NODE) {
       const cp = window.reqnode!('child_process')
       const fs = window.reqnode!('fs')
@@ -186,6 +192,8 @@ export default class RemoteControlPlugin extends Plugin<RemoteControlSettings> {
         String(port),
         '--token',
         token,
+        '--parent-pid',
+        String(parentPid),
       ], {
         detached: true,
         stdio: ['ignore', out, out],
@@ -202,6 +210,8 @@ export default class RemoteControlPlugin extends Plugin<RemoteControlSettings> {
         platform.shell.escape(String(port)),
         '--token',
         platform.shell.escape(token),
+        '--parent-pid',
+        platform.shell.escape(String(parentPid)),
         '>>',
         platform.shell.escape(logPath),
         '2>&1',
@@ -368,6 +378,18 @@ export default class RemoteControlPlugin extends Plugin<RemoteControlSettings> {
     } catch {
       return false
     }
+  }
+
+  private resolveParentPid(): number {
+    const processRef = (window as any).process as NodeJS.Process | undefined
+    // In Electron renderers, `ppid` is the main (host-app) process PID — the
+    // correct lifetime anchor for the sidecar. Fall back to the renderer's own
+    // pid, then 0 (which the watcher treats as "skip").
+    const ppid = Number(processRef?.ppid ?? 0)
+    if (Number.isFinite(ppid) && ppid > 1) return ppid
+    const pid = Number(processRef?.pid ?? 0)
+    if (Number.isFinite(pid) && pid > 1) return pid
+    return 0
   }
 
   private async resolveNodePath(): Promise<string> {

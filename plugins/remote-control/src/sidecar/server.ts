@@ -384,20 +384,114 @@ function getArgValue(argv: string[], name: string): string | undefined {
   return argv[index + 1]
 }
 
+/**
+ * Poll a parent PID every `intervalMs` and invoke `onDead()` the first time
+ * the parent is gone. Uses `process.kill(pid, 0)` for cross-platform presence
+ * detection (Node docs guarantee signal 0 is an existence check on all
+ * platforms). Silently skips invalid / init pids so a sidecar launched
+ * without `--parent-pid` never triggers a false positive.
+ *
+ * Exported so unit tests can exercise the watcher without fork()ing.
+ */
+export function watchParentOrExit(
+  parentPid: number,
+  onDead: () => void,
+  intervalMs = 5_000,
+): (() => void) {
+  if (!Number.isFinite(parentPid) || parentPid <= 1) {
+    return () => {}
+  }
+  let fired = false
+  const timer = setInterval(() => {
+    try {
+      process.kill(parentPid, 0)
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException | undefined)?.code
+      if (code === 'ESRCH' || code === 'ENOENT') {
+        if (fired) return
+        fired = true
+        clearInterval(timer)
+        onDead()
+      }
+      // EPERM → process exists but we lack permission. Still alive.
+    }
+  }, intervalMs)
+  timer.unref?.()
+  return () => clearInterval(timer)
+}
+
+/**
+ * Close the server gracefully, with a hard deadline. If `close()` hangs
+ * (e.g. a spawned exec.start child refuses SIGTERM), the process still
+ * exits within `timeoutMs` so no sidecar lingers past its parent.
+ *
+ * Both `exit` and timing knobs are injectable for unit tests.
+ */
+export async function gracefulShutdown(
+  close: () => Promise<void>,
+  options: { timeoutMs?: number; exit?: (code: number) => void } = {},
+): Promise<void> {
+  const timeoutMs = options.timeoutMs ?? 5_000
+  const exit = options.exit ?? ((code: number) => process.exit(code))
+
+  // Guard against double-exit: if the hard timer fires first, close() may
+  // still eventually resolve/reject, and we must not then issue a second
+  // exit call with a conflicting code.
+  let settled = false
+
+  const hardTimer = setTimeout(() => {
+    if (settled) return
+    settled = true
+    console.warn(`[tpl:remote-control:sidecar] graceful shutdown exceeded ${timeoutMs}ms, forcing exit`)
+    exit(1)
+  }, timeoutMs)
+  hardTimer.unref?.()
+
+  try {
+    await close()
+    if (settled) return
+    settled = true
+    clearTimeout(hardTimer)
+    exit(0)
+  } catch (err) {
+    if (settled) return
+    settled = true
+    clearTimeout(hardTimer)
+    console.error('[tpl:remote-control:sidecar] closeServer threw', err)
+    exit(1)
+  }
+}
+
 export async function runSidecarCli(argv = process.argv): Promise<void> {
   const host = getArgValue(argv, '--host') ?? '127.0.0.1'
   const port = Number.parseInt(getArgValue(argv, '--port') ?? '5619', 10)
   const token = getArgValue(argv, '--token') ?? ''
+  const parentPid = Number.parseInt(getArgValue(argv, '--parent-pid') ?? '0', 10)
 
   if (!token) {
     throw new Error('Missing required --token')
   }
 
-  await createSidecarServer({
-    host,
-    port,
-    token,
+  const server = await createSidecarServer({ host, port, token })
+
+  console.log(
+    `[tpl:remote-control:sidecar] listening on ${host}:${server.port} ` +
+    `(pid=${process.pid}, parent-pid=${parentPid || 'n/a'})`,
+  )
+
+  const shutdown = () => void gracefulShutdown(() => server.close())
+
+  watchParentOrExit(parentPid, () => {
+    console.log(`[tpl:remote-control:sidecar] parent pid ${parentPid} gone — exiting`)
+    shutdown()
   })
+
+  for (const sig of ['SIGTERM', 'SIGINT'] as const) {
+    process.on(sig, () => {
+      console.log(`[tpl:remote-control:sidecar] received ${sig}`)
+      shutdown()
+    })
+  }
 }
 
 const isEntrypoint = typeof process !== 'undefined'
