@@ -36,6 +36,13 @@ export interface SidecarServerOptions {
    * only via the settings UI + sidecar restart.
    */
   allowExec?: boolean
+  /**
+   * When false (default), typora.eval is registered as a 403 deny stub rather
+   * than being forwarded to the Typora session. Enabling this is strictly
+   * stronger than allowExec — eval'd code can spawn shells via
+   * `require('child_process')` regardless of allowExec.
+   */
+  allowEval?: boolean
 }
 
 export interface SidecarServer {
@@ -415,6 +422,21 @@ export async function createSidecarServer(options: SidecarServerOptions): Promis
     ]) {
       peer.registerMethod(method, async (params) => await forwardTypora(method, params))
     }
+
+    // typora.eval is gated at a strictly higher layer than the other typora.*
+    // methods: it still needs a Typora session (otherwise 503 from forwardTypora)
+    // AND requires allowEval=true, mirroring the allowExec pattern above but on
+    // a more dangerous surface.
+    if (options.allowEval) {
+      peer.registerMethod('typora.eval', async (params) => await forwardTypora('typora.eval', params))
+    } else {
+      peer.registerMethod('typora.eval', () => {
+        requireAuth(session)
+        throw new JsonRpcRemoteError(403,
+          'typora.eval disabled by server policy (allowEval=false). Enable it in the Plugin Center → remote-control → Security. This grants arbitrary JS execution in the Typora renderer.',
+        )
+      })
+    }
   })
 
   await new Promise<void>((resolve, reject) => {
@@ -527,17 +549,23 @@ export async function runSidecarCli(argv = process.argv): Promise<void> {
   const token = getArgValue(argv, '--token') ?? ''
   const parentPid = Number.parseInt(getArgValue(argv, '--parent-pid') ?? '0', 10)
   const allowExec = parseBoolFlag(getArgValue(argv, '--allow-exec'))
+  const allowEval = parseBoolFlag(getArgValue(argv, '--allow-eval'))
 
   if (!token) {
     throw new Error('Missing required --token')
   }
 
-  const server = await createSidecarServer({ host, port, token, allowExec })
+  const server = await createSidecarServer({ host, port, token, allowExec, allowEval })
 
   console.log(
     `[tpl:remote-control:sidecar] listening on ${host}:${server.port} ` +
-    `(pid=${process.pid}, parent-pid=${parentPid || 'n/a'}, allowExec=${allowExec})`,
+    `(pid=${process.pid}, parent-pid=${parentPid || 'n/a'}, allowExec=${allowExec}, allowEval=${allowEval})`,
   )
+  if (allowEval) {
+    console.warn(
+      '[tpl:remote-control:sidecar] ⚠ allowEval=true — typora.eval RPC can execute arbitrary JavaScript in the Typora renderer. This bypasses allowExec and other guardrails. Only use this configuration on trusted loopback-only setups.',
+    )
+  }
 
   const shutdown = () => void gracefulShutdown(() => server.close())
 

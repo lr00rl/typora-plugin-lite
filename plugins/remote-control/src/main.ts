@@ -15,6 +15,14 @@ interface RemoteControlSettings extends Record<string, unknown> {
    * connect to the loopback sidecar.
    */
   allowExec: boolean
+  /**
+   * Default-deny arbitrary JavaScript evaluation in the Typora renderer.
+   * Required for the `typora.eval` RPC. This is strictly more powerful than
+   * allowExec — a granted eval surface can spawn shells via `require('child_process')`
+   * regardless of the allowExec setting, and can read/write any Typora state.
+   * Only enable for trusted loopback-only use on personal machines.
+   */
+  allowEval: boolean
 }
 
 interface ServiceState {
@@ -30,6 +38,7 @@ const DEFAULT_SETTINGS: RemoteControlSettings = {
   nodePath: '',
   logPath: '',
   allowExec: false,
+  allowEval: false,
 }
 
 const STATUS_CMD = 'remote-control:show-status'
@@ -43,7 +52,7 @@ const COPY_URL_CMD = 'remote-control:copy-url'
  * them once at startup). Editing any of these in the Plugin Center triggers
  * `scheduleRestart()`.
  */
-const RESTART_KEYS = new Set(['allowExec', 'host', 'port', 'token'])
+const RESTART_KEYS = new Set(['allowExec', 'allowEval', 'host', 'port', 'token'])
 const RESTART_DEBOUNCE_MS = 500
 
 export default class RemoteControlPlugin extends Plugin<RemoteControlSettings> {
@@ -80,6 +89,13 @@ export default class RemoteControlPlugin extends Plugin<RemoteControlSettings> {
         section: 'Security',
         dangerous: true,
       },
+      allowEval: {
+        kind: 'toggle',
+        label: 'Allow JS evaluation in Typora (MAXIMALLY DANGEROUS)',
+        description: 'Required for the typora.eval RPC. Strictly stronger than allowExec — JS in the renderer can spawn shells via require("child_process") regardless of the allowExec setting. Only enable on personal machines; never in shared or server contexts. Toggling restarts the sidecar.',
+        section: 'Security',
+        dangerous: true,
+      },
       nodePath: {
         kind: 'path',
         label: 'Node.js path',
@@ -100,7 +116,7 @@ export default class RemoteControlPlugin extends Plugin<RemoteControlSettings> {
       Security: { title: 'Security', order: 2 },
       Advanced: { title: 'Advanced', order: 3 },
     },
-    order: ['host', 'port', 'token', 'allowExec', 'nodePath', 'logPath'],
+    order: ['host', 'port', 'token', 'allowExec', 'allowEval', 'nodePath', 'logPath'],
   }
 
   static defaultSettings: RemoteControlSettings = { ...DEFAULT_SETTINGS }
@@ -293,6 +309,7 @@ export default class RemoteControlPlugin extends Plugin<RemoteControlSettings> {
     const parentPid = this.resolveParentPid()
 
     const allowExec = this.settings.get('allowExec') ? '1' : '0'
+    const allowEval = this.settings.get('allowEval') ? '1' : '0'
 
     if (IS_NODE) {
       const cp = window.reqnode!('child_process')
@@ -310,6 +327,8 @@ export default class RemoteControlPlugin extends Plugin<RemoteControlSettings> {
         String(parentPid),
         '--allow-exec',
         allowExec,
+        '--allow-eval',
+        allowEval,
       ], {
         detached: true,
         stdio: ['ignore', out, out],
@@ -330,6 +349,8 @@ export default class RemoteControlPlugin extends Plugin<RemoteControlSettings> {
         platform.shell.escape(String(parentPid)),
         '--allow-exec',
         allowExec,
+        '--allow-eval',
+        allowEval,
         '>>',
         platform.shell.escape(logPath),
         '2>&1',
@@ -406,6 +427,40 @@ export default class RemoteControlPlugin extends Plugin<RemoteControlSettings> {
       }
       const sourceMode = await editor.setSourceMode(input.enabled)
       return { sourceMode }
+    })
+    rpc.registerMethod('typora.eval', async (params) => {
+      const input = asRecord(params)
+      const code = expectString(input.code, 'code')
+      const asyncMode = input.async === true
+      const timeoutMs = typeof input.timeoutMs === 'number' && input.timeoutMs > 0
+        ? input.timeoutMs
+        : 10_000
+
+      // Use Node's vm module rather than the Function constructor: it runs in
+      // the current realm (so the code still sees `window`, `document`,
+      // `editor` globals etc), but it's an explicit, documented evaluation API
+      // with a built-in timeout. IIFE wrapping lets the caller declare locals
+      // and `await` when async=true.
+      //
+      // ⚠ This is a full RCE surface when allowEval=true. The sidecar is the
+      // authoritative gate (server.ts); this handler assumes the sidecar
+      // already enforced allowEval=true before forwarding the method.
+      const vm = window.reqnode!('vm') as typeof import('node:vm')
+      const script = asyncMode
+        ? `(async () => { ${code} })()`
+        : `(() => { ${code} })()`
+      try {
+        const raw = await vm.runInThisContext(script, {
+          displayErrors: true,
+          timeout: timeoutMs,
+        })
+        return { result: toSerializable(raw), async: asyncMode }
+      } catch (err) {
+        throw new JsonRpcRemoteError(
+          -32000,
+          err instanceof Error ? `${err.name}: ${err.message}` : String(err),
+        )
+      }
     })
     rpc.registerMethod('typora.commands.list', async () => {
       return getApp().commands.list()
@@ -679,6 +734,26 @@ function expectString(value: unknown, field: string): string {
     throw new JsonRpcRemoteError(-32602, `Invalid ${field}`)
   }
   return value
+}
+
+/**
+ * Best-effort conversion of an arbitrary value to a JSON-RPC-serialisable
+ * shape. Used by typora.eval to return user-evaluated expressions across the
+ * WebSocket. DOM elements, functions, circular refs, Symbols etc. are
+ * coerced to string or null rather than failing the RPC.
+ */
+function toSerializable(value: unknown): unknown {
+  if (value === undefined) return null
+  if (value === null) return null
+  const t = typeof value
+  if (t === 'string' || t === 'number' || t === 'boolean') return value
+  if (t === 'bigint') return String(value)
+  if (t === 'function' || t === 'symbol') return `<${t}>`
+  try {
+    return JSON.parse(JSON.stringify(value))
+  } catch {
+    try { return String(value) } catch { return null }
+  }
 }
 
 function randomToken(): string {
