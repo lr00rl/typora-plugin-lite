@@ -95,12 +95,50 @@ const pluginConfigs: esbuild.BuildOptions[] = pluginEntries.map(p => ({
   plugins: [tplCoreShimPlugin],
 }))
 
+const sidecarConfigs: esbuild.BuildOptions[] = pluginEntries
+  .map(p => ({
+    name: p.name,
+    entry: [join(ROOT, 'plugins', p.name, 'src', 'sidecar.ts'), join(ROOT, 'plugins', p.name, 'src', 'sidecar', 'server.ts')]
+      .find(path => existsSync(path)) ?? null,
+  }))
+  .filter((item): item is { name: string; entry: string } => item.entry !== null)
+  .map(item => ({
+    bundle: true,
+    sourcemap: true,
+    target: 'node22',
+    platform: 'node' as const,
+    logLevel: 'info' as const,
+    minify: isProd,
+    entryPoints: [item.entry],
+    outfile: join(DIST, 'plugins', item.name, 'bin', 'sidecar.mjs'),
+    format: 'esm' as const,
+    banner: {
+      js: '#!/usr/bin/env node',
+    },
+  }))
+
+const clientConfigs: esbuild.BuildOptions[] = [
+  {
+    bundle: true,
+    sourcemap: true,
+    target: 'node22',
+    platform: 'node' as const,
+    logLevel: 'info' as const,
+    minify: isProd,
+    entryPoints: [join(ROOT, 'clients/node/src/index.ts')],
+    outfile: join(DIST, 'clients', 'node', 'index.mjs'),
+    format: 'esm' as const,
+  },
+]
+
 async function build() {
   if (isWatch) {
     const contexts = await Promise.all([
       esbuild.context(loaderConfig),
       esbuild.context(coreConfig),
       ...pluginConfigs.map(c => esbuild.context(c)),
+      ...sidecarConfigs.map(c => esbuild.context(c)),
+      ...clientConfigs.map(c => esbuild.context(c)),
     ])
     await Promise.all(contexts.map(ctx => ctx.watch()))
     console.log('Watching for changes...')
@@ -109,6 +147,8 @@ async function build() {
       esbuild.build(loaderConfig),
       esbuild.build(coreConfig),
       ...pluginConfigs.map(c => esbuild.build(c)),
+      ...sidecarConfigs.map(c => esbuild.build(c)),
+      ...clientConfigs.map(c => esbuild.build(c)),
     ])
     // Copy plugin manifests to dist
     for (const p of pluginEntries) {

@@ -10,8 +10,9 @@ import { EventBus } from './plugin/events.js'
 import { editor } from './editor/api.js'
 import { HotkeyManager } from './hotkey/manager.js'
 import { PluginCenterPanel } from './ui/plugin-center.js'
+import { CommandRegistry } from './command/registry.js'
 
-export { IS_MAC, IS_NODE, platform, Plugin, PluginManager, PluginSettings, EventBus, editor, HotkeyManager, PluginCenterPanel }
+export { IS_MAC, IS_NODE, platform, Plugin, PluginManager, PluginSettings, EventBus, editor, HotkeyManager, PluginCenterPanel, CommandRegistry }
 export type { PluginManifest, LoadingStrategy }
 
 export interface TplApp {
@@ -19,6 +20,7 @@ export interface TplApp {
   plugins: PluginManager
   events: EventBus
   hotkeys: HotkeyManager
+  commands: CommandRegistry
   editor: typeof editor
   pluginCenter: PluginCenterPanel
 }
@@ -42,13 +44,14 @@ export async function bootstrap(): Promise<TplApp> {
 
   const events = new EventBus()
   const hotkeys = new HotkeyManager()
+  const commands = new CommandRegistry(events)
   const plugins = new PluginManager({ platform, events, hotkeys, editor })
   const pluginCenter = new PluginCenterPanel(plugins, hotkeys)
 
   // Register Mod+` to toggle Plugin Center
   hotkeys.register('Mod+`', () => pluginCenter.toggle())
 
-  _app = { platform, plugins, events, hotkeys, editor, pluginCenter }
+  _app = { platform, plugins, events, hotkeys, commands, editor, pluginCenter }
 
   // Scan and load startup plugins
   await plugins.scanAndLoad()
@@ -95,7 +98,7 @@ function showLoadedToast(pluginCount: number): void {
 // Plugins access core via window.__tpl.core
 const coreExports = {
   IS_MAC, IS_NODE, platform, Plugin, PluginManager, PluginSettings,
-  EventBus, editor, HotkeyManager, getApp, bootstrap,
+  EventBus, editor, HotkeyManager, CommandRegistry, getApp, bootstrap,
 }
 ;(window as any).__tpl = {
   ...((window as any).__tpl || {}),

@@ -1,0 +1,10 @@
+{
+  "id": "remote-control",
+  "name": "Remote Control",
+  "version": "0.1.0",
+  "description": "Expose a loopback-only JSON-RPC control surface for commands, shell execution, and Typora actions",
+  "main": "main.js",
+  "loading": {
+    "startup": true
+  }
+}

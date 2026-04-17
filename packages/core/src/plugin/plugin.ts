@@ -16,6 +16,7 @@ let noticeRemoveTimer = 0
 export interface Command {
   id: string
   name: string
+  pluginId?: string
   callback: () => void | Promise<void>
 }
 
@@ -61,7 +62,10 @@ export abstract class Plugin<T extends Record<string, unknown> = Record<string, 
   // --- Registration helpers (all auto-disposed on unload) ---
 
   registerCommand(cmd: Command): void {
-    this.app.events.emit('command:register', cmd)
+    this.app.events.emit('command:register', {
+      ...cmd,
+      pluginId: cmd.pluginId ?? this.manifest.id,
+    })
     this.disposables.push(() => this.app.events.emit('command:unregister', cmd.id))
   }
 
