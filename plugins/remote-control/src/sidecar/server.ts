@@ -1,6 +1,7 @@
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { spawn, type ChildProcessByStdio } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import type { Readable } from 'node:stream'
 
 import { JsonRpcPeer, JsonRpcRemoteError } from '../rpc/json-rpc.js'
@@ -29,6 +30,12 @@ export interface SidecarServerOptions {
   host: string
   port: number
   token: string
+  /**
+   * When false (default), exec.run / exec.start / exec.kill / exec.list reject
+   * with 403 "exec disabled by server policy". Plugin-level setting; flips
+   * only via the settings UI + sidecar restart.
+   */
+  allowExec?: boolean
 }
 
 export interface SidecarServer {
@@ -45,6 +52,31 @@ function asObject(value: unknown): Record<string, unknown> {
 function requireAuth(session: Session): void {
   if (!session.authenticated) {
     throw new JsonRpcRemoteError(401, 'Unauthenticated session')
+  }
+}
+
+/**
+ * Wrap any `markdown` string field with trust-boundary markers.
+ *
+ * The nonce (`id`) is generated per-response, so malicious markdown cannot
+ * forge a matching `<<<TPL_DOC_END id="...">>>` to collapse the boundary early.
+ * The `trust="untrusted"` attribute instructs LLM agents (via SKILL.md Trust
+ * Boundaries section) to treat the enclosed content as data, not instructions.
+ *
+ * Invariant: this wrapping is hardcoded — not exposed as a user toggle — so
+ * the threat-model declaration in SKILL.md stays authoritative.
+ */
+export function wrapUntrustedMarkdown(result: unknown): unknown {
+  if (!result || typeof result !== 'object') return result
+  const record = result as Record<string, unknown>
+  if (typeof record.markdown !== 'string') return result
+  const id = randomBytes(6).toString('hex')
+  return {
+    ...record,
+    markdown:
+      `<<<TPL_DOC_START id="${id}" trust="untrusted">>>\n` +
+      record.markdown +
+      `\n<<<TPL_DOC_END id="${id}">>>`,
   }
 }
 
@@ -248,89 +280,104 @@ export async function createSidecarServer(options: SidecarServerOptions): Promis
       return { stopping: true }
     })
 
-    peer.registerMethod('exec.run', async (params) => {
-      requireAuth(session)
-      return await runBufferedCommand(params)
-    })
-
-    peer.registerMethod('exec.start', async (params) => {
-      requireAuth(session)
-      const input = asObject(params)
-      const command = asString(input.command, 'command')
-      const cwd = asOptionalString(input.cwd)
-
-      const child = spawn(command, {
-        cwd,
-        shell: true,
-        stdio: ['ignore', 'pipe', 'pipe'],
+    if (options.allowExec) {
+      peer.registerMethod('exec.run', async (params) => {
+        requireAuth(session)
+        return await runBufferedCommand(params)
       })
 
-      const execId = `${Date.now()}-${processes.size + 1}`
-      const running: RunningExec = {
-        execId,
-        ownerSessionId: session.id,
-        command,
-        ...(cwd ? { cwd } : {}),
-        child,
-        startedAt: Date.now(),
-      }
-      processes.set(execId, running)
+      peer.registerMethod('exec.start', async (params) => {
+        requireAuth(session)
+        const input = asObject(params)
+        const command = asString(input.command, 'command')
+        const cwd = asOptionalString(input.cwd)
 
-      child.stdout.on('data', chunk => {
-        session.peer.notify('exec.stdout', {
-          execId,
-          data: chunk.toString(),
+        const child = spawn(command, {
+          cwd,
+          shell: true,
+          stdio: ['ignore', 'pipe', 'pipe'],
         })
-      })
-      child.stderr.on('data', chunk => {
-        session.peer.notify('exec.stderr', {
+
+        const execId = `${Date.now()}-${processes.size + 1}`
+        const running: RunningExec = {
           execId,
-          data: chunk.toString(),
+          ownerSessionId: session.id,
+          command,
+          ...(cwd ? { cwd } : {}),
+          child,
+          startedAt: Date.now(),
+        }
+        processes.set(execId, running)
+
+        child.stdout.on('data', chunk => {
+          session.peer.notify('exec.stdout', {
+            execId,
+            data: chunk.toString(),
+          })
         })
-      })
-      child.on('close', (exitCode, signal) => {
-        processes.delete(execId)
-        session.peer.notify('exec.exit', {
+        child.stderr.on('data', chunk => {
+          session.peer.notify('exec.stderr', {
+            execId,
+            data: chunk.toString(),
+          })
+        })
+        child.on('close', (exitCode, signal) => {
+          processes.delete(execId)
+          session.peer.notify('exec.exit', {
+            execId,
+            exitCode: exitCode ?? -1,
+            signal,
+          })
+        })
+
+        return {
           execId,
-          exitCode: exitCode ?? -1,
-          signal,
-        })
+          pid: child.pid,
+          command,
+          ...(cwd ? { cwd } : {}),
+        }
       })
 
-      return {
-        execId,
-        pid: child.pid,
-        command,
-        ...(cwd ? { cwd } : {}),
-      }
-    })
+      peer.registerMethod('exec.kill', (params) => {
+        requireAuth(session)
+        const input = asObject(params)
+        const execId = asString(input.execId, 'execId')
+        const signal = asOptionalString(input.signal) ?? 'SIGTERM'
+        const running = processes.get(execId)
+        if (!running) {
+          throw new JsonRpcRemoteError(404, `Unknown execId: ${execId}`)
+        }
+        return {
+          execId,
+          killed: running.child.kill(signal as NodeJS.Signals),
+        }
+      })
 
-    peer.registerMethod('exec.kill', (params) => {
-      requireAuth(session)
-      const input = asObject(params)
-      const execId = asString(input.execId, 'execId')
-      const signal = asOptionalString(input.signal) ?? 'SIGTERM'
-      const running = processes.get(execId)
-      if (!running) {
-        throw new JsonRpcRemoteError(404, `Unknown execId: ${execId}`)
+      peer.registerMethod('exec.list', () => {
+        requireAuth(session)
+        return [...processes.values()].map(running => ({
+          execId: running.execId,
+          ownerSessionId: running.ownerSessionId,
+          command: running.command,
+          cwd: running.cwd ?? null,
+          pid: running.child.pid,
+          startedAt: running.startedAt,
+        }))
+      })
+    } else {
+      // Exec disabled: register deny stubs so clients get a clear error code
+      // instead of -32601 "Method not found". The gate runs AFTER authentication
+      // so we still reject 401 for unauthenticated peers first.
+      const denyExec = () => {
+        throw new JsonRpcRemoteError(403,
+          'exec disabled by server policy (allowExec=false). Enable it in the Plugin Center → remote-control → Security.',
+        )
       }
-      return {
-        execId,
-        killed: running.child.kill(signal as NodeJS.Signals),
-      }
-    })
-
-    peer.registerMethod('exec.list', () => {
-      requireAuth(session)
-      return [...processes.values()].map(running => ({
-        execId: running.execId,
-        ownerSessionId: running.ownerSessionId,
-        command: running.command,
-        cwd: running.cwd ?? null,
-        pid: running.child.pid,
-        startedAt: running.startedAt,
-      }))
-    })
+      peer.registerMethod('exec.run',   () => { requireAuth(session); denyExec() })
+      peer.registerMethod('exec.start', () => { requireAuth(session); denyExec() })
+      peer.registerMethod('exec.kill',  () => { requireAuth(session); denyExec() })
+      peer.registerMethod('exec.list',  () => { requireAuth(session); denyExec() })
+    }
 
     const forwardTypora = async (method: string, params: unknown) => {
       requireAuth(session)
@@ -342,7 +389,13 @@ export async function createSidecarServer(options: SidecarServerOptions): Promis
         typoraSessionId = null
         throw new JsonRpcRemoteError(503, 'Typora session is unavailable')
       }
-      return await target.peer.request(method, params)
+      const result = await target.peer.request(method, params)
+      // Boundary markers on document-bearing responses (prompt-injection guard).
+      // Hardcoded invariant: no user-facing toggle.
+      if (method === 'typora.getDocument' || method === 'typora.getContext') {
+        return wrapUntrustedMarkdown(result)
+      }
+      return result
     }
 
     for (const method of [
@@ -462,21 +515,28 @@ export async function gracefulShutdown(
   }
 }
 
+function parseBoolFlag(value: string | undefined): boolean {
+  if (!value) return false
+  const v = value.toLowerCase()
+  return v === '1' || v === 'true' || v === 'yes' || v === 'on'
+}
+
 export async function runSidecarCli(argv = process.argv): Promise<void> {
   const host = getArgValue(argv, '--host') ?? '127.0.0.1'
   const port = Number.parseInt(getArgValue(argv, '--port') ?? '5619', 10)
   const token = getArgValue(argv, '--token') ?? ''
   const parentPid = Number.parseInt(getArgValue(argv, '--parent-pid') ?? '0', 10)
+  const allowExec = parseBoolFlag(getArgValue(argv, '--allow-exec'))
 
   if (!token) {
     throw new Error('Missing required --token')
   }
 
-  const server = await createSidecarServer({ host, port, token })
+  const server = await createSidecarServer({ host, port, token, allowExec })
 
   console.log(
     `[tpl:remote-control:sidecar] listening on ${host}:${server.port} ` +
-    `(pid=${process.pid}, parent-pid=${parentPid || 'n/a'})`,
+    `(pid=${process.pid}, parent-pid=${parentPid || 'n/a'}, allowExec=${allowExec})`,
   )
 
   const shutdown = () => void gracefulShutdown(() => server.close())

@@ -1,4 +1,4 @@
-import { Plugin } from '@typora-plugin-lite/core'
+import { Plugin, type SettingsSchema } from '@typora-plugin-lite/core'
 
 type WiderMode = 'default' | 'wide' | 'full'
 
@@ -22,6 +22,25 @@ const FALLBACK_SIDENOTE_RESERVE = 300
 const SIDENOTE_BREAKPOINT = 1200
 
 export default class WiderPlugin extends Plugin<WiderSettings> {
+  /** Declarative schema so the Plugin Center renders a segmented control for mode. */
+  static settingsSchema: SettingsSchema<WiderSettings> = {
+    fields: {
+      mode: {
+        kind: 'enum',
+        label: 'Editor width',
+        description: 'Switch the writing area between Default, Wide, and Full. Changing the mode here is equivalent to running the `wider:set-*` command.',
+        options: [
+          { value: 'default', label: 'Default', hint: 'Comfortable default width.' },
+          { value: 'wide', label: 'Wide', hint: 'More breathing room.' },
+          { value: 'full', label: 'Full', hint: 'Fill the window up to a safe max.' },
+        ],
+        style: 'segmented',
+      },
+    },
+  }
+
+  static defaultSettings: WiderSettings = { mode: 'default' }
+
   private writeEl: HTMLElement | null = null
   private observer: MutationObserver | null = null
   private currentMode: WiderMode = 'default'
@@ -40,6 +59,17 @@ export default class WiderPlugin extends Plugin<WiderSettings> {
     this.observer = new MutationObserver(() => this.applyMode(this.currentMode, false))
     this.observer.observe(this.writeEl, { attributes: true, attributeFilter: ['class'] })
     this.addDisposable(() => this.observer?.disconnect())
+
+    // Apply settings edits coming from outside (e.g. Plugin Center UI) live,
+    // without having to round-trip through a command. setMode() already mutates
+    // currentMode before calling settings.set(), so this handler is a no-op on
+    // self-triggered changes.
+    this.addDisposable(this.settings.onChange((key, value) => {
+      if (key !== 'mode' || !isWiderMode(value)) return
+      if (value === this.currentMode) return
+      this.currentMode = value
+      this.applyMode(value, true)
+    }))
 
     this.applyMode(this.currentMode, false)
   }

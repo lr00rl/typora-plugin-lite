@@ -14,6 +14,20 @@ import { CommandRegistry } from './command/registry.js'
 
 export { IS_MAC, IS_NODE, platform, Plugin, PluginManager, PluginSettings, EventBus, editor, HotkeyManager, PluginCenterPanel, CommandRegistry }
 export type { PluginManifest, LoadingStrategy }
+export type {
+  FieldDescriptor,
+  SettingsSchema,
+  SectionSpec,
+  EnumOption,
+  ToggleField,
+  StringField,
+  NumberField,
+  EnumField,
+  SecretField,
+  PathField,
+  ResolvedSection,
+} from './plugin/settings-schema.js'
+export { orderedFields, groupBySection } from './plugin/settings-schema.js'
 
 export interface TplApp {
   platform: typeof platform

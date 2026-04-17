@@ -99,7 +99,7 @@ test('rejects unauthenticated calls', async (t) => {
 })
 
 test('authenticates and executes short-lived commands', async (t) => {
-  const server = await createSidecarServer({ host: '127.0.0.1', port: 0, token: 'secret-token' })
+  const server = await createSidecarServer({ host: '127.0.0.1', port: 0, token: 'secret-token', allowExec: true })
   t.after(async () => {
     await server.close()
   })
@@ -158,6 +158,12 @@ test('proxies typora-scoped requests through the authenticated typora session', 
   })
 
   const documentState = await client.call<{ markdown: string; filePath: string }>('typora.getDocument')
-  assert.equal(documentState.markdown, '# hello')
+  // As of the security-hardening release, the sidecar wraps forwarded markdown
+  // in trust-boundary markers to blunt prompt-injection against LLM clients.
+  // The inner content must still contain the original body.
+  assert.match(
+    documentState.markdown,
+    /^<<<TPL_DOC_START id="[0-9a-f]+" trust="untrusted">>>\n# hello\n<<<TPL_DOC_END id="[0-9a-f]+">>>$/,
+  )
   assert.equal(documentState.filePath, '/tmp/example.md')
 })

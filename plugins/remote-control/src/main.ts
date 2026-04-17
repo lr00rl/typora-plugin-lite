@@ -1,4 +1,4 @@
-import { Plugin, editor, getApp, platform, IS_NODE } from '@typora-plugin-lite/core'
+import { Plugin, editor, getApp, platform, IS_NODE, type SettingsSchema } from '@typora-plugin-lite/core'
 
 import { JsonRpcPeer, JsonRpcRemoteError } from './rpc/json-rpc.js'
 
@@ -9,6 +9,12 @@ interface RemoteControlSettings extends Record<string, unknown> {
   token: string
   nodePath: string
   logPath: string
+  /**
+   * Default-deny shell execution. Required for exec.run / exec.start / exec.list /
+   * exec.kill RPC methods. Leave off unless you trust every client that can
+   * connect to the loopback sidecar.
+   */
+  allowExec: boolean
 }
 
 interface ServiceState {
@@ -23,6 +29,7 @@ const DEFAULT_SETTINGS: RemoteControlSettings = {
   token: '',
   nodePath: '',
   logPath: '',
+  allowExec: false,
 }
 
 const STATUS_CMD = 'remote-control:show-status'
@@ -31,7 +38,73 @@ const STOP_CMD = 'remote-control:stop-service'
 const COPY_TOKEN_CMD = 'remote-control:copy-token'
 const COPY_URL_CMD = 'remote-control:copy-url'
 
+/**
+ * Settings whose change requires a fresh sidecar process (the sidecar reads
+ * them once at startup). Editing any of these in the Plugin Center triggers
+ * `scheduleRestart()`.
+ */
+const RESTART_KEYS = new Set(['allowExec', 'host', 'port', 'token'])
+const RESTART_DEBOUNCE_MS = 500
+
 export default class RemoteControlPlugin extends Plugin<RemoteControlSettings> {
+  static settingsSchema: SettingsSchema<RemoteControlSettings> = {
+    fields: {
+      host: {
+        kind: 'string',
+        label: 'Host',
+        description: 'Bind address. Keep 127.0.0.1 for loopback-only; LAN exposure is not supported.',
+        section: 'Network',
+        monospace: true,
+        validate: (v) => v.length === 0 ? 'Host is required' : null,
+      },
+      port: {
+        kind: 'number',
+        label: 'Port',
+        description: 'TCP port for the sidecar WebSocket (JSON-RPC).',
+        section: 'Network',
+        min: 1024,
+        max: 65535,
+        validate: (v) => (!Number.isInteger(v) ? 'Port must be an integer' : null),
+      },
+      token: {
+        kind: 'secret',
+        label: 'Bearer token',
+        description: 'Automatically generated on first launch. Clients must present this token to authenticate.',
+        section: 'Security',
+        regenerate: () => randomToken(),
+      },
+      allowExec: {
+        kind: 'toggle',
+        label: 'Allow shell execution (DANGEROUS)',
+        description: 'Required for exec.run / exec.start RPC methods. Off by default — enable only if you trust every client. Toggling restarts the sidecar.',
+        section: 'Security',
+        dangerous: true,
+      },
+      nodePath: {
+        kind: 'path',
+        label: 'Node.js path',
+        description: 'Absolute path to a node binary. Leave blank to auto-detect from PATH.',
+        section: 'Advanced',
+        placeholder: '(auto-detected)',
+      },
+      logPath: {
+        kind: 'path',
+        label: 'Sidecar log file',
+        description: 'Where the sidecar appends stdout/stderr. Leave blank to use the default under dataDir.',
+        section: 'Advanced',
+        placeholder: '(default: <dataDir>/remote-control/logs/sidecar.log)',
+      },
+    },
+    sections: {
+      Network:  { title: 'Network',  order: 1 },
+      Security: { title: 'Security', order: 2 },
+      Advanced: { title: 'Advanced', order: 3 },
+    },
+    order: ['host', 'port', 'token', 'allowExec', 'nodePath', 'logPath'],
+  }
+
+  static defaultSettings: RemoteControlSettings = { ...DEFAULT_SETTINGS }
+
   private socket: WebSocket | null = null
   private rpc: JsonRpcPeer | null = null
   private state: ServiceState = { sidecarStarted: false, socketConnected: false }
@@ -46,6 +119,16 @@ export default class RemoteControlPlugin extends Plugin<RemoteControlSettings> {
     this.addDisposable(() => {
       this.disconnect()
     })
+
+    // Auto-restart the sidecar when settings that affect the process lifecycle
+    // change — flipping allowExec, rebinding host/port, or regenerating the
+    // token all require a fresh sidecar to take effect. Debounced so rapid
+    // successive edits in the Plugin Center coalesce into one restart.
+    this.addDisposable(this.settings.onChange((key) => {
+      if (!RESTART_KEYS.has(String(key))) return
+      this.scheduleRestart()
+    }))
+
     void this.enableService().catch(error => {
       console.error('[tpl:remote-control]', error)
       this.showNotice(error instanceof Error ? error.message : 'Remote control failed to start', 6000)
@@ -53,10 +136,37 @@ export default class RemoteControlPlugin extends Plugin<RemoteControlSettings> {
   }
 
   onunload(): void {
+    if (this.restartTimer !== null) {
+      window.clearTimeout(this.restartTimer)
+      this.restartTimer = null
+    }
     void this.stopService({
       persistEnabled: false,
       showNotice: false,
     })
+  }
+
+  private restartTimer: number | null = null
+
+  /** Debounce rapid settings edits then bounce the sidecar. */
+  private scheduleRestart(): void {
+    if (!this.state.sidecarStarted) return
+    if (this.restartTimer !== null) window.clearTimeout(this.restartTimer)
+    this.restartTimer = window.setTimeout(() => {
+      this.restartTimer = null
+      void this.restartService()
+    }, RESTART_DEBOUNCE_MS)
+  }
+
+  private async restartService(): Promise<void> {
+    try {
+      await this.stopService({ persistEnabled: true, showNotice: false })
+      await this.enableService()
+      this.showNotice('Remote control restarted to apply settings', 4000)
+    } catch (err) {
+      console.error('[tpl:remote-control] restart failed:', err)
+      this.showNotice('Remote control restart failed — see console', 6000)
+    }
   }
 
   private registerCommands(): void {
@@ -160,6 +270,8 @@ export default class RemoteControlPlugin extends Plugin<RemoteControlSettings> {
   }
 
   private async ensureSidecar(): Promise<void> {
+    await this.retireStaleSidecarIfAny()
+
     if (await this.pingSidecar()) {
       this.state.sidecarStarted = true
       return
@@ -180,6 +292,8 @@ export default class RemoteControlPlugin extends Plugin<RemoteControlSettings> {
     // skips invalid pids).
     const parentPid = this.resolveParentPid()
 
+    const allowExec = this.settings.get('allowExec') ? '1' : '0'
+
     if (IS_NODE) {
       const cp = window.reqnode!('child_process')
       const fs = window.reqnode!('fs')
@@ -194,6 +308,8 @@ export default class RemoteControlPlugin extends Plugin<RemoteControlSettings> {
         token,
         '--parent-pid',
         String(parentPid),
+        '--allow-exec',
+        allowExec,
       ], {
         detached: true,
         stdio: ['ignore', out, out],
@@ -212,6 +328,8 @@ export default class RemoteControlPlugin extends Plugin<RemoteControlSettings> {
         platform.shell.escape(token),
         '--parent-pid',
         platform.shell.escape(String(parentPid)),
+        '--allow-exec',
+        allowExec,
         '>>',
         platform.shell.escape(logPath),
         '2>&1',
@@ -225,6 +343,7 @@ export default class RemoteControlPlugin extends Plugin<RemoteControlSettings> {
       throw new Error('Remote control sidecar failed to start')
     }
     this.state.sidecarStarted = true
+    await this.writeSidecarVersion()
   }
 
   private async connectRpc(): Promise<void> {
@@ -377,6 +496,78 @@ export default class RemoteControlPlugin extends Plugin<RemoteControlSettings> {
       return pong === 'pong'
     } catch {
       return false
+    }
+  }
+
+  private getSidecarVersionFile(): string {
+    return platform.path.join(platform.dataDir, 'remote-control', 'sidecar.version')
+  }
+
+  /**
+   * If a sidecar from a previous plugin version is still bound to the port,
+   * authenticate with the current token and ask it to shut down via
+   * `system.shutdown`. Best-effort: if the old token is different (e.g. user
+   * rotated) we simply give up — the new ensureSidecar() will surface an
+   * EADDRINUSE and the parent-pid watchdog on restart will clean up eventually.
+   */
+  private async retireStaleSidecarIfAny(): Promise<void> {
+    const versionFile = this.getSidecarVersionFile()
+    const installed = this.manifest.version
+    let recorded: string | null = null
+    try {
+      recorded = (await platform.fs.readText(versionFile)).trim()
+    } catch {
+      // No version file → first run under versioning, or fresh data dir.
+    }
+    if (recorded === installed) return
+
+    // Either never recorded or version changed. If a sidecar is responsive on
+    // our port, tell it to shut down; otherwise just fall through.
+    const alive = await this.pingSidecar()
+    if (!alive) {
+      await this.writeSidecarVersion()
+      return
+    }
+
+    try {
+      const socket = new WebSocket(this.getWsUrl())
+      const rpc = new JsonRpcPeer(payload => socket.send(payload))
+      socket.addEventListener('message', e => rpc.handleMessage(String(e.data)))
+      await new Promise<void>((resolve, reject) => {
+        socket.addEventListener('open', () => resolve(), { once: true })
+        socket.addEventListener('error', () => reject(new Error('stale sidecar: socket open failed')), { once: true })
+      })
+      await rpc.request('session.authenticate', {
+        token: this.settings.get('token'),
+        role: 'client',
+      })
+      try {
+        await rpc.request('system.shutdown')
+      } catch {
+        // Some sidecars return after queueing shutdown — the socket closes
+        // before the reply lands. That's fine.
+      }
+      try { socket.close() } catch {}
+    } catch (err) {
+      console.warn('[tpl:remote-control] could not retire stale sidecar:', err)
+      return
+    }
+
+    // Poll until the port frees (max 3s in 100ms slices).
+    for (let i = 0; i < 30; i++) {
+      await new Promise(r => setTimeout(r, 100))
+      if (!(await this.pingSidecar())) return
+    }
+  }
+
+  /** Record the current plugin version as the on-disk sidecar version. */
+  private async writeSidecarVersion(): Promise<void> {
+    const file = this.getSidecarVersionFile()
+    try {
+      await platform.fs.mkdir(platform.path.dirname(file))
+      await platform.fs.writeText(file, this.manifest.version)
+    } catch (err) {
+      console.warn('[tpl:remote-control] failed to write sidecar.version:', err)
     }
   }
 

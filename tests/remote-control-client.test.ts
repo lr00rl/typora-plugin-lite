@@ -75,7 +75,7 @@ function createTyporaMock(ws: WebSocket) {
 }
 
 test('node client authenticates, runs commands, and consumes typora methods', async (t) => {
-  const server = await createSidecarServer({ host: '127.0.0.1', port: 0, token: 'secret-token' })
+  const server = await createSidecarServer({ host: '127.0.0.1', port: 0, token: 'secret-token', allowExec: true })
   t.after(async () => {
     await server.close()
   })
@@ -174,7 +174,12 @@ test('node client authenticates, runs commands, and consumes typora methods', as
   assert.equal(context.fileName, 'demo.md')
 
   const documentState = await client.getDocument()
-  assert.equal(documentState.markdown, '# demo')
+  // Sidecar wraps forwarded markdown in trust-boundary markers (hardcoded
+  // invariant, no toggle). Inner body must match the upstream response.
+  assert.match(
+    documentState.markdown,
+    /^<<<TPL_DOC_START id="[0-9a-f]+" trust="untrusted">>>\n# demo\n<<<TPL_DOC_END id="[0-9a-f]+">>>$/,
+  )
 
   const sourceModeState = await client.setSourceMode(true)
   assert.deepEqual(sourceModeState, { sourceMode: true })

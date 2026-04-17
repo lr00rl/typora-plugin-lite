@@ -6,6 +6,7 @@
 import type { PluginManifest } from './manifest.js'
 import type { EventBus } from './events.js'
 import { PluginSettings } from './settings.js'
+import type { SettingsSchema } from './settings-schema.js'
 import type { Platform } from '../platform/index.js'
 import type { HotkeyManager } from '../hotkey/manager.js'
 
@@ -27,6 +28,25 @@ export interface TplAppRef {
 }
 
 export abstract class Plugin<T extends Record<string, unknown> = Record<string, unknown>> {
+  /**
+   * Optional schema describing which settings are user-editable and how they
+   * render in the Plugin Center UI. Declared as a static property so the UI
+   * can query it without constructing the plugin instance (which matters for
+   * unloaded plugins).
+   *
+   * Subclasses typed with their own settings shape redeclare this:
+   *   static settingsSchema: SettingsSchema<MyPluginSettings> = { ... }
+   */
+  static settingsSchema?: SettingsSchema<Record<string, unknown>>
+
+  /**
+   * Optional default values for the plugin's settings. Mirrors the DEFAULT_SETTINGS
+   * constant plugins already pass to `super._init`. Exposing it statically lets
+   * the Plugin Center render the settings form against defaults when the plugin
+   * is not loaded (so users can configure before enabling).
+   */
+  static defaultSettings?: Record<string, unknown>
+
   manifest!: PluginManifest
   app!: TplAppRef
   settings!: PluginSettings<T>
