@@ -8,6 +8,19 @@
 export const IS_MAC = typeof window !== 'undefined' && !!window.bridge
 export const IS_NODE = !IS_MAC
 
+function getNodePlatform(): string {
+  return (window as any).process?.platform ?? ''
+}
+
+function joinNodePath(...parts: string[]): string {
+  const path = window.reqnode?.('path') as typeof import('node:path') | undefined
+  if (path) return path.join(...parts)
+  // Posix fallback: preserves a leading "/" and collapses duplicate separators.
+  // Only reached when `window.reqnode` is unavailable (WKWebView — macOS only),
+  // and current Linux-branch callers always feed in absolute paths.
+  return parts.join('/').replace(/\/+/g, '/')
+}
+
 export function getMountFolder(): string {
   if (IS_NODE) {
     return (window as any).File?.editor?.library?.watchedFolder
@@ -55,15 +68,19 @@ export function getBuiltinPluginsDir(): string {
 /**
  * Get the filesystem path to the user plugins directory (third-party plugins).
  * On macOS: derived from baseUrl → /path/to/tpl/plugins (same as builtin for now).
- * On Win/Linux: use _options.userPath + /plugins.
- * Both platforms return the directory that contains plugin subdirectories.
+ * On Linux: ~/.local/Typora/plugins (survives Typora updates, independent of userPath).
+ * On Windows: <userPath>/plugins (Typora's own per-user data root).
  */
 export function getPluginsDir(): string {
   if (IS_MAC) {
     return getBuiltinPluginsDir()
   }
+  if (getNodePlatform() === 'linux') {
+    const home = getHomedir()
+    return home ? joinNodePath(home, '.local', 'Typora', 'plugins') : ''
+  }
   const userPath = (window as any)._options?.userPath ?? ''
-  return userPath ? `${userPath}/plugins` : ''
+  return userPath ? joinNodePath(userPath, 'plugins') : ''
 }
 
 /**
@@ -85,7 +102,13 @@ export function getDataDir(): string {
     }
     return '/tmp/Library/Application Support/abnerworks.Typora/plugins/data'
   }
-  return userPath ? `${userPath}/plugins/data` : ''
+
+  if (getNodePlatform() === 'linux') {
+    const home = getHomedir()
+    return home ? joinNodePath(home, '.local', 'Typora', 'data') : ''
+  }
+
+  return userPath ? joinNodePath(userPath, 'plugins', 'data') : ''
 }
 
 export function getHomedir(): string {

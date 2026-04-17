@@ -1,7 +1,7 @@
 /**
  * Per-plugin JSON-backed settings.
  * Stored at <dataDir>/<pluginId>/settings.json
- * (dataDir is in ~/Library/... so it survives Typora updates)
+ * (dataDir is platform-specific and survives Typora updates)
  */
 
 import type { Platform } from '../platform/index.js'
@@ -24,13 +24,16 @@ export class PluginSettings<T extends Record<string, unknown> = Record<string, u
   async load(): Promise<void> {
     try {
       const exists = await this.platform.fs.exists(this.filePath)
-      if (exists) {
-        const text = await this.platform.fs.readText(this.filePath)
-        const parsed = JSON.parse(text)
-        this.data = { ...this.defaults, ...parsed }
-      }
-    } catch {
-      // Use defaults on any error
+      if (!exists) return
+
+      const text = await this.platform.fs.readText(this.filePath)
+      const parsed = JSON.parse(text)
+      this.data = { ...this.defaults, ...parsed }
+    } catch (err) {
+      console.warn(
+        `[tpl:settings] failed to load settings for "${this.pluginId}" from ${this.filePath}, falling back to defaults:`,
+        err,
+      )
       this.data = { ...this.defaults }
     }
   }

@@ -405,6 +405,5 @@ export function getDefaultSettingsPath(): string {
     const appData = process.env.APPDATA ?? join(homedir(), 'AppData', 'Roaming')
     return join(appData, 'Typora', 'plugins', 'data', 'remote-control', 'settings.json')
   }
-  const xdgConfig = process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config')
-  return join(xdgConfig, 'Typora', 'plugins', 'data', 'remote-control', 'settings.json')
+  return join(homedir(), '.local', 'Typora', 'data', 'remote-control', 'settings.json')
 }

@@ -70,8 +70,10 @@
 
 索引写在插件数据目录下：
 
-- `plugins/data/cache/fuzzy-search/index-<hash>.paths.txt`
-- `plugins/data/cache/fuzzy-search/index-<hash>.meta.json`
+- `<dataDir>/cache/fuzzy-search/index-<hash>.paths.txt`
+- `<dataDir>/cache/fuzzy-search/index-<hash>.meta.json`
+
+在 Linux 上，`dataDir` 默认是 `~/.local/Typora/data`。
 
 其中：
 

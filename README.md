@@ -16,7 +16,7 @@ It is designed to solve the cross-platform compatibility issues of existing plug
 - **Lazy Loading**: Plugins are only loaded when triggered by startup, events, commands, or hotkeys (inspired by `lazy.nvim`).
 - **Standard-Compatible Metadata**: Uses YAML frontmatter and HTML comments (`tpl` markers) to store plugin data, ensuring zero conflict with other Markdown renderers.
 - **Spotlight UI**: A decoupled, high-performance UI runtime for search, commands, and navigation.
-- **External Storage**: All plugin data and configurations are stored in the system application support directory, keeping your Typora installation clean.
+- **External Storage**: Plugin settings, logs, and caches live outside Typora's bundled resources. On Linux, both third-party plugins and persistent data are stored exclusively under `~/.local/Typora/` (`plugins/` for bundles, `data/` for state).
 
 ---
 
@@ -157,6 +157,17 @@ Close and reopen Typora. Open DevTools (`Shift+F12` on Linux/Windows, or `Option
 ```
 [tpl:loader] done
 ```
+
+On Linux, third-party plugin bundles and all persistent plugin data are stored exclusively under `~/.local/Typora/`:
+
+```bash
+~/.local/Typora/plugins      # Third-party plugin bundles (manifest.json + main.js)
+~/.local/Typora/data         # Settings, caches, logs (created on demand)
+```
+
+Legacy `~/plugins/` paths are no longer read or migrated. If you have data under
+`~/plugins/data/`, move it into `~/.local/Typora/data/` (or let plugins regenerate
+their state on next launch) and delete the old directory.
 
 ### Uninstall
 
