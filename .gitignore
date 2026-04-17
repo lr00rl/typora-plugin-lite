@@ -7,6 +7,7 @@ dist/
 typora_plugin/
 typora-community-plugin/
 typora-copilot/
+OpenCLI/
 docs/
 awesome_repos_and_analysis.md
 fzf.vim/
