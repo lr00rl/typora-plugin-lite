@@ -102,6 +102,41 @@ test('node client authenticates, runs commands, and consumes typora methods', as
     fileName: 'demo.md',
     markdown: '# demo',
   }))
+  typora.handle('typora.plugins.list', () => [
+    {
+      id: 'note-assistant',
+      name: 'Note Assistant',
+      version: '0.1.0',
+      description: 'Related notes',
+      loading: { startup: true },
+      loaded: true,
+    },
+    {
+      id: 'wider',
+      name: 'Wider',
+      version: '0.1.0',
+      description: 'Editor width',
+      loading: { startup: true },
+      loaded: true,
+    },
+  ])
+  typora.handle('typora.plugins.setEnabled', params => ({
+    pluginId: (params as { pluginId: string }).pluginId,
+    enabled: Boolean((params as { enabled?: boolean }).enabled),
+  }))
+  typora.handle('typora.plugins.commands.list', params => {
+    const pluginId = (params as { pluginId?: string } | undefined)?.pluginId
+    const commands = [
+      { id: 'note-assistant:open', name: 'Note Assistant: Open', pluginId: 'note-assistant' },
+      { id: 'wider:set-wide', name: 'Editor Width: Wide', pluginId: 'wider' },
+    ]
+    return pluginId ? commands.filter(command => command.pluginId === pluginId) : commands
+  })
+  typora.handle('typora.plugins.commands.invoke', params => ({
+    pluginId: (params as { pluginId: string }).pluginId,
+    commandId: (params as { commandId: string }).commandId,
+    result: { ok: true },
+  }))
   typora.handle('typora.setSourceMode', params => ({
     sourceMode: Boolean((params as { enabled?: boolean }).enabled),
   }))
@@ -134,6 +169,20 @@ test('node client authenticates, runs commands, and consumes typora methods', as
   const sourceModeState = await client.setSourceMode(true)
   assert.deepEqual(sourceModeState, { sourceMode: true })
 
+  const plugins = await client.listPlugins()
+  assert.deepEqual(plugins.map(plugin => plugin.id), ['note-assistant', 'wider'])
+
+  const pluginCommands = await client.listPluginCommands('note-assistant')
+  assert.deepEqual(pluginCommands, [
+    { id: 'note-assistant:open', name: 'Note Assistant: Open', pluginId: 'note-assistant' },
+  ])
+
+  const enabledState = await client.setPluginEnabled('note-assistant', false)
+  assert.deepEqual(enabledState, {
+    pluginId: 'note-assistant',
+    enabled: false,
+  })
+
   const commands = await client.listTyporaCommands()
   assert.deepEqual(commands, [
     { id: 'demo.run', name: 'Demo Run', pluginId: 'demo' },
@@ -142,6 +191,34 @@ test('node client authenticates, runs commands, and consumes typora methods', as
   const invocation = await client.invokeTyporaCommand('demo.run')
   assert.deepEqual(invocation, {
     commandId: 'demo.run',
+    result: { ok: true },
+  })
+
+  const pluginInvocation = await client.invokePluginCommand('note-assistant', 'note-assistant:open')
+  assert.deepEqual(pluginInvocation, {
+    pluginId: 'note-assistant',
+    commandId: 'note-assistant:open',
+    result: { ok: true },
+  })
+
+  const noteAssistantOpen = await client.noteAssistantOpen()
+  assert.deepEqual(noteAssistantOpen, {
+    pluginId: 'note-assistant',
+    commandId: 'note-assistant:open',
+    result: { ok: true },
+  })
+
+  const widerSetWide = await client.widerSetWide()
+  assert.deepEqual(widerSetWide, {
+    pluginId: 'wider',
+    commandId: 'wider:set-wide',
+    result: { ok: true },
+  })
+
+  const mdPaddingFormat = await client.mdPaddingFormat()
+  assert.deepEqual(mdPaddingFormat, {
+    pluginId: 'md-padding',
+    commandId: 'md-padding:format',
     result: { ok: true },
   })
 })

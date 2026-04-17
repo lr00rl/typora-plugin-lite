@@ -281,6 +281,48 @@ export default class RemoteControlPlugin extends Plugin<RemoteControlSettings> {
       const result = await getApp().commands.execute(commandId)
       return { commandId, result: result ?? null }
     })
+    rpc.registerMethod('typora.plugins.list', async () => {
+      return this.listPlugins()
+    })
+    rpc.registerMethod('typora.plugins.setEnabled', async (params) => {
+      const input = asRecord(params)
+      const pluginId = expectString(input.pluginId, 'pluginId')
+      if (typeof input.enabled !== 'boolean') {
+        throw new JsonRpcRemoteError(-32602, 'Invalid enabled')
+      }
+      if (input.enabled) {
+        await getApp().plugins.enablePlugin(pluginId)
+      } else {
+        getApp().plugins.disablePlugin(pluginId)
+      }
+      return {
+        pluginId,
+        enabled: getApp().plugins.isLoaded(pluginId),
+      }
+    })
+    rpc.registerMethod('typora.plugins.commands.list', async (params) => {
+      const input = asRecord(params)
+      const pluginId = typeof input.pluginId === 'string' ? input.pluginId : null
+      return getApp().commands.list().filter(command => !pluginId || command.pluginId === pluginId)
+    })
+    rpc.registerMethod('typora.plugins.commands.invoke', async (params) => {
+      const input = asRecord(params)
+      const pluginId = expectString(input.pluginId, 'pluginId')
+      const commandId = expectString(input.commandId, 'commandId')
+      const command = getApp().commands.list().find(item => item.id === commandId)
+      if (!command) {
+        throw new JsonRpcRemoteError(404, `Unknown commandId: ${commandId}`)
+      }
+      if (command.pluginId !== pluginId) {
+        throw new JsonRpcRemoteError(409, `Command ${commandId} does not belong to plugin ${pluginId}`)
+      }
+      const result = await getApp().commands.execute(commandId)
+      return {
+        pluginId,
+        commandId,
+        result: result ?? null,
+      }
+    })
 
     this.socket = socket
     this.rpc = rpc
@@ -394,6 +436,17 @@ export default class RemoteControlPlugin extends Plugin<RemoteControlSettings> {
       fileName: editor.getFileName(),
       markdown: editor.getMarkdown(),
     }
+  }
+
+  private listPlugins() {
+    return getApp().plugins.getManifests().map(manifest => ({
+      id: manifest.id,
+      name: manifest.name,
+      version: manifest.version,
+      description: manifest.description ?? '',
+      loading: manifest.loading,
+      loaded: getApp().plugins.isLoaded(manifest.id),
+    }))
   }
 }
 

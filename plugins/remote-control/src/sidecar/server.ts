@@ -354,6 +354,10 @@ export async function createSidecarServer(options: SidecarServerOptions): Promis
       'typora.openFile',
       'typora.commands.list',
       'typora.commands.invoke',
+      'typora.plugins.list',
+      'typora.plugins.setEnabled',
+      'typora.plugins.commands.list',
+      'typora.plugins.commands.invoke',
     ]) {
       peer.registerMethod(method, async (params) => await forwardTypora(method, params))
     }

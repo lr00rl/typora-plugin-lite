@@ -71,6 +71,30 @@ export interface TyporaSourceModeState {
   sourceMode: boolean
 }
 
+export interface TyporaPluginDescriptor {
+  id: string
+  name: string
+  version: string
+  description: string
+  loading: {
+    startup?: boolean
+    event?: string[]
+    hotkey?: string[]
+  }
+  loaded: boolean
+}
+
+export interface TyporaPluginEnabledState {
+  pluginId: string
+  enabled: boolean
+}
+
+export interface TyporaPluginCommandResult {
+  pluginId: string
+  commandId: string
+  result: unknown
+}
+
 export class TyporaRemoteControlError extends Error {
   readonly code: number
   readonly data?: unknown
@@ -254,6 +278,74 @@ export class TyporaRemoteControlClient {
 
   async invokeTyporaCommand(commandId: string): Promise<{ commandId: string; result: unknown }> {
     return await this.call('typora.commands.invoke', { commandId })
+  }
+
+  async listPlugins(): Promise<TyporaPluginDescriptor[]> {
+    return await this.call('typora.plugins.list')
+  }
+
+  async setPluginEnabled(pluginId: string, enabled: boolean): Promise<TyporaPluginEnabledState> {
+    return await this.call('typora.plugins.setEnabled', { pluginId, enabled })
+  }
+
+  async listPluginCommands(pluginId?: string): Promise<TyporaContext['commands']> {
+    return await this.call('typora.plugins.commands.list', pluginId ? { pluginId } : {})
+  }
+
+  async invokePluginCommand(pluginId: string, commandId: string): Promise<TyporaPluginCommandResult> {
+    return await this.call('typora.plugins.commands.invoke', { pluginId, commandId })
+  }
+
+  async noteAssistantOpen(): Promise<TyporaPluginCommandResult> {
+    return await this.invokePluginCommand('note-assistant', 'note-assistant:open')
+  }
+
+  async noteAssistantRebuildGraph(): Promise<TyporaPluginCommandResult> {
+    return await this.invokePluginCommand('note-assistant', 'note-assistant:rebuild-graph')
+  }
+
+  async noteAssistantReparseDocument(): Promise<TyporaPluginCommandResult> {
+    return await this.invokePluginCommand('note-assistant', 'note-assistant:reparse-document')
+  }
+
+  async widerCycle(): Promise<TyporaPluginCommandResult> {
+    return await this.invokePluginCommand('wider', 'wider:cycle')
+  }
+
+  async widerSetDefault(): Promise<TyporaPluginCommandResult> {
+    return await this.invokePluginCommand('wider', 'wider:set-default')
+  }
+
+  async widerSetWide(): Promise<TyporaPluginCommandResult> {
+    return await this.invokePluginCommand('wider', 'wider:set-wide')
+  }
+
+  async widerSetFull(): Promise<TyporaPluginCommandResult> {
+    return await this.invokePluginCommand('wider', 'wider:set-full')
+  }
+
+  async widerNarrower(): Promise<TyporaPluginCommandResult> {
+    return await this.invokePluginCommand('wider', 'wider:narrower')
+  }
+
+  async widerWider(): Promise<TyporaPluginCommandResult> {
+    return await this.invokePluginCommand('wider', 'wider:wider')
+  }
+
+  async mdPaddingFormat(): Promise<TyporaPluginCommandResult> {
+    return await this.invokePluginCommand('md-padding', 'md-padding:format')
+  }
+
+  async titleShiftIncrease(): Promise<TyporaPluginCommandResult> {
+    return await this.invokePluginCommand('title-shift', 'title-shift:increase')
+  }
+
+  async titleShiftDecrease(): Promise<TyporaPluginCommandResult> {
+    return await this.invokePluginCommand('title-shift', 'title-shift:decrease')
+  }
+
+  async quickOpenInstallFzf(): Promise<TyporaPluginCommandResult> {
+    return await this.invokePluginCommand('fuzzy-search', 'quick-open:install-fzf')
   }
 
   private handleMessage(raw: string): void {
