@@ -1,8 +1,10 @@
-import { Plugin } from '@typora-plugin-lite/core'
+import { Plugin, editor } from '@typora-plugin-lite/core'
 import { shouldMutateLiveSidenoteDom } from './dom-guards.js'
 import { getPortalPagePosition } from './portal-geometry.js'
+import { SIDENOTE_TAG_CLOSE, formatSidenoteInsertion } from './insertion.js'
 
 const SIDENOTE_RE = /class=["'](?:side|margin)note["']/
+const ADD_SIDENOTE_CMD = 'sidenote:add'
 
 /**
  * Sidenote plugin — Tufte-style margin annotations for Typora.
@@ -26,8 +28,20 @@ export default class SidenotePlugin extends Plugin {
   private widerTransitionTimer = 0
   private isComposing = false
   private pendingProcess = false
+  private quickMenuEl: HTMLDivElement | null = null
+  private savedSelection: unknown | null = null
+  private savedSelectionText = ''
+  private contextMenuOpeningTimer = 0
+  private selectionMenuTimer = 0
+  private isContextMenuOpening = false
 
   onload(): void {
+    this.registerCommand({
+      id: ADD_SIDENOTE_CMD,
+      name: 'Sidenote: Add from Selection',
+      callback: () => this.addSidenoteFromSelection(),
+    })
+
     this.writeEl = document.getElementById('write')
     if (!this.writeEl) return
 
@@ -49,6 +63,11 @@ export default class SidenotePlugin extends Plugin {
     this.registerDomEvent(this.writeEl, 'focusout', () => this.scheduleProcess(), { capture: true })
     this.registerDomEvent(this.writeEl, 'compositionstart', () => this.handleCompositionStart(), { capture: true })
     this.registerDomEvent(this.writeEl, 'compositionend', () => this.handleCompositionEnd(), { capture: true })
+    this.registerDomEvent(this.writeEl, 'mousedown', event => this.handleEditorMouseDown(event as MouseEvent), { capture: true })
+    this.registerDomEvent(this.writeEl, 'contextmenu', event => this.handleContextMenu(event as MouseEvent), { capture: true })
+    this.registerDomEvent(document, 'selectionchange', () => this.handleSelectionChange())
+    this.registerDomEvent(document, 'mousedown', event => this.handleDocumentMouseDown(event as MouseEvent), { capture: true })
+    this.registerDomEvent(document, 'keydown', event => this.handleDocumentKeyDown(event as KeyboardEvent), { capture: true })
     this.registerDomEvent(window, 'resize', () => this.scheduleProcess())
     this.registerDomEvent(window, 'scroll', () => this.scheduleProcess(), { passive: true, capture: true })
     this.registerEvent('wider:mode-changed', () => this.scheduleProcessAfterTransition())
@@ -56,6 +75,10 @@ export default class SidenotePlugin extends Plugin {
       this.observer?.disconnect()
       cancelAnimationFrame(this.rafId)
       clearTimeout(this.widerTransitionTimer)
+      clearTimeout(this.contextMenuOpeningTimer)
+      clearTimeout(this.selectionMenuTimer)
+      this.quickMenuEl?.remove()
+      this.quickMenuEl = null
     })
   }
 
@@ -71,6 +94,241 @@ export default class SidenotePlugin extends Plugin {
     })
     this.portalLayerEl?.remove()
     this.portalLayerEl = null
+    this.quickMenuEl?.remove()
+    this.quickMenuEl = null
+    this.clearSavedSelection()
+  }
+
+  private addSidenoteFromSelection(): void {
+    try {
+      const useSavedSelection = this.isQuickMenuOpen() && this.savedSelectionText.trim() !== ''
+      this.hideQuickMenu()
+
+      if (this.addSidenoteInSourceMode()) {
+        this.clearSavedSelection()
+        this.scheduleProcess()
+        return
+      }
+
+      if (useSavedSelection) this.restoreSavedSelection()
+      const selectedText = this.getSelectedText() || (useSavedSelection ? this.savedSelectionText : '')
+      editor.insertText(formatSidenoteInsertion(selectedText))
+      this.clearSavedSelection()
+      this.scheduleProcess()
+      this.showNotice(selectedText.trim() ? 'Sidenote added' : 'Empty sidenote inserted')
+    } catch (err) {
+      console.error('[tpl:sidenote] add sidenote failed:', err)
+      this.showNotice('Failed to add sidenote')
+    }
+  }
+
+  private addSidenoteInSourceMode(): boolean {
+    const sourceView = window.File?.editor?.sourceView
+    if (!sourceView?.inSourceMode || !sourceView.cm) return false
+
+    const cm = sourceView.cm as {
+      getSelection?: () => string
+      replaceSelection?: (text: string) => void
+      getCursor?: () => { line: number, ch: number }
+      setCursor?: (pos: { line: number, ch: number }) => void
+    }
+    if (typeof cm.replaceSelection !== 'function') return false
+
+    const selectedText = typeof cm.getSelection === 'function' ? cm.getSelection() : ''
+    cm.replaceSelection(formatSidenoteInsertion(selectedText))
+
+    if (!selectedText && typeof cm.getCursor === 'function' && typeof cm.setCursor === 'function') {
+      const cursor = cm.getCursor()
+      cm.setCursor({ line: cursor.line, ch: Math.max(0, cursor.ch - SIDENOTE_TAG_CLOSE.length) })
+    }
+
+    this.showNotice(selectedText.trim() ? 'Sidenote added' : 'Empty sidenote inserted')
+    return true
+  }
+
+  private handleEditorMouseDown(event: MouseEvent): void {
+    if (event.button === 2) {
+      this.isContextMenuOpening = true
+      clearTimeout(this.contextMenuOpeningTimer)
+      this.contextMenuOpeningTimer = window.setTimeout(() => {
+        this.isContextMenuOpening = false
+      }, 800)
+      return
+    }
+
+    this.clearSavedSelection()
+  }
+
+  private handleSelectionChange(): void {
+    clearTimeout(this.selectionMenuTimer)
+
+    const selectedText = this.getSelectedText()
+    if (selectedText.trim()) {
+      this.captureSelection(selectedText)
+      this.selectionMenuTimer = window.setTimeout(() => this.showQuickMenuForSelection(), 120)
+      return
+    }
+
+    if (!this.isContextMenuOpening) {
+      this.hideQuickMenu()
+      this.clearSavedSelection()
+    }
+  }
+
+  private handleContextMenu(event: MouseEvent): void {
+    if (!this.writeEl || !(event.target instanceof Node) || !this.writeEl.contains(event.target)) return
+
+    clearTimeout(this.contextMenuOpeningTimer)
+    this.isContextMenuOpening = false
+
+    const currentSelectedText = this.getSelectedText()
+    if (currentSelectedText.trim()) {
+      this.captureSelection(currentSelectedText)
+    }
+
+    const selectedText = currentSelectedText || this.savedSelectionText
+    if (!selectedText.trim()) {
+      this.hideQuickMenu()
+      return
+    }
+
+    event.preventDefault()
+    event.stopPropagation()
+    this.showQuickMenu(event.clientX, event.clientY)
+  }
+
+  private handleDocumentMouseDown(event: MouseEvent): void {
+    if (event.target instanceof Node && this.quickMenuEl?.contains(event.target)) return
+    this.hideQuickMenu()
+  }
+
+  private handleDocumentKeyDown(event: KeyboardEvent): void {
+    if (event.key === 'Escape') this.hideQuickMenu()
+  }
+
+  private showQuickMenu(clientX: number, clientY: number): void {
+    const menu = this.ensureQuickMenu()
+    menu.style.display = 'block'
+    menu.style.visibility = 'hidden'
+    menu.style.left = '0px'
+    menu.style.top = '0px'
+
+    const rect = menu.getBoundingClientRect()
+    const left = Math.min(clientX, Math.max(8, window.innerWidth - rect.width - 8))
+    const top = Math.min(clientY, Math.max(8, window.innerHeight - rect.height - 8))
+
+    menu.style.left = `${Math.max(8, left)}px`
+    menu.style.top = `${Math.max(8, top)}px`
+    menu.style.visibility = 'visible'
+  }
+
+  private showQuickMenuForSelection(): void {
+    const rect = this.getSelectionRect()
+    if (!rect) return
+
+    const menu = this.ensureQuickMenu()
+    menu.style.display = 'block'
+    menu.style.visibility = 'hidden'
+    menu.style.left = '0px'
+    menu.style.top = '0px'
+
+    const menuRect = menu.getBoundingClientRect()
+    const x = rect.left + (rect.width / 2) - (menuRect.width / 2)
+    const y = rect.top - menuRect.height - 8
+    const left = Math.min(Math.max(8, x), Math.max(8, window.innerWidth - menuRect.width - 8))
+    const top = y >= 8 ? y : Math.min(rect.bottom + 8, Math.max(8, window.innerHeight - menuRect.height - 8))
+
+    menu.style.left = `${left}px`
+    menu.style.top = `${top}px`
+    menu.style.visibility = 'visible'
+  }
+
+  private hideQuickMenu(): void {
+    if (this.quickMenuEl) {
+      this.quickMenuEl.style.display = 'none'
+    }
+  }
+
+  private isQuickMenuOpen(): boolean {
+    return this.quickMenuEl?.style.display === 'block'
+  }
+
+  private ensureQuickMenu(): HTMLDivElement {
+    if (this.quickMenuEl?.isConnected) return this.quickMenuEl
+
+    const menu = document.createElement('div')
+    menu.className = 'tpl-sidenote-quick-menu'
+    menu.setAttribute('role', 'menu')
+    menu.setAttribute('aria-label', 'Sidenote actions')
+
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.textContent = 'Add sidenote'
+    button.setAttribute('role', 'menuitem')
+    button.addEventListener('mousedown', event => {
+      event.preventDefault()
+      event.stopPropagation()
+      this.addSidenoteFromSelection()
+    })
+
+    menu.appendChild(button)
+    document.body.appendChild(menu)
+    this.quickMenuEl = menu
+    return menu
+  }
+
+  private restoreSavedSelection(): void {
+    const saved = this.savedSelection as { select?: () => void } | null
+    if (!saved) return
+
+    if (typeof saved.select === 'function') {
+      saved.select()
+      return
+    }
+
+    const selection = window.File?.editor?.selection as { setRange?: (range: unknown, preserve?: boolean) => void } | undefined
+    selection?.setRange?.(saved, true)
+  }
+
+  private captureSelection(selectedText: string): void {
+    this.savedSelectionText = selectedText
+    const rangy = window.File?.editor?.selection?.getRangy?.()
+    this.savedSelection = rangy ?? null
+  }
+
+  private clearSavedSelection(): void {
+    this.savedSelection = null
+    this.savedSelectionText = ''
+  }
+
+  private getSelectedText(): string {
+    const selection = window.getSelection()
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return ''
+    if (!this.selectionIntersectsWrite(selection)) return ''
+    return selection.toString()
+  }
+
+  private getSelectionRect(): DOMRect | null {
+    const selection = window.getSelection()
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return null
+    if (!this.selectionIntersectsWrite(selection)) return null
+
+    const range = selection.getRangeAt(0)
+    const rects = Array.from(range.getClientRects()).filter(rect => rect.width > 0 && rect.height > 0)
+    return rects[0] ?? range.getBoundingClientRect()
+  }
+
+  private selectionIntersectsWrite(selection: Selection): boolean {
+    if (!this.writeEl) return false
+
+    for (let i = 0; i < selection.rangeCount; i += 1) {
+      const range = selection.getRangeAt(i)
+      const container = range.commonAncestorContainer
+      const node = container.nodeType === Node.ELEMENT_NODE ? container : container.parentNode
+      if (node && this.writeEl.contains(node)) return true
+    }
+
+    return false
   }
 
   private processAll(root: HTMLElement): void {
@@ -288,6 +546,37 @@ const EDITOR_CSS = /* css */ `
   --tpl-sidenote-width: 250px;
   --tpl-sidenote-reserve: 300px;
   --tpl-sidenote-offset: 280px;
+}
+
+.tpl-sidenote-quick-menu {
+  position: fixed;
+  display: none;
+  min-width: 150px;
+  padding: 4px;
+  z-index: 99999;
+  border: 1px solid var(--border-color, rgba(0, 0, 0, 0.14));
+  border-radius: 6px;
+  background: var(--bg-color, #fff);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+  box-sizing: border-box;
+}
+
+.tpl-sidenote-quick-menu button {
+  width: 100%;
+  border: 0;
+  border-radius: 4px;
+  padding: 7px 10px;
+  background: transparent;
+  color: var(--text-color, #333);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.3;
+  text-align: left;
+  cursor: default;
+}
+
+.tpl-sidenote-quick-menu button:hover {
+  background: var(--item-hover-bg-color, rgba(0, 0, 0, 0.06));
 }
 
 /* ── In-text superscript number ── */
