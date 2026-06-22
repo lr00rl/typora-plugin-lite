@@ -45,6 +45,7 @@ test('registers add command even when the write element is not ready', async () 
 
   const { default: SidenotePlugin } = await import('../plugins/sidenote/src/main.ts')
   const emitted: Array<{ event: string, payload: any }> = []
+  const hotkeys: Array<{ key: string, callback: () => void }> = []
   const plugin = new SidenotePlugin()
   ;(plugin as any).manifest = { id: 'sidenote' }
   ;(plugin as any).app = {
@@ -53,7 +54,11 @@ test('registers add command even when the write element is not ready', async () 
         emitted.push({ event, payload })
       },
     },
-    hotkeys: {},
+    hotkeys: {
+      register: (key: string, callback: () => void) => {
+        hotkeys.push({ key, callback })
+      },
+    },
     platform: {},
   }
 
@@ -76,4 +81,7 @@ test('registers add command even when the write element is not ready', async () 
   assert.equal(emitted[0]?.payload.name, 'Sidenote: Add from Selection')
   assert.equal(emitted[0]?.payload.pluginId, 'sidenote')
   assert.equal(typeof emitted[0]?.payload.callback, 'function')
+  assert.equal(hotkeys.length, 1)
+  assert.equal(hotkeys[0]?.key, 'Mod+Alt+S')
+  assert.equal(typeof hotkeys[0]?.callback, 'function')
 })

@@ -1,10 +1,18 @@
-import { Plugin, editor } from '@typora-plugin-lite/core'
+import { IS_MAC, Plugin, editor } from '@typora-plugin-lite/core'
 import { shouldMutateLiveSidenoteDom } from './dom-guards.js'
 import { getPortalPagePosition } from './portal-geometry.js'
 import { SIDENOTE_TAG_CLOSE, formatSidenoteInsertion } from './insertion.js'
 
 const SIDENOTE_RE = /class=["'](?:side|margin)note["']/
 const ADD_SIDENOTE_CMD = 'sidenote:add'
+const ADD_SIDENOTE_HOTKEY = 'Mod+Alt+S'
+
+interface QuickAction {
+  id: string
+  label: string
+  shortcut?: string
+  run: () => void
+}
 
 /**
  * Sidenote plugin — Tufte-style margin annotations for Typora.
@@ -29,6 +37,7 @@ export default class SidenotePlugin extends Plugin {
   private isComposing = false
   private pendingProcess = false
   private quickMenuEl: HTMLDivElement | null = null
+  private quickMenuHideTimer = 0
   private savedSelection: unknown | null = null
   private savedSelectionText = ''
   private contextMenuOpeningTimer = 0
@@ -41,6 +50,7 @@ export default class SidenotePlugin extends Plugin {
       name: 'Sidenote: Add from Selection',
       callback: () => this.addSidenoteFromSelection(),
     })
+    this.registerHotkey(ADD_SIDENOTE_HOTKEY, () => this.addSidenoteFromSelection())
 
     this.writeEl = document.getElementById('write')
     if (!this.writeEl) return
@@ -77,6 +87,7 @@ export default class SidenotePlugin extends Plugin {
       clearTimeout(this.widerTransitionTimer)
       clearTimeout(this.contextMenuOpeningTimer)
       clearTimeout(this.selectionMenuTimer)
+      clearTimeout(this.quickMenuHideTimer)
       this.quickMenuEl?.remove()
       this.quickMenuEl = null
     })
@@ -208,18 +219,13 @@ export default class SidenotePlugin extends Plugin {
 
   private showQuickMenu(clientX: number, clientY: number): void {
     const menu = this.ensureQuickMenu()
-    menu.style.display = 'block'
-    menu.style.visibility = 'hidden'
-    menu.style.left = '0px'
-    menu.style.top = '0px'
+    this.prepareQuickMenuForMeasurement(menu)
 
     const rect = menu.getBoundingClientRect()
     const left = Math.min(clientX, Math.max(8, window.innerWidth - rect.width - 8))
     const top = Math.min(clientY, Math.max(8, window.innerHeight - rect.height - 8))
 
-    menu.style.left = `${Math.max(8, left)}px`
-    menu.style.top = `${Math.max(8, top)}px`
-    menu.style.visibility = 'visible'
+    this.revealQuickMenuAt(Math.max(8, left), Math.max(8, top))
   }
 
   private showQuickMenuForSelection(): void {
@@ -227,10 +233,7 @@ export default class SidenotePlugin extends Plugin {
     if (!rect) return
 
     const menu = this.ensureQuickMenu()
-    menu.style.display = 'block'
-    menu.style.visibility = 'hidden'
-    menu.style.left = '0px'
-    menu.style.top = '0px'
+    this.prepareQuickMenuForMeasurement(menu)
 
     const menuRect = menu.getBoundingClientRect()
     const x = rect.left + (rect.width / 2) - (menuRect.width / 2)
@@ -238,15 +241,40 @@ export default class SidenotePlugin extends Plugin {
     const left = Math.min(Math.max(8, x), Math.max(8, window.innerWidth - menuRect.width - 8))
     const top = y >= 8 ? y : Math.min(rect.bottom + 8, Math.max(8, window.innerHeight - menuRect.height - 8))
 
+    this.revealQuickMenuAt(left, top)
+  }
+
+  private prepareQuickMenuForMeasurement(menu: HTMLDivElement): void {
+    clearTimeout(this.quickMenuHideTimer)
+    menu.style.display = 'flex'
+    menu.classList.remove('tpl-sn-menu-visible')
+    menu.style.visibility = 'hidden'
+    menu.style.left = '0px'
+    menu.style.top = '0px'
+  }
+
+  private revealQuickMenuAt(left: number, top: number): void {
+    const menu = this.ensureQuickMenu()
     menu.style.left = `${left}px`
     menu.style.top = `${top}px`
     menu.style.visibility = 'visible'
+    requestAnimationFrame(() => {
+      menu.classList.add('tpl-sn-menu-visible')
+    })
   }
 
   private hideQuickMenu(): void {
-    if (this.quickMenuEl) {
-      this.quickMenuEl.style.display = 'none'
-    }
+    const menu = this.quickMenuEl
+    if (!menu) return
+
+    menu.classList.remove('tpl-sn-menu-visible')
+    clearTimeout(this.quickMenuHideTimer)
+    this.quickMenuHideTimer = window.setTimeout(() => {
+      if (!menu.classList.contains('tpl-sn-menu-visible')) {
+        menu.style.display = 'none'
+        menu.style.visibility = 'hidden'
+      }
+    }, 120)
   }
 
   private isQuickMenuOpen(): boolean {
@@ -258,23 +286,65 @@ export default class SidenotePlugin extends Plugin {
 
     const menu = document.createElement('div')
     menu.className = 'tpl-sidenote-quick-menu'
-    menu.setAttribute('role', 'menu')
-    menu.setAttribute('aria-label', 'Sidenote actions')
+    menu.setAttribute('role', 'toolbar')
+    menu.setAttribute('aria-label', 'Sidenote quick actions')
 
-    const button = document.createElement('button')
-    button.type = 'button'
-    button.textContent = 'Add sidenote'
-    button.setAttribute('role', 'menuitem')
-    button.addEventListener('mousedown', event => {
-      event.preventDefault()
-      event.stopPropagation()
-      this.addSidenoteFromSelection()
-    })
-
-    menu.appendChild(button)
+    for (const action of this.getQuickActions()) {
+      menu.appendChild(this.createQuickActionButton(action))
+    }
     document.body.appendChild(menu)
     this.quickMenuEl = menu
     return menu
+  }
+
+  private getQuickActions(): QuickAction[] {
+    return [
+      {
+        id: 'add-sidenote',
+        label: 'Add sidenote',
+        shortcut: formatHotkeyLabel(ADD_SIDENOTE_HOTKEY),
+        run: () => this.addSidenoteFromSelection(),
+      },
+    ]
+  }
+
+  private createQuickActionButton(action: QuickAction): HTMLButtonElement {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.className = 'tpl-sn-action'
+    button.dataset.action = action.id
+    button.title = action.shortcut ? `${action.label} (${action.shortcut})` : action.label
+    button.setAttribute('aria-label', button.title)
+
+    const mark = document.createElement('span')
+    mark.className = 'tpl-sn-action-mark'
+    mark.setAttribute('aria-hidden', 'true')
+    mark.textContent = '+'
+
+    const label = document.createElement('span')
+    label.className = 'tpl-sn-action-label'
+    label.textContent = action.label
+
+    button.append(mark, label)
+
+    if (action.shortcut) {
+      const shortcut = document.createElement('kbd')
+      shortcut.className = 'tpl-sn-action-shortcut'
+      shortcut.textContent = action.shortcut
+      button.appendChild(shortcut)
+    }
+
+    button.addEventListener('mousedown', event => {
+      event.preventDefault()
+      event.stopPropagation()
+      action.run()
+    })
+    button.addEventListener('click', event => {
+      event.preventDefault()
+      event.stopPropagation()
+    })
+
+    return button
   }
 
   private restoreSavedSelection(): void {
@@ -538,6 +608,18 @@ export default class SidenotePlugin extends Plugin {
   }
 }
 
+function formatHotkeyLabel(hotkey: string): string {
+  return hotkey
+    .split('+')
+    .map(part => {
+      const key = part.trim()
+      if (key.toLowerCase() === 'mod') return IS_MAC ? 'Cmd' : 'Ctrl'
+      if (key.toLowerCase() === 'alt') return IS_MAC ? 'Opt' : 'Alt'
+      return key.length === 1 ? key.toUpperCase() : key
+    })
+    .join('+')
+}
+
 const EDITOR_CSS = /* css */ `
 /* ── Sidenote editor styles (injected by plugin) ── */
 
@@ -551,21 +633,44 @@ const EDITOR_CSS = /* css */ `
 .tpl-sidenote-quick-menu {
   position: fixed;
   display: none;
-  min-width: 150px;
-  padding: 4px;
+  align-items: stretch;
+  gap: 3px;
+  min-width: 210px;
+  padding: 5px;
   z-index: 99999;
   border: 1px solid var(--border-color, rgba(0, 0, 0, 0.14));
-  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--accent-color, #bc6a3a) 24%, var(--border-color, rgba(0, 0, 0, 0.14)));
+  border-radius: 8px;
   background: var(--bg-color, #fff);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+  background: color-mix(in srgb, var(--bg-color, #fff) 92%, var(--accent-color, #bc6a3a) 8%);
+  box-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.16),
+    0 2px 8px rgba(0, 0, 0, 0.08);
   box-sizing: border-box;
+  opacity: 0;
+  transform: translateY(-3px) scale(0.98);
+  transform-origin: 50% 100%;
+  transition: opacity 120ms ease-out, transform 120ms ease-out;
+  pointer-events: none;
+  -webkit-backdrop-filter: saturate(1.2) blur(12px);
+  backdrop-filter: saturate(1.2) blur(12px);
 }
 
-.tpl-sidenote-quick-menu button {
+.tpl-sidenote-quick-menu.tpl-sn-menu-visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  pointer-events: auto;
+}
+
+.tpl-sn-action {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
   width: 100%;
   border: 0;
-  border-radius: 4px;
-  padding: 7px 10px;
+  border-radius: 6px;
+  padding: 7px 8px 7px 7px;
   background: transparent;
   color: var(--text-color, #333);
   font: inherit;
@@ -573,10 +678,63 @@ const EDITOR_CSS = /* css */ `
   line-height: 1.3;
   text-align: left;
   cursor: default;
+  box-sizing: border-box;
+  transition: background-color 120ms ease-out, color 120ms ease-out, transform 120ms ease-out;
 }
 
-.tpl-sidenote-quick-menu button:hover {
+.tpl-sn-action:hover,
+.tpl-sn-action:focus-visible {
   background: var(--item-hover-bg-color, rgba(0, 0, 0, 0.06));
+  background: color-mix(in srgb, var(--accent-color, #bc6a3a) 14%, transparent);
+  outline: none;
+}
+
+.tpl-sn-action:active {
+  transform: translateY(1px);
+}
+
+.tpl-sn-action-mark {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  background: rgba(188, 106, 58, 0.12);
+  background: color-mix(in srgb, var(--accent-color, #bc6a3a) 16%, transparent);
+  color: var(--accent-color, #bc6a3a);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.tpl-sn-action-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.tpl-sn-action-shortcut {
+  justify-self: end;
+  border: 1px solid var(--border-color, rgba(0, 0, 0, 0.14));
+  border: 1px solid color-mix(in srgb, var(--accent-color, #bc6a3a) 20%, transparent);
+  border-radius: 4px;
+  padding: 1px 5px;
+  background: rgba(255, 255, 255, 0.68);
+  background: color-mix(in srgb, var(--bg-color, #fff) 68%, transparent);
+  color: var(--text-color, #333);
+  color: color-mix(in srgb, var(--text-color, #333) 70%, var(--accent-color, #bc6a3a) 30%);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tpl-sidenote-quick-menu,
+  .tpl-sn-action {
+    transition: none;
+  }
 }
 
 /* ── In-text superscript number ── */
