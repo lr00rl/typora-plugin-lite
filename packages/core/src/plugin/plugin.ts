@@ -18,7 +18,7 @@ export interface Command {
   id: string
   name: string
   pluginId?: string
-  callback: () => void | Promise<void>
+  callback: () => unknown | Promise<unknown>
 }
 
 export interface TplAppRef {
