@@ -195,9 +195,46 @@ of the layer above it.
 | Layer | Required | Methods | Typical failure |
 |---|---|---|---|
 | **L0** — open | — | `session.authenticate` | (none; entry point) |
-| **L1** — authenticated | L0 + valid token | `system.ping`, `system.getInfo`, `system.shutdown` | 401 `Unauthenticated session`, 403 `Invalid token` |
-| **L2** — needs Typora session | L1 + `typoraSessionId !== null` | `typora.getContext`, `typora.getDocument`, `typora.setDocument`, `typora.setSourceMode`, `typora.insertText`, `typora.openFile`, `typora.openFolder`, `typora.commands.{list,invoke}`, `typora.plugins.{list,setEnabled,commands.list,commands.invoke}` | 503 `Typora session is unavailable` (when Typora crashed or disabled the plugin) |
+| **L1** — authenticated | L0 + valid token | `system.ping`, `system.getInfo`, `system.listMethods`, `system.shutdown` | 401 `Unauthenticated session`, 403 `Invalid token` |
+| **L2** — needs Typora session | L1 + `typoraSessionId !== null` | `typora.getContext`, `typora.getDocument`, `typora.setDocument`, `typora.getSelection`, `typora.setSourceMode`, `typora.insertText`, `typora.openFile`, `typora.openFolder`, `typora.commands.{list,invoke}`, `typora.plugins.{list,setEnabled,commands.list,commands.invoke}` | 503 `Typora session is unavailable` (when Typora crashed or disabled the plugin) |
 | **L3** — needs `allowExec=true` | L1 + plugin setting `allowExec: true` | `exec.run`, `exec.start`, `exec.kill`, `exec.list` | 403 `exec disabled by server policy (allowExec=false)` |
+| **L4** — needs `allowEval=true` | L2 + plugin setting `allowEval: true` | `typora.eval` | 403 `typora.eval disabled...` / 503 when Typora offline |
+
+### Discovery — `system.listMethods`
+
+Returns the whole surface as data: every method, its authorization tier, a
+one-line summary, a param hint, and whether it is reachable *right now* given
+the current `allowExec` / `allowEval` settings and whether Typora is connected.
+A client (or AI agent) that doesn't already know the method names should call
+this first instead of guessing:
+
+```jsonc
+// → { "methods": [
+//     { "name": "typora.eval", "tier": "eval",
+//       "summary": "Run arbitrary JavaScript in the Typora renderer...",
+//       "params": "{ code, async?, timeoutMs? }",
+//       "available": false,
+//       "unavailableReason": "403: typora.eval disabled by server policy (allowEval=false)" },
+//     ... ] }
+```
+
+### `typora.eval` now runs on macOS
+
+It previously required Node's `vm` via `window.reqnode`, which exists only on
+Electron Typora (Windows/Linux). On macOS — a WKWebView with no Node
+integration — every eval threw `window.reqnode is not a function` before
+running a line. It now falls back to indirect `eval` in the renderer realm,
+which works on every platform. One caveat remains on macOS: a **synchronous**
+infinite loop can't be interrupted (no `vm` timeout, single JS thread), so
+`timeoutMs` is enforced only for `async: true` code there. Send unbounded work
+with `async: true`.
+
+### Request timeouts
+
+Forwarded `typora.*` calls (except `typora.eval`, which governs its own
+runtime) are bounded by a 30s sidecar-side timeout, so a connected-but-wedged
+renderer surfaces a `-32001` timeout to the caller instead of leaving the
+request pending until the socket eventually drops.
 
 **`system.shutdown` is only at L1** — any authenticated session can ask the
 sidecar to exit. This is intentional for management use; it also means a

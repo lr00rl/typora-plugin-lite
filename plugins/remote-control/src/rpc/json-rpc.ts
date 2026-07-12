@@ -56,11 +56,26 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
 
+export interface RequestOptions {
+  /**
+   * Reject the request if no response arrives within this many milliseconds.
+   * Omit (or pass 0) for no timeout — the historical behaviour, where a pending
+   * request only ever settles on a reply or a socket close.
+   *
+   * A timeout matters because `failPending` fires only when the *socket* drops.
+   * A peer that stays connected but silently never answers (a wedged renderer,
+   * a handler that forgot to return) would otherwise leave the caller awaiting
+   * forever.
+   */
+  timeoutMs?: number
+}
+
 export class JsonRpcPeer {
   private readonly methods = new Map<string, MethodHandler>()
   private readonly pending = new Map<number, {
     resolve: (value: unknown) => void
     reject: (error: unknown) => void
+    timer?: ReturnType<typeof setTimeout>
   }>()
   private nextId = 1
 
@@ -82,12 +97,24 @@ export class JsonRpcPeer {
     })
   }
 
-  async request<T>(method: string, params?: unknown): Promise<T> {
+  async request<T>(method: string, params?: unknown, options: RequestOptions = {}): Promise<T> {
     const id = this.nextId++
     const response = new Promise<T>((resolve, reject) => {
+      const timeoutMs = options.timeoutMs
+      const timer = timeoutMs && timeoutMs > 0
+        ? setTimeout(() => {
+            // Only reject if still pending — a reply that lands in the same tick
+            // clears the entry first.
+            if (!this.pending.has(id)) return
+            this.pending.delete(id)
+            reject(new JsonRpcRemoteError(-32001, `Request timed out after ${timeoutMs}ms: ${method}`))
+          }, timeoutMs)
+        : undefined
+      timer?.unref?.()
       this.pending.set(id, {
         resolve: value => resolve(value as T),
         reject,
+        timer,
       })
     })
 
@@ -102,7 +129,8 @@ export class JsonRpcPeer {
   }
 
   failPending(error: Error): void {
-    for (const { reject } of this.pending.values()) {
+    for (const { reject, timer } of this.pending.values()) {
+      if (timer) clearTimeout(timer)
       reject(error)
     }
     this.pending.clear()
@@ -130,6 +158,7 @@ export class JsonRpcPeer {
     const pending = this.pending.get(Number(message.id))
     if (!pending) return
     this.pending.delete(Number(message.id))
+    if (pending.timer) clearTimeout(pending.timer)
 
     if ('error' in message && isObject(message.error)) {
       const failure = message as JsonRpcFailure
