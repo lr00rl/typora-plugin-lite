@@ -1,6 +1,7 @@
 import { Plugin, editor, getApp, platform, IS_NODE, type SettingsSchema } from '@typora-plugin-lite/core'
 
 import { JsonRpcPeer, JsonRpcRemoteError } from './rpc/json-rpc.js'
+import { createScriptRunner, evaluateInRenderer } from './typora/evaluator.js'
 
 interface RemoteControlSettings extends Record<string, unknown> {
   enabled: boolean
@@ -124,6 +125,14 @@ export default class RemoteControlPlugin extends Plugin<RemoteControlSettings> {
   private socket: WebSocket | null = null
   private rpc: JsonRpcPeer | null = null
   private state: ServiceState = { sidecarStarted: false, socketConnected: false }
+
+  /**
+   * Platform-appropriate JS runner for typora.eval. Resolved once from
+   * `window.reqnode` (a function on Electron, undefined on macOS WKWebView).
+   */
+  private readonly evalRunner = createScriptRunner(
+    typeof window !== 'undefined' ? (window as any).reqnode : undefined,
+  )
 
   _init(...args: Parameters<Plugin<RemoteControlSettings>['_init']>): void {
     super._init(args[0], args[1], DEFAULT_SETTINGS)
@@ -428,33 +437,27 @@ export default class RemoteControlPlugin extends Plugin<RemoteControlSettings> {
       const sourceMode = await editor.setSourceMode(input.enabled)
       return { sourceMode }
     })
+    rpc.registerMethod('typora.getSelection', async () => this.getSelection())
     rpc.registerMethod('typora.eval', async (params) => {
       const input = asRecord(params)
       const code = expectString(input.code, 'code')
-      const asyncMode = input.async === true
-      const timeoutMs = typeof input.timeoutMs === 'number' && input.timeoutMs > 0
-        ? input.timeoutMs
-        : 10_000
 
-      // Use Node's vm module rather than the Function constructor: it runs in
-      // the current realm (so the code still sees `window`, `document`,
-      // `editor` globals etc), but it's an explicit, documented evaluation API
-      // with a built-in timeout. IIFE wrapping lets the caller declare locals
-      // and `await` when async=true.
-      //
-      // ⚠ This is a full RCE surface when allowEval=true. The sidecar is the
+      // ⚠ Full RCE surface when allowEval=true. The sidecar is the
       // authoritative gate (server.ts); this handler assumes the sidecar
       // already enforced allowEval=true before forwarding the method.
-      const vm = window.reqnode!('vm') as typeof import('node:vm')
-      const script = asyncMode
-        ? `(async () => { ${code} })()`
-        : `(() => { ${code} })()`
+      //
+      // The runner is built once per connection (this.evalRunner): vm on
+      // Electron, indirect eval on macOS WKWebView where `window.reqnode`
+      // doesn't exist. See evaluator.ts for the full platform story.
       try {
-        const raw = await vm.runInThisContext(script, {
-          displayErrors: true,
-          timeout: timeoutMs,
-        })
-        return { result: toSerializable(raw), async: asyncMode }
+        return await evaluateInRenderer(
+          {
+            code,
+            async: input.async === true,
+            timeoutMs: typeof input.timeoutMs === 'number' ? input.timeoutMs : undefined,
+          },
+          { run: this.evalRunner },
+        )
       } catch (err) {
         throw new JsonRpcRemoteError(
           -32000,
@@ -713,6 +716,21 @@ export default class RemoteControlPlugin extends Plugin<RemoteControlSettings> {
     }
   }
 
+  /**
+   * The user's current selection. `window.getSelection()` covers both live
+   * preview (contenteditable) and, when the text lives inside CodeMirror in
+   * source mode, the DOM selection there too. `isCollapsed` distinguishes a
+   * caret (no selection) from a highlighted range.
+   */
+  private getSelection() {
+    const selection = typeof window !== 'undefined' ? window.getSelection() : null
+    const text = selection ? selection.toString() : ''
+    return {
+      text,
+      hasSelection: !!selection && !selection.isCollapsed && text.length > 0,
+    }
+  }
+
   private listPlugins() {
     return getApp().plugins.getManifests().map(manifest => ({
       id: manifest.id,
@@ -734,26 +752,6 @@ function expectString(value: unknown, field: string): string {
     throw new JsonRpcRemoteError(-32602, `Invalid ${field}`)
   }
   return value
-}
-
-/**
- * Best-effort conversion of an arbitrary value to a JSON-RPC-serialisable
- * shape. Used by typora.eval to return user-evaluated expressions across the
- * WebSocket. DOM elements, functions, circular refs, Symbols etc. are
- * coerced to string or null rather than failing the RPC.
- */
-function toSerializable(value: unknown): unknown {
-  if (value === undefined) return null
-  if (value === null) return null
-  const t = typeof value
-  if (t === 'string' || t === 'number' || t === 'boolean') return value
-  if (t === 'bigint') return String(value)
-  if (t === 'function' || t === 'symbol') return `<${t}>`
-  try {
-    return JSON.parse(JSON.stringify(value))
-  } catch {
-    try { return String(value) } catch { return null }
-  }
 }
 
 function randomToken(): string {

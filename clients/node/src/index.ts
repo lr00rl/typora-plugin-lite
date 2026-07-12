@@ -52,6 +52,25 @@ export interface ExecListEntry {
   startedAt: number
 }
 
+export interface RpcMethodInfo {
+  name: string
+  tier: 'open' | 'auth' | 'typora' | 'exec' | 'eval'
+  summary: string
+  params?: string
+  available: boolean
+  unavailableReason: string | null
+}
+
+export interface TyporaSelection {
+  text: string
+  hasSelection: boolean
+}
+
+export interface TyporaEvalResult {
+  result: unknown
+  async: boolean
+}
+
 export interface TyporaContext {
   filePath: string
   fileName: string
@@ -218,6 +237,16 @@ export class TyporaRemoteControlClient {
     return await this.call('system.shutdown')
   }
 
+  /**
+   * Introspect the RPC surface: every method, its authorization tier, param
+   * hint, and whether it is reachable right now given the sidecar's policy and
+   * whether Typora is connected. Point of first contact for an agent that
+   * doesn't already know the method names.
+   */
+  async listMethods(): Promise<{ methods: RpcMethodInfo[] }> {
+    return await this.call('system.listMethods')
+  }
+
   async run(command: string, options: {
     cwd?: string
     timeoutMs?: number
@@ -259,6 +288,20 @@ export class TyporaRemoteControlClient {
 
   async setDocument(markdown: string): Promise<TyporaDocument> {
     return await this.call('typora.setDocument', { markdown })
+  }
+
+  /** The user's current selection in Typora. */
+  async getSelection(): Promise<TyporaSelection> {
+    return await this.call('typora.getSelection')
+  }
+
+  /**
+   * Evaluate JavaScript in the Typora renderer. Requires the sidecar to have
+   * been started with allowEval=true, else rejects 403. `async: true` lets the
+   * snippet use `await`; `timeoutMs` bounds the wait.
+   */
+  async eval(code: string, options: { async?: boolean; timeoutMs?: number } = {}): Promise<TyporaEvalResult> {
+    return await this.call('typora.eval', { code, ...options })
   }
 
   async setSourceMode(enabled: boolean): Promise<TyporaSourceModeState> {

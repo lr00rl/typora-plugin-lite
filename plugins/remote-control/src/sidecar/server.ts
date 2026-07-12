@@ -6,8 +6,17 @@ import type { Readable } from 'node:stream'
 
 import { JsonRpcPeer, JsonRpcRemoteError } from '../rpc/json-rpc.js'
 import { acceptWebSocket, type WebSocketServerConnection } from './websocket.js'
+import { buildMethodCatalog } from './catalog.js'
 
 type SessionRole = 'client' | 'typora'
+
+/**
+ * Upper bound on how long the sidecar waits for the Typora session to answer a
+ * forwarded typora.* call. These are near-instant DOM operations; 30s is a
+ * generous ceiling that only ever trips on a genuinely wedged renderer.
+ * typora.eval is exempt — it governs its own runtime.
+ */
+const FORWARD_TIMEOUT_MS = 30_000
 
 interface Session {
   id: string
@@ -279,6 +288,17 @@ export async function createSidecarServer(options: SidecarServerOptions): Promis
       }
     })
 
+    peer.registerMethod('system.listMethods', () => {
+      requireAuth(session)
+      return {
+        methods: buildMethodCatalog({
+          allowExec: !!options.allowExec,
+          allowEval: !!options.allowEval,
+          typoraConnected: !!typoraSessionId,
+        }),
+      }
+    })
+
     peer.registerMethod('system.shutdown', async () => {
       requireAuth(session)
       queueMicrotask(() => {
@@ -396,7 +416,12 @@ export async function createSidecarServer(options: SidecarServerOptions): Promis
         typoraSessionId = null
         throw new JsonRpcRemoteError(503, 'Typora session is unavailable')
       }
-      const result = await target.peer.request(method, params)
+      // Safety net against a connected-but-wedged renderer: bound every forward
+      // except typora.eval, whose runtime the caller controls via its own
+      // timeoutMs. Without this a stuck handler would leave the client's request
+      // pending until the socket eventually drops.
+      const timeoutMs = method === 'typora.eval' ? 0 : FORWARD_TIMEOUT_MS
+      const result = await target.peer.request(method, params, { timeoutMs })
       // Boundary markers on document-bearing responses (prompt-injection guard).
       // Hardcoded invariant: no user-facing toggle.
       if (method === 'typora.getDocument' || method === 'typora.getContext') {
@@ -409,6 +434,7 @@ export async function createSidecarServer(options: SidecarServerOptions): Promis
       'typora.getContext',
       'typora.getDocument',
       'typora.setDocument',
+      'typora.getSelection',
       'typora.setSourceMode',
       'typora.insertText',
       'typora.openFile',
