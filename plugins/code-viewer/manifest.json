@@ -1,0 +1,10 @@
+{
+  "id": "code-viewer",
+  "name": "Code Viewer",
+  "version": "0.1.0",
+  "description": "Open non-Markdown text/code files as a read-only, syntax-highlighted code block (saving is blocked so originals are never rewritten)",
+  "main": "main.js",
+  "loading": {
+    "startup": true
+  }
+}
