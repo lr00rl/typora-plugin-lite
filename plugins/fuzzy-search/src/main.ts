@@ -1,6 +1,6 @@
 import { IS_MAC, Plugin, editor, platform } from '@typora-plugin-lite/core'
 
-import { fuzzyMatchPositions, scoreCandidate } from './scoring.js'
+import { fuzzyMatchPositions, fzfScore, scoreCandidate } from './scoring.js'
 import {
   type FrecencyStore,
   frecencySearchBoost,
@@ -12,11 +12,21 @@ import {
 } from './frecency.js'
 import {
   type DirChild,
+  allDirectories,
   breadcrumbs,
   listChildren,
   normalizePrefix,
   parentPrefix,
 } from './dirtree.js'
+import {
+  type Completion,
+  type SearchType,
+  completeQuery,
+  effectiveType,
+  parseQuery,
+  removeToken,
+  setToken,
+} from './query.js'
 
 interface FileEntry {
   absPath: string
@@ -55,6 +65,21 @@ type NavRow =
   | { kind: 'dir'; name: string; path: string; fileCount: number }
   | { kind: 'up'; path: string }
   | { kind: 'content'; match: ContentMatch }
+
+/**
+ * The three panels. They share one search core (parseQuery → type/scope/terms);
+ * a tab only supplies the default type and the empty-query view.
+ *   files   — recents when empty; searches file names.
+ *   folders — the directory tree (drill in/out); searches within the folder.
+ *   content — hint when empty; ripgreps file contents.
+ */
+type SearchTab = 'files' | 'folders' | 'content'
+const TAB_ORDER: SearchTab[] = ['files', 'folders', 'content']
+const TAB_LABELS: Record<SearchTab, string> = { files: '文件', folders: '目录', content: '内容' }
+const TAB_DEFAULT_TYPE: Record<SearchTab, SearchType> = { files: 'file', folders: 'file', content: 'content' }
+
+/** Popup size presets, as a fraction of the window (never fixed px). */
+type WidthPreset = 'default' | 'wide'
 
 const MD_EXTS = ['.md', '.markdown']
 const MD_EXT_SET = new Set(MD_EXTS)
@@ -170,14 +195,19 @@ const CSS = `
 }
 #tpl-qo-modal {
   background: var(--bg-color, #fff);
-  border-radius: 10px;
-  box-shadow: 0 12px 48px rgba(0,0,0,0.35);
-  width: 600px;
-  max-width: 92vw;
+  border-radius: 12px;
+  box-shadow: 0 18px 60px rgba(0,0,0,0.34), 0 2px 8px rgba(0,0,0,0.12);
   overflow: hidden;
-  border: 1px solid var(--border-color, rgba(128,128,128,0.2));
+  border: 1px solid var(--border-color, rgba(128,128,128,0.18));
   display: flex;
   flex-direction: column;
+  /* Sized as a fraction of the window (Cmd+[ / Cmd+]); the clamp floors keep
+     it usable on small screens without hard-coding a single width. */
+  width: clamp(460px, 46vw, 92vw);
+  transition: width 0.16s ease;
+}
+#tpl-qo-modal[data-width="wide"] {
+  width: clamp(560px, 64vw, 94vw);
 }
 #tpl-qo-input-row {
   display: flex;
@@ -208,8 +238,11 @@ const CSS = `
 }
 #tpl-qo-list {
   overflow-y: auto;
-  max-height: 400px;
+  max-height: clamp(320px, 55vh, 70vh);
   padding: 4px 0;
+}
+#tpl-qo-modal[data-width="wide"] #tpl-qo-list {
+  max-height: clamp(420px, 72vh, 84vh);
 }
 .tpl-qo-section-label {
   padding: 4px 16px 2px;
@@ -327,6 +360,41 @@ const CSS = `
   margin-left: auto;
   user-select: none;
 }
+
+/* Magic-syntax autocomplete chips (type: / scope:) */
+#tpl-qo-completions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 7px 14px;
+  border-bottom: 1px solid var(--border-color, rgba(128,128,128,0.12));
+  flex-shrink: 0;
+}
+#tpl-qo-completions[hidden] { display: none; }
+.tpl-qo-completion {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 9px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px solid var(--border-color, rgba(128,128,128,0.22));
+  background: rgba(128,128,128,0.05);
+  font-family: var(--monospace, 'SF Mono', 'Fira Code', 'Consolas', monospace);
+  transition: background 0.12s, border-color 0.12s;
+}
+.tpl-qo-completion:hover {
+  background: rgba(128,128,128,0.13);
+}
+.tpl-qo-completion-top {
+  border-color: var(--accent-color, #1a73e8);
+  box-shadow: inset 0 0 0 1px var(--accent-color, #1a73e8);
+}
+.tpl-qo-completion-hint {
+  opacity: 0.42;
+  font-size: 11px;
+}
 .tpl-qo-content-name {
   font-size: 13px;
   font-weight: 500;
@@ -412,10 +480,18 @@ export default class QuickOpenPlugin extends Plugin {
   private indexedFileCount = 0
   private indexReady = false
   private lastInputValue = ''
-  private searchMode: 'files' | 'content' = 'files'
+  /** Active panel. Sets the default search type and the empty-query view. */
+  private activeTab: SearchTab = 'files'
   private contentFiltered: ContentMatch[] = []
   private tabBarEl: HTMLElement | null = null
   private lastRecordedActiveFile = ''
+
+  /** Popup size preset, toggled with Cmd+[ / Cmd+]; persisted across opens. */
+  private widthPreset: WidthPreset = 'default'
+  private modalEl: HTMLElement | null = null
+  private completionsEl: HTMLElement | null = null
+  /** Autocomplete candidates for the operator token under the cursor. */
+  private completions: Completion[] = []
 
   /**
    * The persistent index parsed into FileEntry[] and held in memory for the
@@ -427,6 +503,8 @@ export default class QuickOpenPlugin extends Plugin {
   private indexEntries: FileEntry[] = []
   private indexEntriesRoot = ''
   private indexEntriesCurrentDir = ''
+  /** All directories derived from the index, for scope: autocomplete. */
+  private cachedDirs: DirChild[] = []
 
   /**
    * Frecency store (open counts + recency), replacing the old recency-only MRU.
@@ -434,14 +512,6 @@ export default class QuickOpenPlugin extends Plugin {
    * search ranking. Persisted in settings; migrates the legacy `mru` array.
    */
   private frecency: FrecencyStore = {}
-
-  /**
-   * Browse mode: when non-null, the empty-query view shows this directory's
-   * immediate children (folders + files) instead of only recents — the piece
-   * that lets quick-open stand in for the sidebar tree. null = not browsing.
-   * Typing a query always leaves browse mode for a full-vault fuzzy search.
-   */
-  private browsePrefix: string | null = null
 
   /**
    * The currently-rendered selectable rows, in display order. selectedIdx
@@ -462,6 +532,7 @@ export default class QuickOpenPlugin extends Plugin {
     const hotkeys = this.getHotkeys()
     this.log('onload', { hotkeys, dataDir: platform.dataDir })
     this.loadFrecency()
+    this.widthPreset = this.settings.get('widthPreset' as never) === 'wide' ? 'wide' : 'default'
     for (const key of hotkeys) {
       this.registerHotkey(key, () => this.open())
     }
@@ -957,6 +1028,7 @@ export default class QuickOpenPlugin extends Plugin {
     this.indexEntries = entries
     this.indexEntriesRoot = root
     this.indexEntriesCurrentDir = currentDir
+    this.cachedDirs = allDirectories(entries.map(e => e.relPath))
     return entries
   }
 
@@ -965,19 +1037,23 @@ export default class QuickOpenPlugin extends Plugin {
     this.indexEntries = []
     this.indexEntriesRoot = ''
     this.indexEntriesCurrentDir = ''
+    this.cachedDirs = []
   }
 
-  private async searchWithJs(query: string, limit = 50): Promise<FileEntry[]> {
+  private async searchWithJs(query: string, scope: string, limit = 50): Promise<FileEntry[]> {
     this.searchBackend = 'js'
     const entries = await this.ensureIndexEntries()
     if (entries.length === 0) return []
 
     const normalizedQuery = query.trim()
     const isPathQuery = isRelativePathQuery(normalizedQuery)
+    const base = scope ? normalizePrefix(scope) : ''
+    const prefix = base ? base.toLowerCase() + '/' : ''
     const now = Date.now()
     const topResults: Array<{ file: FileEntry; score: number }> = []
 
     for (const file of entries) {
+      if (prefix && !file.relPathKey.startsWith(prefix)) continue
       const score = scoreCandidate(file, normalizedQuery, {
         isPathQuery,
         frecencyBoost: frecencySearchBoost(this.frecency, file.absPath, now),
@@ -993,15 +1069,38 @@ export default class QuickOpenPlugin extends Plugin {
     return !!this.fzfPath && !!query.trim() && this.indexReady
   }
 
-  private async searchFiles(query: string, limit = 50): Promise<FileEntry[]> {
-    if (this.shouldUseExternalFzf(query)) {
+  private async searchFiles(query: string, scope: string, limit = 50): Promise<FileEntry[]> {
+    // fzf filters the whole index and can't cheaply restrict to a subtree, so
+    // fall back to the in-memory (scope-aware) JS path whenever a scope is set.
+    if (!scope && this.shouldUseExternalFzf(query)) {
       try {
         return await this.searchWithFzf(query, limit)
       } catch (err) {
         this.warn('searchWithFzf failed, falling back to JS scoring', err)
       }
     }
-    return await this.searchWithJs(query, limit)
+    return await this.searchWithJs(query, scope, limit)
+  }
+
+  /** Search directory names (type:folder), restricted to `scope`. */
+  private async searchFolders(query: string, scope: string, limit = 50): Promise<DirChild[]> {
+    const entries = await this.ensureIndexEntries()
+    const dirs = allDirectories(entries.map(e => e.relPath), scope)
+    const terms = query.trim().toLowerCase()
+    if (!terms) return dirs.slice(0, limit)
+
+    const scored: Array<{ dir: DirChild; score: number }> = []
+    for (const dir of dirs) {
+      // Prefer a name hit; fall back to a (slightly discounted) path hit.
+      const score = Math.max(
+        fzfScore(dir.name.toLowerCase(), terms),
+        fzfScore(dir.path.toLowerCase(), terms) - 4,
+      )
+      if (score === -Infinity) continue
+      scored.push({ dir, score })
+    }
+    scored.sort((a, b) => b.score - a.score)
+    return scored.slice(0, limit).map(s => s.dir)
   }
 
   private async buildIndexWithRg(root: string): Promise<number> {
@@ -1273,15 +1372,22 @@ export default class QuickOpenPlugin extends Plugin {
     this.tabBarEl = null
     this.footerTextEl = null
     this.footerActionEl = null
+    this.modalEl = null
+    this.completionsEl = null
     this.filtered = []
     this.contentFiltered = []
     this.rows = []
+    this.completions = []
     this.selectedIdx = 0
     this.currentQuery = ''
     this.lastInputValue = ''
-    this.searchMode = 'files'
-    // Each open starts fresh at the recent view rather than a stale directory.
-    this.browsePrefix = null
+    // Each open starts fresh on the files tab / recents, per the spec.
+    this.activeTab = 'files'
+  }
+
+  /** The scope operator currently in the search box (browse location), or ''. */
+  private currentScope(): string {
+    return parseQuery(this.currentQuery).scope ?? ''
   }
 
   // -------------------------------------------------------------------------
@@ -1305,6 +1411,7 @@ export default class QuickOpenPlugin extends Plugin {
 
     const modal = document.createElement('div')
     modal.id = 'tpl-qo-modal'
+    modal.dataset.width = this.widthPreset
 
     const inputRow = document.createElement('div')
     inputRow.id = 'tpl-qo-input-row'
@@ -1319,6 +1426,11 @@ export default class QuickOpenPlugin extends Plugin {
     input.spellcheck = false
     inputRow.appendChild(icon)
     inputRow.appendChild(input)
+
+    // Autocomplete candidates (type:/scope:), shown just above the result list.
+    const completionsEl = document.createElement('div')
+    completionsEl.id = 'tpl-qo-completions'
+    completionsEl.hidden = true
 
     const list = document.createElement('div')
     list.id = 'tpl-qo-list'
@@ -1339,41 +1451,43 @@ export default class QuickOpenPlugin extends Plugin {
 
     const tabBar = document.createElement('div')
     tabBar.id = 'tpl-qo-tab-bar'
-    const tabFiles = document.createElement('div')
-    tabFiles.className = 'tpl-qo-tab tpl-qo-tab-active'
-    tabFiles.textContent = '文件'
-    tabFiles.dataset.mode = 'files'
-    tabFiles.addEventListener('click', () => { if (this.searchMode !== 'files') this.toggleSearchMode() })
-    const tabContent = document.createElement('div')
-    tabContent.className = 'tpl-qo-tab'
-    tabContent.textContent = '内容'
-    tabContent.dataset.mode = 'content'
-    tabContent.addEventListener('click', () => { if (this.searchMode !== 'content') this.toggleSearchMode() })
+    for (const tab of TAB_ORDER) {
+      const el = document.createElement('div')
+      el.className = 'tpl-qo-tab' + (tab === this.activeTab ? ' tpl-qo-tab-active' : '')
+      el.textContent = TAB_LABELS[tab]
+      el.dataset.mode = tab
+      el.addEventListener('click', () => this.switchTab(tab))
+      tabBar.appendChild(el)
+    }
     const tabHint = document.createElement('div')
     tabHint.className = 'tpl-qo-tab-hint'
-    tabHint.textContent = IS_MAC ? '⌃Tab 切换' : 'Ctrl+Tab 切换'
-    tabBar.appendChild(tabFiles)
-    tabBar.appendChild(tabContent)
+    tabHint.textContent = IS_MAC ? '⌃Tab 切换 · ⌘[ ] 宽度' : 'Ctrl+Tab 切换 · Ctrl+[ ] 宽度'
     tabBar.appendChild(tabHint)
 
     modal.appendChild(inputRow)
     modal.appendChild(tabBar)
+    modal.appendChild(completionsEl)
     modal.appendChild(list)
     modal.appendChild(footer)
     overlay.appendChild(modal)
     document.body.appendChild(overlay)
 
     this.overlay = overlay
+    this.modalEl = modal
     this.inputEl = input
     this.listEl = list
     this.tabBarEl = tabBar
+    this.completionsEl = completionsEl
     this.footerTextEl = footerText
     this.footerActionEl = footerAction
+    this.updatePlaceholder()
 
     const onInput = () => {
       const nextQuery = input.value
       if (nextQuery === this.lastInputValue) return
       this.lastInputValue = nextQuery
+      // Autocomplete reacts immediately; the (expensive) search is debounced.
+      this.refreshCompletions()
       if (this.debounceTimer) clearTimeout(this.debounceTimer)
       this.debounceTimer = setTimeout(() => {
         if (input.value === this.currentQuery) return
@@ -1505,11 +1619,43 @@ export default class QuickOpenPlugin extends Plugin {
     this.rows = []
     while (list.firstChild) list.removeChild(list.firstChild)
 
-    if (this.searchMode === 'content') {
+    const parsed = parseQuery(query)
+    const type = effectiveType(parsed, TAB_DEFAULT_TYPE[this.activeTab])
+    const scope = parsed.scope ?? ''
+    const terms = parsed.terms
+
+    // Empty terms with no explicit type override → the tab's resting view.
+    if (terms === '' && parsed.type === null) {
+      if (this.activeTab === 'folders') {
+        await this.renderTree(list, token, scope)
+      } else if (this.activeTab === 'content') {
+        list.appendChild(this.makeStatus(this.rgPath ? '输入关键词搜索文件内容' : '需要 rg (ripgrep) 来搜索内容'))
+        this.updateFooter(this.rgPath ? '内容搜索' : '未检测到 rg')
+      } else {
+        await this.renderRecents(list, token)
+      }
+      return
+    }
+
+    // Otherwise run the shared search core on (type, scope, terms).
+    await this.runSearch(list, token, type, scope, terms)
+  }
+
+  /** The one search core the three tabs share, dispatched by resolved type. */
+  private async runSearch(
+    list: HTMLElement,
+    token: number,
+    type: SearchType,
+    scope: string,
+    terms: string,
+  ): Promise<void> {
+    const scopeLabel = scope ? `  ·  ${scope}/` : ''
+
+    if (type === 'content') {
       this.contentFiltered = []
-      if (!query.trim()) {
+      if (!terms) {
         list.appendChild(this.makeStatus('输入关键词搜索文件内容'))
-        this.updateFooter('内容搜索')
+        this.updateFooter('内容搜索' + scopeLabel)
         return
       }
       if (!this.rgPath) {
@@ -1518,70 +1664,59 @@ export default class QuickOpenPlugin extends Plugin {
         return
       }
       list.appendChild(this.makeStatus('搜索中… (rg)'))
-      const results = await this.searchContent(query, SEARCH_RESULT_LIMIT)
+      const results = await this.searchContent(terms, scope, SEARCH_RESULT_LIMIT)
       if (token !== this.renderToken || !this.listEl) return
-
       this.contentFiltered = results
       while (list.firstChild) list.removeChild(list.firstChild)
-      this.updateFooter(`${results.length} 条匹配  ·  内容搜索`)
-      if (!results.length) {
-        list.appendChild(this.makeStatus('没有匹配的内容'))
-        return
-      }
+      this.updateFooter(`${results.length} 条匹配  ·  内容${scopeLabel}`)
+      if (!results.length) { list.appendChild(this.makeStatus('没有匹配的内容')); return }
       this.selectedIdx = 0
       this.rows = results.map(match => ({ kind: 'content', match }))
       this.renderRows(list)
       return
     }
 
-    if (query.trim()) {
-      // A query always searches the whole vault, ignoring any browse location.
-      this.searchBackend = this.shouldUseExternalFzf(query) ? 'fzf' : 'js'
-      if (!this.indexReady) {
-        this.filtered = []
-        list.appendChild(this.makeStatus('索引尚未准备好，正在后台构建…'))
-        this.setFooter(this.indexedFileCount || this.allFiles.length, this.getRootDir(), '等待索引完成')
-        return
-      }
-
-      list.appendChild(this.makeStatus(`搜索中… (${this.searchBackend})`))
-      const results = await this.searchFiles(query, SEARCH_RESULT_LIMIT)
-      if (token !== this.renderToken || !this.listEl) return
-
-      this.filtered = results
-      while (list.firstChild) list.removeChild(list.firstChild)
-      this.setFooter(this.indexedFileCount || this.allFiles.length, this.getRootDir(), query ? `查询:${query}` : '')
-
-      if (!this.filtered.length) {
-        list.appendChild(this.makeStatus('没有匹配的文件'))
-        return
-      }
-      this.selectedIdx = 0
-      this.rows = results.map(file => ({ kind: 'file', file }))
-      this.renderRows(list)
+    if (!this.indexReady) {
+      list.appendChild(this.makeStatus('索引尚未准备好，正在后台构建…'))
+      this.setFooter(this.indexedFileCount || this.allFiles.length, this.getRootDir(), '等待索引完成')
       return
     }
 
-    // Empty query → browse / recent view (the file-tree replacement).
-    await this.renderBrowseView(list, token)
+    if (type === 'folder') {
+      const dirs = await this.searchFolders(terms, scope, SEARCH_RESULT_LIMIT)
+      if (token !== this.renderToken || !this.listEl) return
+      while (list.firstChild) list.removeChild(list.firstChild)
+      this.setFooter(this.indexedFileCount || this.allFiles.length, this.getRootDir(), `${dirs.length} 个目录${scopeLabel}`)
+      if (!dirs.length) { list.appendChild(this.makeStatus('没有匹配的目录')); return }
+      this.selectedIdx = 0
+      const root = this.getRootDir(), currentDir = this.getCurrentDir()
+      const rows: NavRow[] = []
+      this.appendBrowseChildren(list, rows, dirs, root, currentDir)
+      this.rows = rows
+      this.highlight()
+      return
+    }
+
+    // file
+    this.searchBackend = this.shouldUseExternalFzf(terms) ? 'fzf' : 'js'
+    list.appendChild(this.makeStatus(`搜索中… (${this.searchBackend})`))
+    const results = await this.searchFiles(terms, scope, SEARCH_RESULT_LIMIT)
+    if (token !== this.renderToken || !this.listEl) return
+    this.filtered = results
+    while (list.firstChild) list.removeChild(list.firstChild)
+    this.setFooter(this.indexedFileCount || this.allFiles.length, this.getRootDir(), (terms ? `查询:${terms}` : '') + scopeLabel)
+    if (!results.length) { list.appendChild(this.makeStatus('没有匹配的文件')); return }
+    this.selectedIdx = 0
+    this.rows = results.map(file => ({ kind: 'file', file }))
+    this.renderRows(list)
   }
 
-  /**
-   * The empty-query view. Two shapes:
-   *   - not drilled (browsePrefix === null): a "Recent" section (frecency) plus
-   *     the workspace root's immediate folders and files, so you can start
-   *     drilling from the first keystroke-free screen.
-   *   - drilled (browsePrefix set): a breadcrumb, an "up" row, and that folder's
-   *     immediate children — i.e. the sidebar tree, one level at a time.
-   */
-  private async renderBrowseView(list: HTMLElement, token: number): Promise<void> {
+  /** Files tab resting view: frecency-ranked recents. */
+  private async renderRecents(list: HTMLElement, token: number): Promise<void> {
     const root = this.getRootDir()
     const currentDir = this.getCurrentDir()
-    const entries = await this.ensureIndexEntries()
+    await this.ensureIndexEntries()
     if (token !== this.renderToken || !this.listEl) return
-
-    const paths = entries.map(entry => entry.relPath)
-    const rows: NavRow[] = []
 
     this.selectedIdx = 0
     this.setFooter(
@@ -1590,35 +1725,53 @@ export default class QuickOpenPlugin extends Plugin {
       this.indexReady ? '' : (root ? '正在构建索引…' : ''),
     )
 
-    if (this.browsePrefix === null) {
-      const recentPaths = this.getRecentPaths(MAX_MRU)
-      if (recentPaths.length > 0) {
-        list.appendChild(this.makeSectionLabel('最近打开'))
-        for (const absPath of recentPaths) {
-          const row: NavRow = { kind: 'file', file: this.makeFileEntry(absPath, root, currentDir) }
-          rows.push(row)
-          list.appendChild(this.makeRow(row, rows.length - 1))
-        }
-      }
-
-      if (entries.length > 0) {
-        const children = listChildren(paths, '')
-        list.appendChild(this.makeSectionLabel(root ? `浏览  ·  ${platform.path.basename(root)}` : '浏览'))
-        this.appendBrowseChildren(list, rows, children, root, currentDir)
-      } else if (recentPaths.length === 0) {
-        list.appendChild(this.makeStatus(this.indexReady ? '暂无文件' : '索引正在后台构建…'))
+    const recentPaths = this.getRecentPaths(MAX_MRU)
+    const rows: NavRow[] = []
+    if (recentPaths.length > 0) {
+      list.appendChild(this.makeSectionLabel('最近打开'))
+      for (const absPath of recentPaths) {
+        const row: NavRow = { kind: 'file', file: this.makeFileEntry(absPath, root, currentDir) }
+        rows.push(row)
+        list.appendChild(this.makeRow(row, rows.length - 1))
       }
     } else {
-      // Drilled into a folder.
-      const crumbs = breadcrumbs(this.browsePrefix)
-      list.appendChild(this.makeBreadcrumb(crumbs))
+      list.appendChild(this.makeStatus(this.indexReady ? '暂无最近打开文件' : '索引正在后台构建…'))
+    }
+    this.rows = rows
+    this.highlight()
+  }
 
-      const upRow: NavRow = { kind: 'up', path: parentPrefix(this.browsePrefix) }
+  /**
+   * Folders tab resting view: the directory tree at `scope`, one level deep —
+   * a breadcrumb, an "up" row (unless at root), then the immediate subfolders
+   * and files. This is the sidebar-tree replacement.
+   */
+  private async renderTree(list: HTMLElement, token: number, scope: string): Promise<void> {
+    const root = this.getRootDir()
+    const currentDir = this.getCurrentDir()
+    const entries = await this.ensureIndexEntries()
+    if (token !== this.renderToken || !this.listEl) return
+
+    const paths = entries.map(entry => entry.relPath)
+    const rows: NavRow[] = []
+    this.selectedIdx = 0
+    this.setFooter(
+      this.indexedFileCount || this.allFiles.length,
+      root || currentDir,
+      this.indexReady ? '' : (root ? '正在构建索引…' : ''),
+    )
+
+    list.appendChild(this.makeBreadcrumb(breadcrumbs(scope)))
+    if (scope) {
+      const upRow: NavRow = { kind: 'up', path: parentPrefix(scope) }
       rows.push(upRow)
       list.appendChild(this.makeRow(upRow, rows.length - 1))
+    }
 
-      const children = listChildren(paths, this.browsePrefix)
-      this.appendBrowseChildren(list, rows, children, root, currentDir)
+    const children = listChildren(paths, scope)
+    this.appendBrowseChildren(list, rows, children, root, currentDir)
+    if (children.length === 0) {
+      list.appendChild(this.makeStatus(this.indexReady ? '此目录为空' : '索引正在后台构建…'))
     }
 
     this.rows = rows
@@ -1839,47 +1992,58 @@ export default class QuickOpenPlugin extends Plugin {
   private handleKey(e: KeyboardEvent): void {
     // Skip when IME is composing (e.g. Chinese input confirming pinyin with Enter)
     if (e.isComposing || e.keyCode === 229) return
-    if ((e.metaKey || e.ctrlKey) && e.key === 'Tab') {
-      e.preventDefault()
-      e.stopPropagation()
-      this.toggleSearchMode()
+    const mod = e.metaKey || e.ctrlKey
+
+    if (mod && e.key === 'Tab') {
+      e.preventDefault(); e.stopPropagation()
+      this.cycleTab(e.shiftKey ? -1 : 1)
       return
     }
-    const emptyInput = (this.inputEl?.value ?? '') === ''
+    // Cmd/Ctrl + [ or ] → toggle the popup between the two size presets.
+    if (mod && (e.key === '[' || e.key === ']')) {
+      e.preventDefault(); e.stopPropagation()
+      this.setWidth(e.key === ']' ? 'wide' : 'default')
+      return
+    }
+
+    const input = this.inputEl
+    const value = input?.value ?? ''
+    const cursorAtEnd = !input || (input.selectionStart === value.length && input.selectionEnd === value.length)
+
+    // Tab / → accepts the top magic-syntax completion (type:/scope:).
+    if ((e.key === 'Tab' || (e.key === 'ArrowRight' && cursorAtEnd)) && this.completions.length > 0) {
+      e.preventDefault(); e.stopPropagation()
+      this.acceptCompletion(this.completions[0]!)
+      return
+    }
+
+    const emptyInput = value === ''
+    const scope = this.currentScope()
+
     if (e.key === 'ArrowDown') {
-      e.preventDefault()
-      e.stopPropagation()
-      // Clamp to 0 so an empty list (a "no matches" state) can't drive the
-      // index negative.
+      e.preventDefault(); e.stopPropagation()
+      // Clamp to 0 so an empty list (a "no matches" state) can't go negative.
       this.selectedIdx = Math.max(0, Math.min(this.selectedIdx + 1, this.rows.length - 1))
       this.highlight()
     } else if (e.key === 'ArrowUp') {
-      e.preventDefault()
-      e.stopPropagation()
+      e.preventDefault(); e.stopPropagation()
       this.selectedIdx = Math.max(this.selectedIdx - 1, 0)
       this.highlight()
     } else if (e.key === 'ArrowRight' && emptyInput && this.selectedRow()?.kind === 'dir') {
-      // Drill into the highlighted folder — tree-style navigation. Only when the
-      // input is empty, so editing a query with the arrow keys still works.
-      e.preventDefault()
-      e.stopPropagation()
+      // Drill into the highlighted folder. Only when the input is empty, so
+      // editing a query with the arrow keys still works.
+      e.preventDefault(); e.stopPropagation()
       this.activateRow()
-    } else if (e.key === 'ArrowLeft' && emptyInput && this.browsePrefix !== null) {
-      e.preventDefault()
-      e.stopPropagation()
-      this.enterDir(parentPrefix(this.browsePrefix))
-    } else if (e.key === 'Backspace' && emptyInput && this.browsePrefix !== null) {
-      // Backspace at an empty prompt walks up a directory, like a shell.
-      e.preventDefault()
-      e.stopPropagation()
-      this.enterDir(parentPrefix(this.browsePrefix))
+    } else if ((e.key === 'ArrowLeft' || e.key === 'Backspace') && emptyInput && this.activeTab === 'folders' && scope) {
+      // Backspace / ← at an empty prompt walks up a directory, like a shell.
+      e.preventDefault(); e.stopPropagation()
+      this.enterDir(parentPrefix(scope))
     } else if (e.key === 'Enter') {
       if (e.repeat) return
       const now = Date.now()
       if (now - this.lastHandledEnterAt < 180) return
       this.lastHandledEnterAt = now
-      e.preventDefault()
-      e.stopPropagation()
+      e.preventDefault(); e.stopPropagation()
       this.activateRow()
     }
   }
@@ -1909,19 +2073,26 @@ export default class QuickOpenPlugin extends Plugin {
   }
 
   /**
-   * Change the browse location and re-render. `null` (or '') returns to the
-   * default recent+root view; a non-empty prefix drills into that folder.
-   * Clears the query so the browse view (not a stale search) is shown.
+   * Change the browse location and re-render.
+   *
+   * Drilling always lands in the folders tab and auto-writes `scope:<dir>/` into
+   * the search box (so the same query afterwards searches inside that folder).
+   * It intentionally clears `type:`/terms: the point of a drill is to *see* the
+   * folder's tree, and the tree view only shows when there is no type override
+   * and no terms. `''`/null climbs back to the root tree.
    */
   private enterDir(prefix: string | null): void {
     const normalized = prefix ? normalizePrefix(prefix) : ''
-    this.browsePrefix = normalized === '' ? null : normalized
-    this.selectedIdx = 0
-    if (this.inputEl && this.inputEl.value !== '') {
-      this.inputEl.value = ''
-      this.lastInputValue = ''
+    if (this.activeTab !== 'folders') {
+      this.activeTab = 'folders'
+      this.updateTabBar()
+      this.updatePlaceholder()
     }
-    void this.renderList('')
+    const q = normalized ? setToken('', 'scope', normalized + '/') : ''
+    if (this.inputEl) { this.inputEl.value = q; this.lastInputValue = q }
+    this.selectedIdx = 0
+    this.refreshCompletions()
+    void this.renderList(q)
     this.inputEl?.focus()
   }
 
@@ -1943,34 +2114,118 @@ export default class QuickOpenPlugin extends Plugin {
       })
   }
 
-  private toggleSearchMode(): void {
-    this.searchMode = this.searchMode === 'files' ? 'content' : 'files'
+  /** Move `dir` tabs along the files → 目录 → content ring (Ctrl+Tab). */
+  private cycleTab(dir: number): void {
+    const idx = TAB_ORDER.indexOf(this.activeTab)
+    const next = TAB_ORDER[(idx + dir + TAB_ORDER.length) % TAB_ORDER.length]!
+    this.switchTab(next)
+  }
+
+  private switchTab(tab: SearchTab): void {
+    if (tab === this.activeTab) { this.inputEl?.focus(); return }
+    this.activeTab = tab
     this.updateTabBar()
     this.updatePlaceholder()
-    if (this.inputEl) {
-      void this.renderList(this.inputEl.value)
-    }
+    const q = this.adjustQueryForTab(this.currentQuery, tab)
+    if (this.inputEl) { this.inputEl.value = q; this.lastInputValue = q }
+    this.selectedIdx = 0
+    this.refreshCompletions()
+    void this.renderList(q)
+    this.inputEl?.focus()
+  }
+
+  /**
+   * Cross-tab query rules: `scope:` is always preserved (the user removes it by
+   * hand). The content tab auto-sets `type:content`; leaving it drops that auto
+   * type so the files/folders tab does its own job, while keeping an explicit
+   * `type:folder`/`type:file` override the user typed.
+   */
+  private adjustQueryForTab(query: string, tab: SearchTab): string {
+    if (tab === 'content') return setToken(query, 'type', 'content')
+    return parseQuery(query).type === 'content' ? removeToken(query, 'type') : query
   }
 
   private updateTabBar(): void {
     if (!this.tabBarEl) return
     this.tabBarEl.querySelectorAll('.tpl-qo-tab').forEach(el => {
       const tab = el as HTMLElement
-      tab.classList.toggle('tpl-qo-tab-active', tab.dataset.mode === this.searchMode)
+      tab.classList.toggle('tpl-qo-tab-active', tab.dataset.mode === this.activeTab)
     })
   }
 
   private updatePlaceholder(): void {
     if (!this.inputEl) return
-    this.inputEl.placeholder = this.searchMode === 'content'
-      ? '搜索文件内容...'
-      : '搜索文件名、工作区路径或相对当前文件的路径...'
+    const placeholders: Record<SearchTab, string> = {
+      files: '搜索文件  ·  可用 type: / scope: 过滤',
+      folders: '浏览或搜索目录  ·  回车进入，Backspace 返回上级',
+      content: '搜索文件内容 (需要 rg)',
+    }
+    this.inputEl.placeholder = placeholders[this.activeTab]
   }
 
-  private async searchContent(query: string, limit: number): Promise<ContentMatch[]> {
+  // -------------------------------------------------------------------------
+  // Popup size (Cmd/Ctrl + [ or ])
+  // -------------------------------------------------------------------------
+  private setWidth(preset: WidthPreset): void {
+    this.widthPreset = preset
+    if (this.modalEl) this.modalEl.dataset.width = preset
+    this.settings.set('widthPreset' as never, preset as never)
+    this.settings.save().catch(() => {})
+  }
+
+  // -------------------------------------------------------------------------
+  // Magic-syntax autocomplete
+  // -------------------------------------------------------------------------
+  private refreshCompletions(): void {
+    const input = this.inputEl
+    if (!input || !this.completionsEl) { this.completions = []; return }
+    const cursor = input.selectionStart ?? input.value.length
+    this.completions = completeQuery(input.value, cursor, this.cachedDirs).candidates
+    this.renderCompletions()
+  }
+
+  private renderCompletions(): void {
+    const el = this.completionsEl
+    if (!el) return
+    while (el.firstChild) el.removeChild(el.firstChild)
+    if (this.completions.length === 0) { el.hidden = true; return }
+    el.hidden = false
+    this.completions.forEach((c, i) => {
+      const chip = document.createElement('div')
+      chip.className = 'tpl-qo-completion' + (i === 0 ? ' tpl-qo-completion-top' : '')
+      const label = document.createElement('span')
+      label.className = 'tpl-qo-completion-label'
+      label.textContent = c.label
+      chip.appendChild(label)
+      if (c.hint) {
+        const hint = document.createElement('span')
+        hint.className = 'tpl-qo-completion-hint'
+        hint.textContent = c.hint
+        chip.appendChild(hint)
+      }
+      // mousedown (not click) so the input doesn't blur before we handle it.
+      chip.addEventListener('mousedown', e => { e.preventDefault(); this.acceptCompletion(c) })
+      el.appendChild(chip)
+    })
+  }
+
+  private acceptCompletion(c: Completion): void {
+    const input = this.inputEl
+    if (!input) return
+    input.value = c.insert
+    this.lastInputValue = c.insert
+    try { input.setSelectionRange(c.cursor, c.cursor) } catch {}
+    this.refreshCompletions()
+    void this.renderList(c.insert)
+    input.focus()
+  }
+
+  private async searchContent(query: string, scope: string, limit: number): Promise<ContentMatch[]> {
     if (!this.rgPath || !query.trim()) return []
     const root = this.getRootDir()
     if (!root) return []
+    // Restrict ripgrep to the scoped subtree when a scope is active.
+    const searchRoot = scope ? platform.path.join(root, normalizePrefix(scope)) : root
 
     const cmd = [
       platform.shell.escape(this.rgPath),
@@ -1981,7 +2236,7 @@ export default class QuickOpenPlugin extends Plugin {
       ...MD_EXTS.flatMap(ext => ['-g', platform.shell.escape(`*${ext}`)]),
       ...IGNORED_DIRS.flatMap(d => ['--glob', platform.shell.escape(`!${d}`)]),
       '--', platform.shell.escape(query),
-      platform.shell.escape(root),
+      platform.shell.escape(searchRoot),
     ].join(' ')
 
     try {

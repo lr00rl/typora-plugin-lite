@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  allDirectories,
   breadcrumbs,
   listChildren,
   normalizePrefix,
@@ -78,4 +79,19 @@ test('breadcrumbs expand a prefix into cumulative segments', () => {
     { name: 'alpha', path: 'projects/alpha' },
   ])
   assert.deepEqual(breadcrumbs(''), [])
+})
+
+test('allDirectories enumerates every directory with a nested-file count', () => {
+  const dirs = allDirectories(VAULT)
+  const byPath = Object.fromEntries(dirs.map(d => [d.path, d.fileCount]))
+  assert.equal(byPath['notes'], 3)
+  assert.equal(byPath['notes/daily'], 2)
+  assert.equal(byPath['projects'], 3)
+  assert.equal(byPath['projects/alpha'], 2)
+  assert.equal(byPath['README.md'], undefined, 'files are not directories')
+})
+
+test('allDirectories can be scoped to a subtree, excluding the scope itself', () => {
+  const dirs = allDirectories(VAULT, 'projects')
+  assert.deepEqual(dirs.map(d => d.path), ['projects/alpha'])
 })

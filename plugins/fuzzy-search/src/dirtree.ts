@@ -83,6 +83,44 @@ export function listChildren(paths: readonly string[], prefix: string): DirChild
   return [...dirChildren, ...files]
 }
 
+/**
+ * Every directory that appears anywhere in the flat file list, with the count
+ * of files beneath each. Used for folder search (`type:folder`) and `scope:`
+ * autocomplete, both of which need the whole directory set rather than one
+ * level of it. Optionally restricted to those under `scope`.
+ */
+export function allDirectories(
+  paths: readonly string[],
+  scope = '',
+): DirChild[] {
+  const base = normalizePrefix(scope)
+  const prefix = base ? base + '/' : ''
+  const counts = new Map<string, number>()
+
+  for (const raw of paths) {
+    const path = raw.replace(/\\/g, '/').replace(/^\/+/, '')
+    if (!path) continue
+    if (prefix && !path.toLowerCase().startsWith(prefix.toLowerCase())) continue
+    const segments = path.split('/')
+    // Every proper ancestor directory of the file is a directory entry.
+    for (let i = 1; i < segments.length; i++) {
+      const dirPath = segments.slice(0, i).join('/')
+      if (base && !(dirPath === base || dirPath.toLowerCase().startsWith(prefix.toLowerCase()))) continue
+      if (dirPath === base) continue // don't list the scope itself
+      counts.set(dirPath, (counts.get(dirPath) ?? 0) + 1)
+    }
+  }
+
+  return [...counts.entries()]
+    .map(([path, fileCount]) => ({
+      name: path.slice(path.lastIndexOf('/') + 1),
+      path,
+      kind: 'dir' as const,
+      fileCount,
+    }))
+    .sort((a, b) => a.path.toLowerCase().localeCompare(b.path.toLowerCase()) || a.path.localeCompare(b.path))
+}
+
 /** Parent of a browse prefix (`'a/b'` → `'a'`, `'a'` → `''`, `''` → `''`). */
 export function parentPrefix(prefix: string): string {
   const base = normalizePrefix(prefix)
