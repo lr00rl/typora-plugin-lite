@@ -130,6 +130,12 @@ export default class FenceEnhancePlugin extends Plugin<FenceEnhanceSettings> {
   private mutationTimer: number | null = null
   /** Fences edited since the last debounce flush. */
   private dirty = new Set<HTMLElement>()
+  /**
+   * Whether any mutation since the last flush added/removed whole blocks (vs.
+   * only edits inside existing ones). Sticky across the debounce window so a
+   * late non-structural batch can't cancel a pending whole-document warm pass.
+   */
+  private pendingStructural = false
 
   _init(...args: Parameters<Plugin<FenceEnhanceSettings>['_init']>): void {
     super._init(args[0], args[1], DEFAULT_SETTINGS)
@@ -202,16 +208,25 @@ export default class FenceEnhancePlugin extends Plugin<FenceEnhanceSettings> {
           }
         }
       }
-      this.scheduleFlush(structural)
+      if (structural) this.pendingStructural = true
+      this.scheduleFlush()
     })
 
     this.mutationObserver.observe(write, { childList: true, subtree: true })
   }
 
-  private scheduleFlush(structural: boolean): void {
+  private scheduleFlush(): void {
     if (this.mutationTimer !== null) window.clearTimeout(this.mutationTimer)
     this.mutationTimer = window.setTimeout(() => {
       this.mutationTimer = null
+      // `structural` must be sticky across the whole debounce window. Opening a
+      // file fires the added-fence mutations *and*, milliseconds later, the
+      // CodeMirror-init mutations for Typora's eager blocks (which live inside
+      // fences → non-structural). If a per-batch flag were passed in, that
+      // second batch would reset the timer with structural=false and the
+      // whole-document warm pass would never run.
+      const structural = this.pendingStructural
+      this.pendingStructural = false
       const dirty = Array.from(this.dirty)
       this.dirty.clear()
 

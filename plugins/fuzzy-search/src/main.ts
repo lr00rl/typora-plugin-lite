@@ -1732,7 +1732,7 @@ export default class QuickOpenPlugin extends Plugin {
     item.appendChild(name)
     item.appendChild(meta)
     item.addEventListener('mouseenter', () => { this.selectedIdx = idx; this.highlight() })
-    item.addEventListener('click', () => this.activateRow())
+    item.addEventListener('click', () => { this.selectedIdx = idx; this.activateRow() })
     return item
   }
 
@@ -1744,7 +1744,7 @@ export default class QuickOpenPlugin extends Plugin {
     name.textContent = '↑  ..'
     item.appendChild(name)
     item.addEventListener('mouseenter', () => { this.selectedIdx = idx; this.highlight() })
-    item.addEventListener('click', () => this.activateRow())
+    item.addEventListener('click', () => { this.selectedIdx = idx; this.activateRow() })
     return item
   }
 
@@ -1786,7 +1786,7 @@ export default class QuickOpenPlugin extends Plugin {
     item.appendChild(name)
     item.appendChild(pathEl)
     item.addEventListener('mouseenter', () => { this.selectedIdx = idx; this.highlight() })
-    item.addEventListener('click', () => this.activateRow())
+    item.addEventListener('click', () => { this.selectedIdx = idx; this.activateRow() })
     return item
   }
 
@@ -1806,7 +1806,7 @@ export default class QuickOpenPlugin extends Plugin {
     item.appendChild(name)
     item.appendChild(lineEl)
     item.addEventListener('mouseenter', () => { this.selectedIdx = idx; this.highlight() })
-    item.addEventListener('click', () => this.activateRow())
+    item.addEventListener('click', () => { this.selectedIdx = idx; this.activateRow() })
     return item
   }
 
