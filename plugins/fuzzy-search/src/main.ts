@@ -1,5 +1,22 @@
 import { IS_MAC, Plugin, editor, platform } from '@typora-plugin-lite/core'
 
+import { fuzzyMatchPositions, scoreCandidate } from './scoring.js'
+import {
+  type FrecencyStore,
+  frecencySearchBoost,
+  loadStore,
+  pruneStore,
+  rankByFrecency,
+  recordOpen as recordFrecencyOpen,
+} from './frecency.js'
+import {
+  type DirChild,
+  breadcrumbs,
+  listChildren,
+  normalizePrefix,
+  parentPrefix,
+} from './dirtree.js'
+
 interface FileEntry {
   absPath: string
   relPath: string
@@ -26,9 +43,27 @@ interface ContentMatch {
   matchText: string
 }
 
+/**
+ * A selectable row in the result list. Unifying files, directories, the "up"
+ * entry, and content matches into one indexed list means keyboard navigation
+ * and Enter-dispatch have a single source of truth — the alternative (parallel
+ * arrays for each kind) is where off-by-one selection bugs breed.
+ */
+type NavRow =
+  | { kind: 'file'; file: FileEntry }
+  | { kind: 'dir'; name: string; path: string; fileCount: number }
+  | { kind: 'up'; path: string }
+  | { kind: 'content'; match: ContentMatch }
+
 const MD_EXTS = ['.md', '.markdown']
 const MD_EXT_SET = new Set(MD_EXTS)
 const MAX_MRU = 30
+/**
+ * Frecency store cap. Larger than the visible recent list (MAX_MRU) because the
+ * store also feeds search ranking, where a longer memory of what you open is
+ * useful; pruned by frecency so it never grows unbounded.
+ */
+const MAX_FRECENCY = 300
 const DEFAULT_HOTKEYS = ['Mod+.', "Mod+'"]
 const DEBOUNCE_MS = 120
 const INDEX_TTL_MS = 5 * 60_000
@@ -46,74 +81,9 @@ interface PersistedIndexMeta {
   updatedAt: number
 }
 
-// ---------------------------------------------------------------------------
-// FZF-inspired scoring (ported from fzf.nvim behavior)
-// Bonuses: consecutive chars, word boundaries (/ - _ . space), basename prefix,
-//          exact prefix match, camelCase transitions
-// ---------------------------------------------------------------------------
-function fzfScore(text: string, query: string): number {
-  const t = text.toLowerCase()
-  const q = query.toLowerCase()
-
-  const positions: number[] = []
-  let qi = 0
-  for (let ti = 0; ti < t.length && qi < q.length; ti++) {
-    if (t[ti] === q[qi]) { positions.push(ti); qi++ }
-  }
-  if (qi < q.length) return -Infinity
-
-  let score = 100
-  let prevPos = -2
-  let consecutive = 0
-
-  for (const pos of positions) {
-    if (pos === prevPos + 1) {
-      consecutive++
-      score += consecutive * 6
-    } else {
-      consecutive = 0
-    }
-    const prevCh = pos > 0 ? t[pos - 1] : ''
-    if (pos === 0 || /[\\/\-_.\s]/.test(prevCh)) score += 10
-    // camelCase boundary
-    if (pos > 0 && text[pos] !== text[pos].toLowerCase() && text[pos - 1] === text[pos - 1].toLowerCase()) {
-      score += 8
-    }
-    if (pos === 0) score += 12
-    prevPos = pos
-  }
-
-  // Exact prefix bonus
-  if (t.startsWith(q)) score += 20
-
-  const span = positions[positions.length - 1] - positions[0] + 1
-  score -= span * 0.4
-  score -= (t.length - q.length) * 0.1
-  return score
-}
-
-function fuzzyMatchPositions(text: string, query: string): number[] | null {
-  const t = text.toLowerCase()
-  const q = query.toLowerCase().trim()
-  if (!q) return []
-
-  const positions: number[] = []
-  let qi = 0
-  for (let ti = 0; ti < t.length && qi < q.length; ti++) {
-    if (t[ti] === q[qi]) {
-      positions.push(ti)
-      qi += 1
-    }
-  }
-  return qi === q.length ? positions : null
-}
-
-function scoreFile(f: FileEntry, query: string): number {
-  const nameScore = fzfScore(f.basenameKey, query) + 25
-  const rootPathScore = fzfScore(f.relPathKey, query) + 8
-  const cwdPathScore = fzfScore(f.cwdRelPathKey, query) + (isRelativePathQuery(query) ? 20 : 14)
-  return Math.max(nameScore, rootPathScore, cwdPathScore)
-}
+// Fuzzy matching + candidate scoring live in ./scoring.ts so they can be unit
+// tested without the editor core, and so the frecency-aware ranking has one
+// home. See scoreCandidate / fuzzyMatchPositions there.
 
 // ---------------------------------------------------------------------------
 // Relative path helper
@@ -372,6 +342,36 @@ const CSS = `
   text-overflow: ellipsis;
   font-family: var(--monospace, 'SF Mono', 'Fira Code', 'Consolas', monospace);
 }
+
+/* Directory rows (browse mode) */
+.tpl-qo-dir .tpl-qo-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.tpl-qo-dir-icon {
+  font-size: 12px;
+  line-height: 1;
+  opacity: 0.8;
+}
+.tpl-qo-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-wrap: wrap;
+  text-transform: none;
+  letter-spacing: normal;
+  font-size: 11px;
+  opacity: 0.55;
+}
+.tpl-qo-crumb {
+  cursor: pointer;
+  border-radius: 3px;
+  padding: 0 3px;
+}
+.tpl-qo-crumb:hover {
+  background: rgba(128,128,128,0.14);
+}
 `
 
 export default class QuickOpenPlugin extends Plugin {
@@ -416,6 +416,39 @@ export default class QuickOpenPlugin extends Plugin {
   private tabBarEl: HTMLElement | null = null
   private lastRecordedActiveFile = ''
 
+  /**
+   * The persistent index parsed into FileEntry[] and held in memory for the
+   * life of the modal. Re-reading and re-normalizing the whole index file on
+   * every keystroke (the old searchWithJs) was the main source of typing lag on
+   * a large vault; this is built once per (root, currentDir) and filtered in
+   * place. Keyed so it rebuilds when you switch files or workspaces.
+   */
+  private indexEntries: FileEntry[] = []
+  private indexEntriesRoot = ''
+  private indexEntriesCurrentDir = ''
+
+  /**
+   * Frecency store (open counts + recency), replacing the old recency-only MRU.
+   * Drives the empty-query "recent" list and lifts frequently-opened files in
+   * search ranking. Persisted in settings; migrates the legacy `mru` array.
+   */
+  private frecency: FrecencyStore = {}
+
+  /**
+   * Browse mode: when non-null, the empty-query view shows this directory's
+   * immediate children (folders + files) instead of only recents — the piece
+   * that lets quick-open stand in for the sidebar tree. null = not browsing.
+   * Typing a query always leaves browse mode for a full-vault fuzzy search.
+   */
+  private browsePrefix: string | null = null
+
+  /**
+   * The currently-rendered selectable rows, in display order. selectedIdx
+   * indexes into this; Enter dispatches on the row's kind. Section labels are
+   * not rows (not selectable), so this stays 1:1 with the highlightable items.
+   */
+  private rows: NavRow[] = []
+
   private getHotkeys(): string[] {
     const custom = this.settings.get('hotkeys' as never) as unknown
     if (Array.isArray(custom) && custom.length > 0 && custom.every(k => typeof k === 'string')) {
@@ -427,6 +460,7 @@ export default class QuickOpenPlugin extends Plugin {
   onload(): void {
     const hotkeys = this.getHotkeys()
     this.log('onload', { hotkeys, dataDir: platform.dataDir })
+    this.loadFrecency()
     for (const key of hotkeys) {
       this.registerHotkey(key, () => this.open())
     }
@@ -775,21 +809,24 @@ export default class QuickOpenPlugin extends Plugin {
   // -------------------------------------------------------------------------
   // MRU helpers
   // -------------------------------------------------------------------------
-  private getMru(): string[] {
-    const raw = this.settings.get('mru' as never)
-    return Array.isArray(raw) ? (raw as string[]) : []
+  /** Load the frecency store from settings, migrating the legacy `mru` array. */
+  private loadFrecency(): void {
+    const stored = this.settings.get('frecency' as never)
+    const source = stored ?? this.settings.get('mru' as never)
+    this.frecency = loadStore(source, Date.now())
   }
 
-  private async saveMru(mru: string[]): Promise<void> {
-    this.settings.set('mru' as never, mru as never)
-    await this.settings.save()
+  /** Recent files, frecency-ranked (recency + frequency), most relevant first. */
+  private getRecentPaths(limit = MAX_MRU): string[] {
+    return rankByFrecency(this.frecency, Date.now()).slice(0, limit)
   }
 
+  /** Record a file open: bump its frecency, prune the store, persist. */
   private async recordOpen(absPath: string): Promise<void> {
-    const mru = this.getMru().filter(p => p !== absPath)
-    mru.unshift(absPath)
-    if (mru.length > MAX_MRU) mru.length = MAX_MRU
-    await this.saveMru(mru)
+    const now = Date.now()
+    this.frecency = pruneStore(recordFrecencyOpen(this.frecency, absPath, now), now, MAX_FRECENCY)
+    this.settings.set('frecency' as never, this.frecency as never)
+    await this.settings.save()
   }
 
   // -------------------------------------------------------------------------
@@ -890,20 +927,60 @@ export default class QuickOpenPlugin extends Plugin {
     if (results.length > limit) results.length = limit
   }
 
-  private async searchWithJs(query: string, limit = 50): Promise<FileEntry[]> {
-    this.searchBackend = 'js'
-    if (!this.indexReady || !this.indexFilePath || !this.indexRoot) return []
-
-    const normalizedQuery = query.trim()
-    const text = await platform.fs.readText(this.indexFilePath)
+  /**
+   * The persistent index parsed into FileEntry[], cached in memory for the life
+   * of the modal. Reading + normalizing the whole index file on every keystroke
+   * was the old lag source; this pays that cost once per (root, currentDir).
+   * currentDir participates in the key because it feeds each entry's cwd-relative
+   * path, which changes when the active file changes.
+   */
+  private async ensureIndexEntries(): Promise<FileEntry[]> {
     const root = this.indexRoot
     const currentDir = this.getCurrentDir()
+    if (
+      this.indexEntries.length > 0 &&
+      this.indexEntriesRoot === root &&
+      this.indexEntriesCurrentDir === currentDir
+    ) {
+      return this.indexEntries
+    }
+    if (!this.indexReady || !this.indexFilePath || !root) return []
+
+    const text = await platform.fs.readText(this.indexFilePath)
+    const entries: FileEntry[] = []
+    for (const relPath of text.split('\n')) {
+      const trimmed = relPath.trim()
+      if (!trimmed) continue
+      entries.push(this.makeFileEntry(platform.path.join(root, trimmed), root, currentDir))
+    }
+    this.indexEntries = entries
+    this.indexEntriesRoot = root
+    this.indexEntriesCurrentDir = currentDir
+    return entries
+  }
+
+  /** Drop the parsed cache so the next search rebuilds it (index changed). */
+  private invalidateIndexEntries(): void {
+    this.indexEntries = []
+    this.indexEntriesRoot = ''
+    this.indexEntriesCurrentDir = ''
+  }
+
+  private async searchWithJs(query: string, limit = 50): Promise<FileEntry[]> {
+    this.searchBackend = 'js'
+    const entries = await this.ensureIndexEntries()
+    if (entries.length === 0) return []
+
+    const normalizedQuery = query.trim()
+    const isPathQuery = isRelativePathQuery(normalizedQuery)
+    const now = Date.now()
     const topResults: Array<{ file: FileEntry; score: number }> = []
 
-    for (const relPath of text.split('\n').filter(Boolean)) {
-      const absPath = platform.path.join(root, relPath)
-      const file = this.makeFileEntry(absPath, root, currentDir)
-      const score = scoreFile(file, normalizedQuery)
+    for (const file of entries) {
+      const score = scoreCandidate(file, normalizedQuery, {
+        isPathQuery,
+        frecencyBoost: frecencySearchBoost(this.frecency, file.absPath, now),
+      })
       if (score === -Infinity) continue
       this.pushTopResult(topResults, { file, score }, limit)
     }
@@ -1037,12 +1114,12 @@ export default class QuickOpenPlugin extends Plugin {
     await this.ensureToolInfo()
     this.indexReady = root ? await this.loadPersistedIndexMeta(root) : false
 
-    let mru = this.getMru()
-    this.log('loadFiles:mru', { count: mru.length, sample: mru.slice(0, DEBUG_SAMPLE_LIMIT) })
-    if (mru.length > 0) {
+    let recent = this.getRecentPaths()
+    this.log('loadFiles:recent', { count: recent.length, sample: recent.slice(0, DEBUG_SAMPLE_LIMIT) })
+    if (recent.length > 0) {
       try {
         const existing = await Promise.all(
-          mru.map(async p => {
+          recent.map(async p => {
             try {
               return await platform.fs.exists(p) ? p : null
             } catch {
@@ -1050,17 +1127,25 @@ export default class QuickOpenPlugin extends Plugin {
             }
           }),
         )
-        const before = mru.length
-        mru = existing.filter((p): p is string => !!p)
-        if (mru.length < before) {
-          this.log('loadFiles:mru-pruned', { before, after: mru.length })
-          this.saveMru(mru).catch(() => {})
+        const before = recent.length
+        recent = existing.filter((p): p is string => !!p)
+        if (recent.length < before) {
+          // Prune vanished files from the frecency store, not just this view.
+          this.log('loadFiles:recent-pruned', { before, after: recent.length })
+          const keep = new Set(recent)
+          const next: FrecencyStore = {}
+          for (const [path, entry] of Object.entries(this.frecency)) {
+            if (keep.has(path)) next[path] = entry
+          }
+          this.frecency = next
+          this.settings.set('frecency' as never, this.frecency as never)
+          this.settings.save().catch(() => {})
         }
       } catch (err) {
-        this.warn('loadFiles:mru-existence-check-failed', err)
+        this.warn('loadFiles:recent-existence-check-failed', err)
       }
     }
-    this.allFiles = mru.map(absPath => this.makeFileEntry(absPath, root, currentDir))
+    this.allFiles = recent.map(absPath => this.makeFileEntry(absPath, root, currentDir))
     this.filtered = [...this.allFiles]
     this.log('loadFiles:phase1-complete', {
       root,
@@ -1140,6 +1225,9 @@ export default class QuickOpenPlugin extends Plugin {
       indexFilePath: this.indexFilePath,
       indexReady: this.indexReady,
     })
+    // The on-disk index just changed; drop the parsed in-memory copy so the
+    // next search (and the browse tree) reflects the fresh file set.
+    this.invalidateIndexEntries()
     this.setFooter(this.indexedFileCount || this.allFiles.length, root, '')
     if (this.overlay) {
       void this.renderList(this.inputEl?.value ?? this.currentQuery)
@@ -1187,10 +1275,13 @@ export default class QuickOpenPlugin extends Plugin {
     this.footerActionEl = null
     this.filtered = []
     this.contentFiltered = []
+    this.rows = []
     this.selectedIdx = 0
     this.currentQuery = ''
     this.lastInputValue = ''
     this.searchMode = 'files'
+    // Each open starts fresh at the recent view rather than a stale directory.
+    this.browsePrefix = null
   }
 
   // -------------------------------------------------------------------------
@@ -1411,6 +1502,7 @@ export default class QuickOpenPlugin extends Plugin {
     if (!list) return
     const token = ++this.renderToken
     this.currentQuery = query
+    this.rows = []
     while (list.firstChild) list.removeChild(list.firstChild)
 
     if (this.searchMode === 'content') {
@@ -1437,11 +1529,13 @@ export default class QuickOpenPlugin extends Plugin {
         return
       }
       this.selectedIdx = 0
-      results.forEach((m, i) => list.appendChild(this.makeContentItem(m, i)))
+      this.rows = results.map(match => ({ kind: 'content', match }))
+      this.renderRows(list)
       return
     }
 
     if (query.trim()) {
+      // A query always searches the whole vault, ignoring any browse location.
       this.searchBackend = this.shouldUseExternalFzf(query) ? 'fzf' : 'js'
       if (!this.indexReady) {
         this.filtered = []
@@ -1457,47 +1551,100 @@ export default class QuickOpenPlugin extends Plugin {
       this.filtered = results
       while (list.firstChild) list.removeChild(list.firstChild)
       this.setFooter(this.indexedFileCount || this.allFiles.length, this.getRootDir(), query ? `查询:${query}` : '')
-      this.log('renderList:query', {
-        query,
-        indexedFiles: this.indexedFileCount || this.allFiles.length,
-        resultCount: this.filtered.length,
-        topResults: this.filtered.slice(0, 10).map(f => f.relPath),
-        fzfPath: this.fzfPath,
-      })
 
       if (!this.filtered.length) {
         list.appendChild(this.makeStatus('没有匹配的文件'))
         return
       }
       this.selectedIdx = 0
-      this.filtered.forEach((f, i) => list.appendChild(this.makeItem(f, i)))
-    } else {
-      const mru = this.getMru()
-      const mruFiles = mru
-        .map(p => this.makeFileEntry(p, this.getRootDir(), this.getCurrentDir()))
-        .slice(0, MAX_MRU)
-
-      const root = this.getRootDir()
-      this.filtered = [...mruFiles]
-      this.log('renderList:default', {
-        indexedFiles: this.indexedFileCount || this.allFiles.length,
-        mruCount: mruFiles.length,
-        indexReady: this.indexReady,
-      })
-      this.selectedIdx = 0
-      this.setFooter(
-        this.indexedFileCount || this.allFiles.length,
-        root || this.getCurrentDir(),
-        this.indexReady ? '' : (root ? '正在构建索引…' : ''),
-      )
-
-      if (mruFiles.length) {
-        list.appendChild(this.makeSectionLabel('最近打开'))
-        mruFiles.forEach((f, idx) => list.appendChild(this.makeItem(f, idx)))
-      } else {
-        list.appendChild(this.makeStatus(this.indexReady ? '暂无最近打开文件' : '暂无最近打开文件，索引正在后台构建…'))
-      }
+      this.rows = results.map(file => ({ kind: 'file', file }))
+      this.renderRows(list)
+      return
     }
+
+    // Empty query → browse / recent view (the file-tree replacement).
+    await this.renderBrowseView(list, token)
+  }
+
+  /**
+   * The empty-query view. Two shapes:
+   *   - not drilled (browsePrefix === null): a "Recent" section (frecency) plus
+   *     the workspace root's immediate folders and files, so you can start
+   *     drilling from the first keystroke-free screen.
+   *   - drilled (browsePrefix set): a breadcrumb, an "up" row, and that folder's
+   *     immediate children — i.e. the sidebar tree, one level at a time.
+   */
+  private async renderBrowseView(list: HTMLElement, token: number): Promise<void> {
+    const root = this.getRootDir()
+    const currentDir = this.getCurrentDir()
+    const entries = await this.ensureIndexEntries()
+    if (token !== this.renderToken || !this.listEl) return
+
+    const paths = entries.map(entry => entry.relPath)
+    const rows: NavRow[] = []
+
+    this.selectedIdx = 0
+    this.setFooter(
+      this.indexedFileCount || this.allFiles.length,
+      root || currentDir,
+      this.indexReady ? '' : (root ? '正在构建索引…' : ''),
+    )
+
+    if (this.browsePrefix === null) {
+      const recentPaths = this.getRecentPaths(MAX_MRU)
+      if (recentPaths.length > 0) {
+        list.appendChild(this.makeSectionLabel('最近打开'))
+        for (const absPath of recentPaths) {
+          const row: NavRow = { kind: 'file', file: this.makeFileEntry(absPath, root, currentDir) }
+          rows.push(row)
+          list.appendChild(this.makeRow(row, rows.length - 1))
+        }
+      }
+
+      if (entries.length > 0) {
+        const children = listChildren(paths, '')
+        list.appendChild(this.makeSectionLabel(root ? `浏览  ·  ${platform.path.basename(root)}` : '浏览'))
+        this.appendBrowseChildren(list, rows, children, root, currentDir)
+      } else if (recentPaths.length === 0) {
+        list.appendChild(this.makeStatus(this.indexReady ? '暂无文件' : '索引正在后台构建…'))
+      }
+    } else {
+      // Drilled into a folder.
+      const crumbs = breadcrumbs(this.browsePrefix)
+      list.appendChild(this.makeBreadcrumb(crumbs))
+
+      const upRow: NavRow = { kind: 'up', path: parentPrefix(this.browsePrefix) }
+      rows.push(upRow)
+      list.appendChild(this.makeRow(upRow, rows.length - 1))
+
+      const children = listChildren(paths, this.browsePrefix)
+      this.appendBrowseChildren(list, rows, children, root, currentDir)
+    }
+
+    this.rows = rows
+    this.highlight()
+  }
+
+  private appendBrowseChildren(
+    list: HTMLElement,
+    rows: NavRow[],
+    children: DirChild[],
+    root: string,
+    currentDir: string,
+  ): void {
+    for (const child of children) {
+      const row: NavRow = child.kind === 'dir'
+        ? { kind: 'dir', name: child.name, path: child.path, fileCount: child.fileCount }
+        : { kind: 'file', file: this.makeFileEntry(platform.path.join(root, child.path), root, currentDir) }
+      rows.push(row)
+      list.appendChild(this.makeRow(row, rows.length - 1))
+    }
+  }
+
+  /** Render the current `this.rows` into the list (used by search + content). */
+  private renderRows(list: HTMLElement): void {
+    this.rows.forEach((row, idx) => list.appendChild(this.makeRow(row, idx)))
+    this.highlight()
   }
 
   private getItemPathText(f: FileEntry): string {
@@ -1556,6 +1703,73 @@ export default class QuickOpenPlugin extends Plugin {
     flushHighlight()
   }
 
+  /** Render a NavRow to a selectable list item, dispatched by kind. */
+  private makeRow(row: NavRow, idx: number): HTMLElement {
+    switch (row.kind) {
+      case 'file': return this.makeItem(row.file, idx)
+      case 'content': return this.makeContentItem(row.match, idx)
+      case 'dir': return this.makeDirItem(row, idx)
+      case 'up': return this.makeUpItem(idx)
+    }
+  }
+
+  private makeDirItem(row: { name: string; fileCount: number }, idx: number): HTMLElement {
+    const item = document.createElement('div')
+    item.className = 'tpl-qo-item tpl-qo-dir' + (idx === this.selectedIdx ? ' tpl-qo-selected' : '')
+
+    const name = document.createElement('div')
+    name.className = 'tpl-qo-name'
+    const icon = document.createElement('span')
+    icon.className = 'tpl-qo-dir-icon'
+    icon.textContent = '📁'
+    name.appendChild(icon)
+    name.appendChild(document.createTextNode(row.name))
+
+    const meta = document.createElement('div')
+    meta.className = 'tpl-qo-path'
+    meta.textContent = `${row.fileCount} 个文件`
+
+    item.appendChild(name)
+    item.appendChild(meta)
+    item.addEventListener('mouseenter', () => { this.selectedIdx = idx; this.highlight() })
+    item.addEventListener('click', () => this.activateRow())
+    return item
+  }
+
+  private makeUpItem(idx: number): HTMLElement {
+    const item = document.createElement('div')
+    item.className = 'tpl-qo-item tpl-qo-dir' + (idx === this.selectedIdx ? ' tpl-qo-selected' : '')
+    const name = document.createElement('div')
+    name.className = 'tpl-qo-name'
+    name.textContent = '↑  ..'
+    item.appendChild(name)
+    item.addEventListener('mouseenter', () => { this.selectedIdx = idx; this.highlight() })
+    item.addEventListener('click', () => this.activateRow())
+    return item
+  }
+
+  private makeBreadcrumb(crumbs: Array<{ name: string; path: string }>): HTMLElement {
+    const bar = document.createElement('div')
+    bar.className = 'tpl-qo-section-label tpl-qo-breadcrumb'
+    const root = document.createElement('span')
+    root.className = 'tpl-qo-crumb'
+    root.textContent = '/'
+    root.addEventListener('click', () => this.enterDir(null))
+    bar.appendChild(root)
+    crumbs.forEach((crumb, i) => {
+      bar.appendChild(document.createTextNode(' / '))
+      const el = document.createElement('span')
+      el.className = 'tpl-qo-crumb'
+      el.textContent = crumb.name
+      // Every crumb but the last is a jump target.
+      if (i < crumbs.length - 1) {
+        el.addEventListener('click', () => this.enterDir(crumb.path))
+      }
+      bar.appendChild(el)
+    })
+    return bar
+  }
+
   private makeItem(f: FileEntry, idx: number): HTMLElement {
     const item = document.createElement('div')
     item.className = 'tpl-qo-item' + (idx === this.selectedIdx ? ' tpl-qo-selected' : '')
@@ -1572,7 +1786,7 @@ export default class QuickOpenPlugin extends Plugin {
     item.appendChild(name)
     item.appendChild(pathEl)
     item.addEventListener('mouseenter', () => { this.selectedIdx = idx; this.highlight() })
-    item.addEventListener('click', () => this.openSelected())
+    item.addEventListener('click', () => this.activateRow())
     return item
   }
 
@@ -1592,7 +1806,7 @@ export default class QuickOpenPlugin extends Plugin {
     item.appendChild(name)
     item.appendChild(lineEl)
     item.addEventListener('mouseenter', () => { this.selectedIdx = idx; this.highlight() })
-    item.addEventListener('click', () => this.openSelected())
+    item.addEventListener('click', () => this.activateRow())
     return item
   }
 
@@ -1631,17 +1845,32 @@ export default class QuickOpenPlugin extends Plugin {
       this.toggleSearchMode()
       return
     }
+    const emptyInput = (this.inputEl?.value ?? '') === ''
     if (e.key === 'ArrowDown') {
       e.preventDefault()
       e.stopPropagation()
-      const count = this.searchMode === 'content' ? this.contentFiltered.length : this.filtered.length
-      this.selectedIdx = Math.min(this.selectedIdx + 1, count - 1)
+      this.selectedIdx = Math.min(this.selectedIdx + 1, this.rows.length - 1)
       this.highlight()
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
       e.stopPropagation()
       this.selectedIdx = Math.max(this.selectedIdx - 1, 0)
       this.highlight()
+    } else if (e.key === 'ArrowRight' && emptyInput && this.selectedRow()?.kind === 'dir') {
+      // Drill into the highlighted folder — tree-style navigation. Only when the
+      // input is empty, so editing a query with the arrow keys still works.
+      e.preventDefault()
+      e.stopPropagation()
+      this.activateRow()
+    } else if (e.key === 'ArrowLeft' && emptyInput && this.browsePrefix !== null) {
+      e.preventDefault()
+      e.stopPropagation()
+      this.enterDir(parentPrefix(this.browsePrefix))
+    } else if (e.key === 'Backspace' && emptyInput && this.browsePrefix !== null) {
+      // Backspace at an empty prompt walks up a directory, like a shell.
+      e.preventDefault()
+      e.stopPropagation()
+      this.enterDir(parentPrefix(this.browsePrefix))
     } else if (e.key === 'Enter') {
       if (e.repeat) return
       const now = Date.now()
@@ -1649,45 +1878,62 @@ export default class QuickOpenPlugin extends Plugin {
       this.lastHandledEnterAt = now
       e.preventDefault()
       e.stopPropagation()
-      this.openSelected()
+      this.activateRow()
     }
   }
 
-  private openSelected(): void {
-    if (this.searchMode === 'content') {
-      this.openSelectedContent()
-      return
-    }
-    const f = this.filtered[this.selectedIdx]
-    if (!f || this.openingSelection) return
-    this.openingSelection = true
-    this.log('openSelected', { index: this.selectedIdx, file: f })
-    this.close()
-    this.lastRecordedActiveFile = f.absPath
-    this.recordOpen(f.absPath).catch(() => {})
-    editor.openFile(f.absPath)
-      .then(() => this.revealInSidebar(f.absPath))
-      .catch(err => {
-        this.warn('openSelected failed', { file: f.absPath, err })
-        this.showNotice(`打开文件失败: ${err.message}`)
-      })
-      .finally(() => {
-        this.openingSelection = false
-      })
+  private selectedRow(): NavRow | undefined {
+    return this.rows[this.selectedIdx]
   }
 
-  private openSelectedContent(): void {
-    const m = this.contentFiltered[this.selectedIdx]
-    if (!m || this.openingSelection) return
+  /** Enter/click on the highlighted row: open a file, or drill/climb directories. */
+  private activateRow(): void {
+    const row = this.selectedRow()
+    if (!row) return
+    switch (row.kind) {
+      case 'file':
+        this.openFileByPath(row.file.absPath)
+        return
+      case 'content':
+        this.openFileByPath(row.match.absPath)
+        return
+      case 'dir':
+        this.enterDir(row.path)
+        return
+      case 'up':
+        this.enterDir(row.path)
+        return
+    }
+  }
+
+  /**
+   * Change the browse location and re-render. `null` (or '') returns to the
+   * default recent+root view; a non-empty prefix drills into that folder.
+   * Clears the query so the browse view (not a stale search) is shown.
+   */
+  private enterDir(prefix: string | null): void {
+    const normalized = prefix ? normalizePrefix(prefix) : ''
+    this.browsePrefix = normalized === '' ? null : normalized
+    this.selectedIdx = 0
+    if (this.inputEl && this.inputEl.value !== '') {
+      this.inputEl.value = ''
+      this.lastInputValue = ''
+    }
+    void this.renderList('')
+    this.inputEl?.focus()
+  }
+
+  private openFileByPath(absPath: string): void {
+    if (this.openingSelection) return
     this.openingSelection = true
-    this.log('openSelectedContent', { index: this.selectedIdx, match: m })
+    this.log('openFileByPath', { index: this.selectedIdx, absPath })
     this.close()
-    this.lastRecordedActiveFile = m.absPath
-    this.recordOpen(m.absPath).catch(() => {})
-    editor.openFile(m.absPath)
-      .then(() => this.revealInSidebar(m.absPath))
+    this.lastRecordedActiveFile = absPath
+    this.recordOpen(absPath).catch(() => {})
+    editor.openFile(absPath)
+      .then(() => this.revealInSidebar(absPath))
       .catch(err => {
-        this.warn('openSelectedContent failed', { file: m.absPath, err })
+        this.warn('openFileByPath failed', { file: absPath, err })
         this.showNotice(`打开文件失败: ${err.message}`)
       })
       .finally(() => {
