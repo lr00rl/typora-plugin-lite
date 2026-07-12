@@ -8,6 +8,7 @@ import {
   pruneStore,
   rankByFrecency,
   recordOpen as recordFrecencyOpen,
+  removePaths,
 } from './frecency.js'
 import {
   type DirChild,
@@ -1118,26 +1119,25 @@ export default class QuickOpenPlugin extends Plugin {
     this.log('loadFiles:recent', { count: recent.length, sample: recent.slice(0, DEBUG_SAMPLE_LIMIT) })
     if (recent.length > 0) {
       try {
-        const existing = await Promise.all(
-          recent.map(async p => {
+        const checked = recent
+        const existence = await Promise.all(
+          checked.map(async p => {
             try {
-              return await platform.fs.exists(p) ? p : null
+              return await platform.fs.exists(p)
             } catch {
-              return null
+              return false
             }
           }),
         )
-        const before = recent.length
-        recent = existing.filter((p): p is string => !!p)
-        if (recent.length < before) {
-          // Prune vanished files from the frecency store, not just this view.
-          this.log('loadFiles:recent-pruned', { before, after: recent.length })
-          const keep = new Set(recent)
-          const next: FrecencyStore = {}
-          for (const [path, entry] of Object.entries(this.frecency)) {
-            if (keep.has(path)) next[path] = entry
-          }
-          this.frecency = next
+        // Prune ONLY the paths we actually confirmed missing. We verify just the
+        // visible recent slice (top MAX_MRU), so removing "everything that didn't
+        // survive the check" would delete the whole long tail of the store that
+        // we never looked at — the bug this replaced.
+        const missing = new Set(checked.filter((_, i) => !existence[i]))
+        recent = checked.filter((_, i) => existence[i])
+        if (missing.size > 0) {
+          this.log('loadFiles:recent-pruned', { removed: missing.size, remaining: recent.length })
+          this.frecency = removePaths(this.frecency, missing)
           this.settings.set('frecency' as never, this.frecency as never)
           this.settings.save().catch(() => {})
         }
@@ -1849,7 +1849,9 @@ export default class QuickOpenPlugin extends Plugin {
     if (e.key === 'ArrowDown') {
       e.preventDefault()
       e.stopPropagation()
-      this.selectedIdx = Math.min(this.selectedIdx + 1, this.rows.length - 1)
+      // Clamp to 0 so an empty list (a "no matches" state) can't drive the
+      // index negative.
+      this.selectedIdx = Math.max(0, Math.min(this.selectedIdx + 1, this.rows.length - 1))
       this.highlight()
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()

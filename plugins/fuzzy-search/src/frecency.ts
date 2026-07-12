@@ -113,6 +113,25 @@ export function pruneStore(store: FrecencyStore, now: number, max: number): Frec
 }
 
 /**
+ * Remove exactly the given paths (files confirmed to no longer exist), leaving
+ * every other entry untouched.
+ *
+ * The subtlety this guards: callers verify existence for only a *slice* of the
+ * store (the visible recent list), so pruning must key off the confirmed-missing
+ * set, never off "which of the checked paths survived" — the latter would delete
+ * every entry the caller didn't look at.
+ */
+export function removePaths(store: FrecencyStore, missing: Iterable<string>): FrecencyStore {
+  const drop = missing instanceof Set ? missing : new Set(missing)
+  if (drop.size === 0) return store
+  const next: FrecencyStore = {}
+  for (const [path, entry] of Object.entries(store)) {
+    if (!drop.has(path)) next[path] = entry
+  }
+  return next
+}
+
+/**
  * Read a persisted store defensively. Historically the plugin stored a plain
  * MRU array of paths; migrate that to a frecency store (recency preserved by
  * position, frequency seeded to 1) so upgrading users don't lose their history.

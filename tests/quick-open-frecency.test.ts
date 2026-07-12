@@ -10,6 +10,7 @@ import {
   rankByFrecency,
   recencyWeight,
   recordOpen,
+  removePaths,
   type FrecencyStore,
 } from '../plugins/fuzzy-search/src/frecency.ts'
 
@@ -109,4 +110,34 @@ test('loadStore reads a persisted object and rejects malformed junk', () => {
 test('loadStore tolerates undefined/garbage input', () => {
   assert.deepEqual(loadStore(undefined, NOW), {})
   assert.deepEqual(loadStore(42, NOW), {})
+})
+
+// --- removePaths: the data-loss regression fix -------------------------------
+
+test('removePaths deletes only the named paths and keeps the rest of the store', () => {
+  // The bug this guards: existence-checking only the top-N visible files and
+  // then rebuilding the store from the survivors deleted the entire long tail.
+  // removePaths must key off the missing set, never off "who survived a check".
+  let store: FrecencyStore = {}
+  for (let i = 0; i < 100; i++) store = recordOpen(store, `/f${i}.md`, NOW - i * 1000)
+
+  // Simulate: only the top 3 were existence-checked, and /f1.md was found missing.
+  const pruned = removePaths(store, new Set(['/f1.md']))
+
+  assert.equal(pruned['/f1.md'], undefined, 'missing file removed')
+  assert.equal(Object.keys(pruned).length, 99, 'the other 99 entries are preserved')
+  assert.ok(pruned['/f0.md'] && pruned['/f50.md'] && pruned['/f99.md'], 'long tail survives')
+})
+
+test('removePaths with an empty missing set returns the store unchanged', () => {
+  const store: FrecencyStore = { '/a.md': { path: '/a.md', count: 1, lastOpenedAt: NOW } }
+  assert.equal(removePaths(store, []), store)
+})
+
+test('removePaths accepts any iterable of paths', () => {
+  let store: FrecencyStore = {}
+  store = recordOpen(store, '/a.md', NOW)
+  store = recordOpen(store, '/b.md', NOW)
+  const pruned = removePaths(store, ['/a.md'])
+  assert.deepEqual(Object.keys(pruned), ['/b.md'])
 })
