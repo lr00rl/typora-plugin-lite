@@ -46,6 +46,7 @@ Plugins never touch low-level APIs directly. They use `platform.fs`, `platform.s
 |--------|------------|----------|-------------|
 | `md-padding` | S | `startup` | Automatically format Chinese/English spacing. |
 | `fence-enhance` | S | `startup` | Add copy button to code fences. |
+| `code-viewer` | M | `startup` | Open non-Markdown text and code files in a read-only, syntax-highlighted view. |
 | `sidenote` | M | `startup` | Render inline `<span class="sidenote">` as margin notes inside the editor. |
 | `wider` | M | `startup` | Switch editor width between `default / wide / full` with sidenote-aware spacing. |
 | `title-shift` | S | `hotkey` | Quickly shift heading levels. |
@@ -78,7 +79,7 @@ Plugins never touch low-level APIs directly. They use `platform.fs`, `platform.s
 ### Step 1: Clone & Build
 
 ```bash
-git clone https://github.com/AcademicDog/typora-plugin-lite.git
+git clone https://github.com/lr00rl/typora-plugin-lite.git
 cd typora-plugin-lite
 pnpm install
 pnpm build
@@ -187,7 +188,7 @@ Or simply reinstall/update Typora — the plugin injection will be replaced by t
 
 We welcome contributions of all kinds! Whether it's reporting a bug, suggesting a feature, or submitting a pull request, your help is appreciated.
 
-1.  **Report Issues**: Found a bug? Open an [issue](https://github.com/your-username/typora-plugin-lite/issues).
+1.  **Report Issues**: Found a bug? Open an [issue](https://github.com/lr00rl/typora-plugin-lite/issues).
 2.  **Submit PRs**: Feel free to fork and submit pull requests. Please follow the existing code style.
 3.  **Plugin Development**: Check the `docs/plugin-dev-guide.md` (coming soon) to start building your own plugins.
 

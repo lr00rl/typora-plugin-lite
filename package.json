@@ -3,6 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lr00rl/typora-plugin-lite.git"
+  },
+  "bugs": {
+    "url": "https://github.com/lr00rl/typora-plugin-lite/issues"
+  },
+  "homepage": "https://github.com/lr00rl/typora-plugin-lite#readme",
   "scripts": {
     "build": "tsx scripts/build.ts",
     "build:watch": "tsx scripts/build.ts --watch",
