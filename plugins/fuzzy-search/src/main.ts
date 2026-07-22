@@ -81,8 +81,6 @@ const TAB_DEFAULT_TYPE: Record<SearchTab, SearchType> = { files: 'file', folders
 /** Popup size presets, as a fraction of the window (never fixed px). */
 type WidthPreset = 'default' | 'wide'
 
-const MD_EXTS = ['.md', '.markdown']
-const MD_EXT_SET = new Set(MD_EXTS)
 const MAX_MRU = 30
 /**
  * Frecency store cap. Larger than the visible recent list (MAX_MRU) because the
@@ -95,10 +93,37 @@ const DEBOUNCE_MS = 120
 const INDEX_TTL_MS = 5 * 60_000
 const SEARCH_RESULT_LIMIT = 100
 const IGNORED_DIRS = ['.git', 'node_modules', '.obsidian', '.trash', '.Trash', '_archive']
+/**
+ * The vault index covers every file Typora could plausibly open — markdown
+ * for editing, everything else for the code viewer's read-only pane. Known
+ * binary/media extensions are excluded up front: they would only bloat the
+ * index, and opening one just shows the code viewer's "binary file" notice.
+ * Unknown extensions stay indexed, mirroring code-viewer's policy of opening
+ * unknown-but-textual files as plain text.
+ *
+ * Matching must be case-insensitive on both index backends (rg `--iglob`,
+ * find `-iname`): cameras and Windows produce `.JPG` / `.PNG` routinely.
+ */
+const BINARY_EXTS = [
+  // images
+  'png', 'jpg', 'jpeg', 'gif', 'webp', 'ico', 'icns', 'bmp', 'tiff', 'tif', 'heic', 'heif', 'avif', 'psd', 'ai', 'eps', 'raw', 'cr2', 'nef', 'orf', 'dng',
+  // audio / video
+  'mp3', 'wav', 'ogg', 'oga', 'flac', 'm4a', 'aac', 'opus', 'mp4', 'm4v', 'mov', 'avi', 'mkv', 'webm', 'wmv', 'flv', 'mpg', 'mpeg', '3gp',
+  // archives / packages / disks
+  'zip', 'tar', 'gz', 'tgz', 'bz2', 'tbz2', 'xz', 'txz', 'lz4', 'zst', '7z', 'rar', 'jar', 'war', 'ear', 'dmg', 'iso', 'img', 'pkg', 'deb', 'rpm', 'msi', 'apk',
+  // fonts
+  'ttf', 'otf', 'woff', 'woff2', 'eot',
+  // compiled artifacts
+  'exe', 'dll', 'so', 'dylib', 'a', 'lib', 'o', 'obj', 'class', 'pyc', 'pyo', 'wasm', 'beam', 'elc', 'com',
+  // binary documents / data
+  'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'pages', 'numbers', 'key', 'odt', 'ods', 'odp', 'sqlite', 'sqlite3', 'db', 'realm', 'parquet', 'feather',
+]
 const TAG = '[tpl:quick-open]'
 const DEBUG_SAMPLE_LIMIT = 20
 const DEBUG = false
-const INDEX_SCHEMA_VERSION = 1
+// v1 → v2: the index grew from markdown-only to all-text-files (minus known
+// binary extensions), so v1 persisted indexes must be discarded and rebuilt.
+const INDEX_SCHEMA_VERSION = 2
 
 interface PersistedIndexMeta {
   schemaVersion: number
@@ -1110,7 +1135,7 @@ export default class QuickOpenPlugin extends Plugin {
     const cmd = [
       platform.shell.escape(this.rgPath),
       '--files',
-      ...MD_EXTS.flatMap(ext => ['-g', platform.shell.escape(`*${ext}`)]),
+      ...BINARY_EXTS.flatMap(ext => ['--iglob', platform.shell.escape(`!*.${ext}`)]),
       ...IGNORED_DIRS.flatMap(name => ['-g', platform.shell.escape(`!**/${name}/**`)]),
       '.',
       '>',
@@ -1133,12 +1158,15 @@ export default class QuickOpenPlugin extends Plugin {
     await platform.fs.mkdir(dir)
     const esc = (s: string) => platform.shell.escape(s)
     const ignorePrune = IGNORED_DIRS.map(d => `-name ${esc(d)}`).join(' -o ')
-    const extMatch = MD_EXTS.map(e => `-name ${esc('*' + e)}`).join(' -o ')
+    const binaryExcludes = BINARY_EXTS.map(e => `! -iname ${esc('*.' + e)}`).join(' ')
+    // `-mindepth 1` keeps the root dir `.` itself out of the prune test:
+    // `-name '.*'` matches `.`, so without it the whole tree is pruned at the
+    // root and the index comes out empty (this fallback never worked before).
     const cmd = [
-      'find .',
+      'find . -mindepth 1',
       `\\( -type d \\( ${ignorePrune} -o -name '.*' \\) -prune \\)`,
       '-o',
-      `-type f \\( ${extMatch} \\) -print`,
+      `-type f ${binaryExcludes} -print`,
       '| sed',
       esc('s#^\\./##'),
       '>',
@@ -2233,7 +2261,7 @@ export default class QuickOpenPlugin extends Plugin {
       '--max-count', '3',
       '--max-columns', '200',
       '-i',
-      ...MD_EXTS.flatMap(ext => ['-g', platform.shell.escape(`*${ext}`)]),
+      ...BINARY_EXTS.flatMap(ext => ['--iglob', platform.shell.escape(`!*.${ext}`)]),
       ...IGNORED_DIRS.flatMap(d => ['--glob', platform.shell.escape(`!${d}`)]),
       '--', platform.shell.escape(query),
       platform.shell.escape(searchRoot),
