@@ -11,8 +11,27 @@ import { editor } from './editor/api.js'
 import { HotkeyManager } from './hotkey/manager.js'
 import { PluginCenterPanel } from './ui/plugin-center.js'
 import { CommandRegistry } from './command/registry.js'
+import {
+  CODEBLOCK_MARKER_CSS,
+  detectIndentUnit,
+  guideColumnsPerLine,
+  indentColumns,
+  indentGuideBackground,
+  indentGuideColumns,
+  splitWhitespace,
+} from './codeblock/whitespace.js'
 
 export { IS_MAC, IS_NODE, platform, Plugin, PluginManager, PluginSettings, EventBus, editor, HotkeyManager, PluginCenterPanel, CommandRegistry }
+export {
+  splitWhitespace,
+  indentColumns,
+  indentGuideColumns,
+  indentGuideBackground,
+  CODEBLOCK_MARKER_CSS,
+  detectIndentUnit,
+  guideColumnsPerLine,
+}
+export type { WsChunk } from './codeblock/whitespace.js'
 export type { PluginManifest, LoadingStrategy }
 export type {
   FieldDescriptor,
@@ -110,9 +129,14 @@ function showLoadedToast(pluginCount: number): void {
 
 // Register on window for IIFE access
 // Plugins access core via window.__tpl.core
+// NOTE: this list is the SINGLE SOURCE OF TRUTH for the plugin shim —
+// scripts/build.ts parses it to generate the @typora-plugin-lite/core import
+// shim. Adding an export here automatically exposes it to plugins at runtime.
 const coreExports = {
   IS_MAC, IS_NODE, platform, Plugin, PluginManager, PluginSettings,
   EventBus, editor, HotkeyManager, CommandRegistry, getApp, bootstrap,
+  splitWhitespace, indentColumns, indentGuideColumns, indentGuideBackground,
+  CODEBLOCK_MARKER_CSS, detectIndentUnit, guideColumnsPerLine,
 }
 ;(window as any).__tpl = {
   ...((window as any).__tpl || {}),
