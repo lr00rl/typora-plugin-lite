@@ -28,6 +28,12 @@ importers:
 
   packages/loader: {}
 
+  plugins/code-viewer:
+    dependencies:
+      '@typora-plugin-lite/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+
   plugins/fence-enhance:
     dependencies:
       '@typora-plugin-lite/core':
