@@ -1,5 +1,5 @@
 import * as esbuild from 'esbuild'
-import { readdirSync, existsSync, copyFileSync, cpSync, mkdirSync, writeFileSync } from 'node:fs'
+import { readdirSync, existsSync, copyFileSync, cpSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
 import { join, resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -47,6 +47,29 @@ const coreConfig: esbuild.BuildOptions = {
 
 // 3. Each plugin — IIFE, accesses core via window.__tpl.core
 //    Plugin IIFE auto-registers its default export on window.__tpl.pluginClasses[id]
+
+/**
+ * The names exposed to plugins through the @typora-plugin-lite/core shim.
+ *
+ * The runtime surface is the hand-written `coreExports` object in
+ * packages/core/src/index.ts — plugins read window.__tpl.core at RUNTIME, so
+ * the shim's export list must match it exactly. A mismatch used to be a
+ * silent runtime crash inside Typora (undefined export), invisible to tsc and
+ * to the build. So the list is now parsed from that object at build time:
+ * one source of truth, and a mismatch becomes impossible by construction.
+ */
+function coreShimExports(): string[] {
+  const src = readFileSync(join(ROOT, 'packages/core/src/index.ts'), 'utf8')
+  const match = src.match(/const coreExports = \{([^}]*)\}/s)
+  if (!match) throw new Error('coreExports object not found in packages/core/src/index.ts')
+  const names = match[1]!
+    .split(',')
+    .map(part => part.trim())
+    .filter(part => /^[A-Za-z_$][\w$]*$/.test(part))
+  if (names.length === 0) throw new Error('coreExports parsed to an empty export list')
+  return names
+}
+
 const tplCoreShimPlugin: esbuild.Plugin = {
   name: 'resolve-tpl-core',
   setup(build) {
@@ -54,22 +77,16 @@ const tplCoreShimPlugin: esbuild.Plugin = {
       path: '@typora-plugin-lite/core',
       namespace: 'tpl-core-shim',
     }))
-    build.onLoad({ filter: /.*/, namespace: 'tpl-core-shim' }, () => ({
-      contents: `
-        var c = window.__tpl?.core || {};
-        export var Plugin = c.Plugin;
-        export var editor = c.editor;
-        export var platform = c.platform;
-        export var IS_MAC = c.IS_MAC;
-        export var IS_NODE = c.IS_NODE;
-        export var getApp = c.getApp;
-        export var EventBus = c.EventBus;
-        export var HotkeyManager = c.HotkeyManager;
-        export var PluginManager = c.PluginManager;
-        export var PluginSettings = c.PluginSettings;
-      `,
-      loader: 'js',
-    }))
+    build.onLoad({ filter: /.*/, namespace: 'tpl-core-shim' }, () => {
+      const names = coreShimExports()
+      return {
+        contents:
+          'var c = window.__tpl?.core || {};\n' +
+          names.map(name => `export var ${name} = c.${name};`).join('\n') +
+          '\n',
+        loader: 'js',
+      }
+    })
   },
 }
 
