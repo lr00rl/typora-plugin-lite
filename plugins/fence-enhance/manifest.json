@@ -2,7 +2,7 @@
   "id": "fence-enhance",
   "name": "Fence Enhance",
   "version": "0.1.0",
-  "description": "Add copy button to code fences",
+  "description": "Progressive fence rendering, adaptive line-number gutter, copy button, indent guides and tab markers for code fences",
   "main": "main.js",
   "loading": {
     "startup": true

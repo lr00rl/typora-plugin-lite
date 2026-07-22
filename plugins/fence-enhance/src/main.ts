@@ -1,4 +1,4 @@
-import { Plugin, type SettingsSchema } from '@typora-plugin-lite/core'
+import { Plugin, detectIndentUnit, guideColumnsPerLine, indentGuideBackground, type SettingsSchema } from '@typora-plugin-lite/core'
 
 import { applyGutterDigits, countFenceLines, digitsForLineCount } from './gutter.js'
 import { FENCE_SELECTOR, getFenceCm, initFence, isModeLoaded } from './typora-fences.js'
@@ -16,6 +16,10 @@ interface FenceEnhanceSettings extends Record<string, unknown> {
   /** How far outside the viewport (px) to warm blocks. */
   prewarmMargin: number
   adaptiveGutter: boolean
+  /** Vertical indent-alignment rules inside code blocks. */
+  indentGuides: boolean
+  /** Overlay » on CodeMirror's cm-tab spans (visual only; copy unaffected). */
+  tabMarkers: boolean
 }
 
 const DEFAULT_SETTINGS: FenceEnhanceSettings = {
@@ -23,10 +27,15 @@ const DEFAULT_SETTINGS: FenceEnhanceSettings = {
   eagerRender: 'progressive',
   prewarmMargin: 1200,
   adaptiveGutter: true,
+  indentGuides: true,
+  tabMarkers: true,
 }
 
 /** Coalesce the mutation storm CodeMirror makes while you type inside a block. */
 const MUTATION_DEBOUNCE_MS = 150
+
+/** tab-size assumed for guide positions (Typora fences default to 4). */
+const TAB_SIZE = 4
 
 const CSS = `
 /* ── Adaptive line-number gutter ───────────────────────────────────────────
@@ -74,6 +83,23 @@ const CSS = `
 .md-fences {
   position: relative;
 }
+
+/* ── Tab markers ─────────────────────────────────────────────────────────
+ * CodeMirror renders tab characters as standalone span.cm-tab elements, so a
+ * » overlay needs no DOM mutation at all — the tab char stays (layout + copy
+ * unaffected), it is just made invisible. Scoped under html.tpl-fence-tabmarks
+ * so the setting can turn it off without a reload.
+ */
+html.tpl-fence-tabmarks .md-fences .cm-tab {
+  position: relative;
+  color: transparent;
+}
+html.tpl-fence-tabmarks .md-fences .cm-tab::before {
+  content: '»';
+  position: absolute;
+  left: 0;
+  color: var(--tpl-ws-color, rgba(128,128,128,0.55));
+}
 `
 
 export default class FenceEnhancePlugin extends Plugin<FenceEnhanceSettings> {
@@ -109,6 +135,20 @@ export default class FenceEnhancePlugin extends Plugin<FenceEnhanceSettings> {
           "Size each code block's line-number gutter to its own line count, instead of reserving a fixed width for every block.",
         section: 'Rendering',
       },
+      indentGuides: {
+        kind: 'toggle',
+        label: 'Indent guides',
+        description:
+          'Vertical alignment rules at every tab stop of a code line\'s indentation. Same look as the Code Viewer pane.',
+        section: 'Rendering',
+      },
+      tabMarkers: {
+        kind: 'toggle',
+        label: 'Tab markers (»)',
+        description:
+          'Overlay a » on every tab in a code block. Visual only — the document and copying are untouched.',
+        section: 'Rendering',
+      },
       copyButton: {
         kind: 'toggle',
         label: 'Copy button',
@@ -120,7 +160,7 @@ export default class FenceEnhancePlugin extends Plugin<FenceEnhanceSettings> {
       Rendering: { title: 'Rendering', order: 1 },
       Extras: { title: 'Extras', order: 2 },
     },
-    order: ['eagerRender', 'prewarmMargin', 'adaptiveGutter', 'copyButton'],
+    order: ['eagerRender', 'prewarmMargin', 'adaptiveGutter', 'indentGuides', 'tabMarkers', 'copyButton'],
   }
 
   private mutationObserver: MutationObserver | null = null
@@ -128,6 +168,8 @@ export default class FenceEnhancePlugin extends Plugin<FenceEnhanceSettings> {
   private warmer: FenceWarmer | null = null
   private copyButtons = new Set<HTMLElement>()
   private mutationTimer: number | null = null
+  /** Indent-guide backgrounds, one per distinct guide set — shared by all lines. */
+  private guideCache = new Map<string, { image: string; size: string } | null>()
   /** Fences edited since the last debounce flush. */
   private dirty = new Set<HTMLElement>()
   /**
@@ -143,6 +185,7 @@ export default class FenceEnhancePlugin extends Plugin<FenceEnhanceSettings> {
 
   onload(): void {
     this.registerCss(CSS)
+    this.syncTabMarkerClass()
 
     this.warmer = new FenceWarmer({
       collect: () => Array.from(document.querySelectorAll(FENCE_SELECTOR)),
@@ -162,6 +205,12 @@ export default class FenceEnhancePlugin extends Plugin<FenceEnhanceSettings> {
       if (this.mutationTimer !== null) window.clearTimeout(this.mutationTimer)
       for (const btn of this.copyButtons) btn.remove()
       this.copyButtons.clear()
+      document.documentElement.classList.remove('tpl-fence-tabmarks')
+      for (const fence of document.querySelectorAll(FENCE_SELECTOR)) {
+        for (const line of fence.querySelectorAll<HTMLElement>('.CodeMirror-line')) {
+          this.clearGuide(line)
+        }
+      }
     })
 
     this.observeDocument()
@@ -171,6 +220,7 @@ export default class FenceEnhancePlugin extends Plugin<FenceEnhanceSettings> {
     // otherwise the setting reads as broken.
     this.addDisposable(
       this.settings.onChange(() => {
+        this.syncTabMarkerClass()
         this.schedulePass()
       }),
     )
@@ -294,13 +344,68 @@ export default class FenceEnhancePlugin extends Plugin<FenceEnhanceSettings> {
     }
   }
 
-  /** Bring one fence up to date: copy button + gutter width. */
+  /** Bring one fence up to date: copy button + gutter width + indent guides. */
   private refreshFence(fence: HTMLElement): void {
     if (this.settings.get('copyButton')) this.addCopyButton(fence)
+    this.applyIndentGuides(fence)
     if (!this.settings.get('adaptiveGutter')) return
 
     const lines = countFenceLines(fence, getFenceCm(fence))
     applyGutterDigits(fence, digitsForLineCount(lines))
+  }
+
+  /**
+   * Paint indent guides on a fence's CodeMirror lines.
+   *
+   * This is deliberately a STYLE-ONLY enhancement: CodeMirror's lineView
+   * caches text-node references for cursor measurement, so injecting marker
+   * spans into a fence (the way the Code Viewer pane does for whitespace)
+   * would break editing. A background-image on the line box is invisible to
+   * CodeMirror, never touches the text, and therefore cannot affect copy,
+   * selection, or measurement. Lines CodeMirror re-renders simply lose the
+   * style and get it back on the next mutation flush.
+   */
+  private applyIndentGuides(fence: HTMLElement): void {
+    const enabled = this.settings.get('indentGuides')
+    const lineEls = Array.from(fence.querySelectorAll<HTMLElement>('.CodeMirror-line'))
+    if (lineEls.length === 0) return
+    if (!enabled) {
+      for (const line of lineEls) this.clearGuide(line)
+      return
+    }
+    const texts = lineEls.map(line => line.textContent ?? '')
+    const unit = detectIndentUnit(texts, TAB_SIZE)
+    const perLine = guideColumnsPerLine(texts, TAB_SIZE, unit)
+    lineEls.forEach((line, i) => {
+      const bg = this.guideBg(perLine[i] ?? [])
+      if (!bg) { this.clearGuide(line); return }
+      line.style.backgroundImage = bg.image
+      line.style.backgroundSize = bg.size
+      line.style.backgroundRepeat = 'no-repeat'
+      line.dataset.tplGuide = '1'
+    })
+  }
+
+  private guideBg(cols: number[]): { image: string; size: string } | null {
+    const key = cols.join(',')
+    let bg = this.guideCache.get(key)
+    if (bg === undefined) {
+      bg = indentGuideBackground(cols, 'var(--tpl-guide-color, rgba(128,128,128,0.3))')
+      this.guideCache.set(key, bg)
+    }
+    return bg
+  }
+
+  private clearGuide(line: HTMLElement): void {
+    if (!line.dataset.tplGuide) return
+    delete line.dataset.tplGuide
+    line.style.backgroundImage = ''
+    line.style.backgroundSize = ''
+    line.style.backgroundRepeat = ''
+  }
+
+  private syncTabMarkerClass(): void {
+    document.documentElement.classList.toggle('tpl-fence-tabmarks', this.settings.get('tabMarkers'))
   }
 
   private addCopyButton(fence: HTMLElement): void {
