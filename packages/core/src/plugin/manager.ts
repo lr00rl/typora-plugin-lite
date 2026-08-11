@@ -8,12 +8,24 @@ import type { EventBus } from './events.js'
 import type { Plugin, TplAppRef } from './plugin.js'
 import type { Platform } from '../platform/index.js'
 import type { HotkeyManager } from '../hotkey/manager.js'
+import { PluginLifecycleStateStore } from './lifecycle-state.js'
+
+export interface PluginState {
+  desiredEnabled: boolean
+  loaded: boolean
+  loading: boolean
+  error: string | null
+}
 
 interface PluginEntry {
   manifest: PluginManifest
   instance: Plugin | null
   loaded: boolean
   loading: boolean
+  desiredEnabled: boolean
+  error: string | null
+  lazyDisposers: Array<() => void>
+  loadSettled: Promise<void> | null
 }
 
 interface PluginManagerDeps {
@@ -29,12 +41,15 @@ export class PluginManager {
   private events: EventBus
   private hotkeys: HotkeyManager
   private appRef: TplAppRef
+  private lifecycleState: PluginLifecycleStateStore
+  private transitionQueues = new Map<string, Promise<void>>()
 
   constructor(deps: PluginManagerDeps) {
     this.platform = deps.platform
     this.events = deps.events
     this.hotkeys = deps.hotkeys
     this.appRef = { platform: deps.platform, events: deps.events, hotkeys: deps.hotkeys }
+    this.lifecycleState = new PluginLifecycleStateStore(deps.platform)
   }
 
   /** Scan a single plugins directory for manifest.json files. */
@@ -54,6 +69,7 @@ export class PluginManager {
     const builtinDir = this.platform.builtinPluginsDir
     const userDir = this.platform.pluginsDir
     console.log('[tpl:manager]', 'scan:start', { builtinDir, userDir })
+    await this.lifecycleState.load()
 
     // Scan both builtin and user plugin directories
     const builtinEntries = builtinDir ? await this.scanDir(builtinDir) : []
@@ -87,7 +103,7 @@ export class PluginManager {
 
     // Load startup plugins
     const startupPlugins = [...this.plugins.entries()]
-      .filter(([, entry]) => entry.manifest.loading.startup)
+      .filter(([, entry]) => entry.desiredEnabled && entry.manifest.loading.startup)
     console.log('[tpl:manager]', 'scan:startup-plugins', { ids: startupPlugins.map(([id]) => id) })
     await Promise.all(startupPlugins.map(([id]) => this.loadPlugin(id)))
   }
@@ -105,7 +121,16 @@ export class PluginManager {
       return
     }
 
-    const entry: PluginEntry = { manifest, instance: null, loaded: false, loading: false }
+    const entry: PluginEntry = {
+      manifest,
+      instance: null,
+      loaded: false,
+      loading: false,
+      desiredEnabled: this.lifecycleState.isEnabled(manifest.id),
+      error: null,
+      lazyDisposers: [],
+      loadSettled: null,
+    }
     this.plugins.set(manifest.id, entry)
     const { loading } = manifest
     console.log('[tpl:manager]', 'register', {
@@ -116,6 +141,17 @@ export class PluginManager {
       event: loading.event ?? [],
     })
 
+    if (!entry.desiredEnabled) return
+
+    this.registerLazyTriggers(entry)
+  }
+
+  /** Register manager-owned lazy loading triggers for an enabled idle plugin. */
+  private registerLazyTriggers(entry: PluginEntry): void {
+    const { manifest } = entry
+    const { loading } = manifest
+    if (entry.loaded || entry.loading || entry.lazyDisposers.length > 0) return
+
     // Event-based lazy loading
     if (loading.event?.length) {
       for (const event of loading.event) {
@@ -124,12 +160,12 @@ export class PluginManager {
           console.log('[tpl:manager]', 'event-triggered', { id: manifest.id, event, args })
           this.loadPlugin(manifest.id).then((loaded) => {
             if (!loaded) return
-            this.events.off(event, lazyHandler)
             // Replay the triggering event after load
             this.events.emit(event, ...args)
           })
         }
         this.events.on(event, lazyHandler)
+        entry.lazyDisposers.push(() => this.events.off(event, lazyHandler))
       }
     }
 
@@ -147,8 +183,14 @@ export class PluginManager {
           })
         }
         this.hotkeys.register(key, lazyHandler)
+        entry.lazyDisposers.push(() => this.hotkeys.unregister(key))
       }
     }
+  }
+
+  private clearLazyTriggers(entry: PluginEntry): void {
+    const disposers = entry.lazyDisposers.splice(0)
+    for (const disposer of disposers) disposer()
   }
 
   /**
@@ -162,16 +204,27 @@ export class PluginManager {
       console.warn('[tpl:manager]', 'loadPlugin:missing-entry', { id })
       return false
     }
+    if (!entry.desiredEnabled) {
+      console.warn('[tpl:manager]', 'loadPlugin:disabled', { id })
+      return false
+    }
     if (entry.loaded) {
       console.log('[tpl:manager]', 'loadPlugin:already-loaded', { id })
       return true
     }
     if (entry.loading) {
       console.log('[tpl:manager]', 'loadPlugin:already-loading', { id })
-      return false
+      await entry.loadSettled
+      return entry.loaded
     }
 
+    // Remove manager callbacks before plugin-owned callbacks can replace them.
+    // A failed load restores the lazy triggers in finally.
+    this.clearLazyTriggers(entry)
     entry.loading = true
+    let resolveLoad!: () => void
+    entry.loadSettled = new Promise<void>(resolve => { resolveLoad = resolve })
+    entry.error = null
     const TAG = '[tpl:manager]'
     const mainFile = entry.manifest.main ?? 'main.js'
 
@@ -223,10 +276,14 @@ export class PluginManager {
       console.log(TAG, 'load:done', { id })
       return true
     } catch (err) {
+      entry.error = err instanceof Error ? err.message : String(err)
       console.error(TAG, `failed to load plugin ${id}:`, err)
       return false
     } finally {
       entry.loading = false
+      if (!entry.loaded && entry.desiredEnabled) this.registerLazyTriggers(entry)
+      resolveLoad()
+      entry.loadSettled = null
     }
   }
 
@@ -260,15 +317,65 @@ export class PluginManager {
     return this.plugins.get(id)?.loaded ?? false
   }
 
-  /** Enable (load) a plugin by id. */
-  async enablePlugin(id: string): Promise<void> {
-    console.log('[tpl:manager]', 'enablePlugin', { id })
-    await this.loadPlugin(id)
+  /** Check the user's persistent desired state, independent of runtime loading. */
+  isEnabled(id: string): boolean {
+    return this.plugins.get(id)?.desiredEnabled ?? this.lifecycleState.isEnabled(id)
   }
 
-  /** Disable (unload) a plugin by id. */
-  disablePlugin(id: string): void {
+  /** Get a snapshot suitable for lifecycle UI and remote-control consumers. */
+  getPluginState(id: string): PluginState | null {
+    const entry = this.plugins.get(id)
+    if (!entry) return null
+    return {
+      desiredEnabled: entry.desiredEnabled,
+      loaded: entry.loaded,
+      loading: entry.loading,
+      error: entry.error,
+    }
+  }
+
+  /** Serialize each plugin's complete persistence + runtime transition. */
+  private enqueueTransition(id: string, transition: () => Promise<void>): Promise<void> {
+    const previous = this.transitionQueues.get(id) ?? Promise.resolve()
+    const run = previous.catch(() => {}).then(transition)
+    this.transitionQueues.set(id, run)
+    const cleanup = () => {
+      if (this.transitionQueues.get(id) === run) this.transitionQueues.delete(id)
+    }
+    run.then(cleanup, cleanup)
+    return run
+  }
+
+  /** Persist enablement, then immediately load the plugin. Reject if either step fails. */
+  enablePlugin(id: string): Promise<void> {
+    console.log('[tpl:manager]', 'enablePlugin', { id })
+    const entry = this.plugins.get(id)
+    if (!entry) return Promise.reject(new Error(`Cannot enable unknown plugin "${id}"`))
+    return this.enqueueTransition(id, async () => {
+      await this.lifecycleState.setEnabled(id, true)
+      entry.desiredEnabled = true
+      this.clearLazyTriggers(entry)
+      const loaded = await this.loadPlugin(id)
+      if (!loaded) {
+        this.registerLazyTriggers(entry)
+        throw new Error(`Plugin "${id}" failed to load${entry.error ? `: ${entry.error}` : ''}`)
+      }
+    })
+  }
+
+  /** Persist disablement, remove manager triggers, and unload the runtime instance. */
+  disablePlugin(id: string): Promise<void> {
     console.log('[tpl:manager]', 'disablePlugin', { id })
-    this.unloadPlugin(id)
+    const entry = this.plugins.get(id)
+    if (!entry) return Promise.reject(new Error(`Cannot disable unknown plugin "${id}"`))
+    return this.enqueueTransition(id, async () => {
+      await this.lifecycleState.setEnabled(id, false)
+      entry.desiredEnabled = false
+      entry.error = null
+      this.clearLazyTriggers(entry)
+      const pendingLoad = entry.loadSettled
+      if (pendingLoad) await pendingLoad
+      this.unloadPlugin(id)
+    })
   }
 }

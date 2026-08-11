@@ -486,11 +486,11 @@ export default class RemoteControlPlugin extends Plugin<RemoteControlSettings> {
       if (input.enabled) {
         await getApp().plugins.enablePlugin(pluginId)
       } else {
-        getApp().plugins.disablePlugin(pluginId)
+        await getApp().plugins.disablePlugin(pluginId)
       }
       return {
         pluginId,
-        enabled: getApp().plugins.isLoaded(pluginId),
+        enabled: getApp().plugins.isEnabled(pluginId),
       }
     })
     rpc.registerMethod('typora.plugins.commands.list', async (params) => {
@@ -738,7 +738,9 @@ export default class RemoteControlPlugin extends Plugin<RemoteControlSettings> {
       version: manifest.version,
       description: manifest.description ?? '',
       loading: manifest.loading,
+      enabled: getApp().plugins.isEnabled(manifest.id),
       loaded: getApp().plugins.isLoaded(manifest.id),
+      state: getApp().plugins.getPluginState(manifest.id),
     }))
   }
 }
