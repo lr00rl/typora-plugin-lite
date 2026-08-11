@@ -69,6 +69,11 @@ export function parseQuery(raw: string): ParsedQuery {
   return { type, scope, terms, raw }
 }
 
+/** Free-text terms suitable for result highlighting (never raw operators). */
+export function highlightTerms(raw: string): string {
+  return parseQuery(raw).terms
+}
+
 /** The type to actually use: the query's explicit type, else the tab default. */
 export function effectiveType(parsed: ParsedQuery, fallback: SearchType): SearchType {
   return parsed.type ?? fallback

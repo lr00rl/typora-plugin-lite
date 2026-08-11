@@ -5,7 +5,7 @@
   "description": "Quick file search and open (Mod+. or Mod+')",
   "main": "main.js",
   "loading": {
-    "startup": false,
+    "startup": true,
     "hotkey": ["Mod+.", "Mod+'"]
   }
 }

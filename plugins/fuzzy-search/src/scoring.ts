@@ -102,3 +102,65 @@ export function scoreCandidate(keys: ScoreKeys, query: string, options: ScoreOpt
   if (best === -Infinity) return -Infinity
   return best + (options.frecencyBoost ?? 0)
 }
+
+/** Rank any candidate pool through the canonical Quick Open scorer. */
+export function rankCandidates<T extends ScoreKeys>(
+  candidates: ReadonlyArray<T>,
+  query: string,
+  optionsFor: (candidate: T) => ScoreOptions,
+  limit: number,
+): T[] {
+  const boundedLimit = Math.max(0, Math.floor(limit))
+  if (boundedLimit === 0) return []
+
+  type Ranked = { candidate: T; score: number; inputIndex: number }
+  const top: Ranked[] = []
+  const compare = (a: Ranked, b: Ranked): number => (
+    b.score - a.score
+    || a.candidate.relPathKey.localeCompare(b.candidate.relPathKey)
+    || a.inputIndex - b.inputIndex
+  )
+  const swap = (left: number, right: number): void => {
+    const value = top[left]!
+    top[left] = top[right]!
+    top[right] = value
+  }
+  const bubbleUpWorst = (start: number): void => {
+    let index = start
+    while (index > 0) {
+      const parent = (index - 1) >>> 1
+      if (compare(top[index]!, top[parent]!) <= 0) break
+      swap(index, parent)
+      index = parent
+    }
+  }
+  const sinkWorst = (): void => {
+    let index = 0
+    while (true) {
+      const left = index * 2 + 1
+      if (left >= top.length) return
+      const right = left + 1
+      const worseChild = right < top.length && compare(top[right]!, top[left]!) > 0 ? right : left
+      if (compare(top[worseChild]!, top[index]!) <= 0) return
+      swap(index, worseChild)
+      index = worseChild
+    }
+  }
+
+  candidates.forEach((candidate, inputIndex) => {
+    const score = scoreCandidate(candidate, query, optionsFor(candidate))
+    if (score === -Infinity) return
+    const entry: Ranked = { candidate, score, inputIndex }
+    if (top.length < boundedLimit) {
+      top.push(entry)
+      bubbleUpWorst(top.length - 1)
+      return
+    }
+    if (compare(entry, top[0]!) >= 0) return
+    top[0] = entry
+    sinkWorst()
+  })
+
+  // Only K entries are sorted for presentation; the full vault is never sorted.
+  return top.sort(compare).map(entry => entry.candidate)
+}

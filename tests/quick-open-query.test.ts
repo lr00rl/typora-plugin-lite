@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import {
   completeQuery,
   effectiveType,
+  highlightTerms,
   parseQuery,
   removeToken,
   resolveType,
@@ -43,6 +44,11 @@ test('operators are stripped from terms wherever they appear', () => {
   assert.equal(q.type, 'content')
   assert.equal(q.scope, 'ops')
   assert.equal(q.terms, 'docker compose')
+})
+
+test('highlight terms exclude raw query operators', () => {
+  assert.equal(highlightTerms('type:file scope:"my notes/" ReadMe'), 'ReadMe')
+  assert.equal(highlightTerms('type:file'), '')
 })
 
 test('a scope with spaces must be quoted to survive', () => {

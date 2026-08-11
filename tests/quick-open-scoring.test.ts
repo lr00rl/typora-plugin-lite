@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import {
   fuzzyMatchPositions,
   fzfScore,
+  rankCandidates,
   scoreCandidate,
   type ScoreKeys,
 } from '../plugins/fuzzy-search/src/scoring.ts'
@@ -54,4 +55,35 @@ test('frecency boost lifts an otherwise-equal candidate', () => {
 test('frecency boost never rescues a non-match', () => {
   const score = scoreCandidate(keys('readme.md', 'readme.md'), 'zzz', { isPathQuery: false, frecencyBoost: 1000 })
   assert.equal(score, -Infinity)
+})
+
+test('rankCandidates reranks an external candidate pool with the shared scorer', () => {
+  const pathOnly = keys('index.md', 'notes/deep/index.md')
+  const basename = keys('notes.md', 'archive/notes.md')
+  const unrelated = keys('todo.md', 'todo.md')
+  const ranked = rankCandidates(
+    [pathOnly, unrelated, basename],
+    'notes',
+    () => ({ isPathQuery: false }),
+    2,
+  )
+  assert.deepEqual(ranked, [basename, pathOnly])
+})
+
+test('rankCandidates returns at most limit entries with deterministic and stable ties', () => {
+  const zPath = { ...keys('notes.md', 'z/notes.md'), id: 'z' }
+  const firstAPath = { ...keys('notes.md', 'a/notes.md'), id: 'a-first' }
+  const secondAPath = { ...keys('notes.md', 'a/notes.md'), id: 'a-second' }
+  const weaker = { ...keys('index.md', 'notes/index.md'), id: 'weaker' }
+
+  const ranked = rankCandidates(
+    [zPath, firstAPath, weaker, secondAPath],
+    'notes',
+    () => ({ isPathQuery: false }),
+    3,
+  )
+
+  assert.equal(ranked.length, 3)
+  assert.deepEqual(ranked.map(candidate => candidate.id), ['a-first', 'a-second', 'z'])
+  assert.deepEqual(rankCandidates([zPath], 'notes', () => ({ isPathQuery: false }), 0), [])
 })

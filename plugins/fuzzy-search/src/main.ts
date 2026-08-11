@@ -1,15 +1,19 @@
 import { IS_MAC, Plugin, editor, platform } from '@typora-plugin-lite/core'
 
-import { fuzzyMatchPositions, fzfScore, scoreCandidate } from './scoring.js'
+import { fuzzyMatchPositions, fzfScore, rankCandidates } from './scoring.js'
 import {
   type FrecencyStore,
   frecencySearchBoost,
   loadStore,
-  pruneStore,
   rankByFrecency,
-  recordOpen as recordFrecencyOpen,
   removePaths,
 } from './frecency.js'
+import {
+  type ConfirmedOpenHook,
+  ConfirmedOpenRecorder,
+  recordAfterSuccessfulOpen,
+  tryInstallConfirmedOpenHook,
+} from './recent.js'
 import {
   type DirChild,
   allDirectories,
@@ -23,6 +27,7 @@ import {
   type SearchType,
   completeQuery,
   effectiveType,
+  highlightTerms,
   parseQuery,
   removeToken,
   setToken,
@@ -92,6 +97,7 @@ const DEFAULT_HOTKEYS = ['Mod+.', "Mod+'"]
 const DEBOUNCE_MS = 120
 const INDEX_TTL_MS = 5 * 60_000
 const SEARCH_RESULT_LIMIT = 100
+const FZF_CANDIDATE_POOL_MULTIPLIER = 5
 const IGNORED_DIRS = ['.git', 'node_modules', '.obsidian', '.trash', '.Trash', '_archive']
 /**
  * The vault index covers every file Typora could plausibly open — markdown
@@ -216,30 +222,36 @@ const CSS = `
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  padding-top: 10vh;
+  box-sizing: border-box;
+  padding: min(10vh, 56px) 12px 12px;
+  overflow: hidden;
 }
 #tpl-qo-modal {
-  background: var(--bg-color, #fff);
-  border-radius: 12px;
+  color: var(--tpl-ui-text, var(--text-color, inherit));
+  background: var(--tpl-ui-surface, var(--bg-color, #fff));
+  font-family: var(--tpl-ui-font, inherit);
+  border-radius: var(--tpl-ui-radius, 12px);
   box-shadow: 0 18px 60px rgba(0,0,0,0.34), 0 2px 8px rgba(0,0,0,0.12);
   overflow: hidden;
-  border: 1px solid var(--border-color, rgba(128,128,128,0.18));
+  border: 1px solid var(--tpl-ui-border, var(--border-color, rgba(128,128,128,0.18)));
   display: flex;
   flex-direction: column;
-  /* Sized as a fraction of the window (Cmd+[ / Cmd+]); the clamp floors keep
-     it usable on small screens without hard-coding a single width. */
-  width: clamp(460px, 46vw, 92vw);
+  box-sizing: border-box;
+  min-width: 0;
+  max-height: calc(100vh - min(10vh, 56px) - 12px);
+  max-height: calc(100dvh - min(10vh, 56px) - 12px);
+  width: min(clamp(460px, 46vw, 720px), calc(100vw - 24px));
   transition: width 0.16s ease;
 }
 #tpl-qo-modal[data-width="wide"] {
-  width: clamp(560px, 64vw, 94vw);
+  width: min(clamp(560px, 64vw, 1040px), calc(100vw - 24px));
 }
 #tpl-qo-input-row {
   display: flex;
   align-items: center;
   padding: 12px 16px;
   gap: 10px;
-  border-bottom: 1px solid var(--border-color, rgba(128,128,128,0.15));
+  border-bottom: 1px solid var(--tpl-ui-border, var(--border-color, rgba(128,128,128,0.15)));
   flex-shrink: 0;
 }
 #tpl-qo-icon {
@@ -256,18 +268,21 @@ const CSS = `
   flex: 1;
   font-size: 15px;
   background: transparent;
-  color: var(--text-color, inherit);
-  font-family: inherit;
+  color: var(--tpl-ui-text, var(--text-color, inherit));
+  font-family: var(--tpl-ui-font, inherit);
+  min-width: 0;
   padding: 0;
   margin: 0;
 }
 #tpl-qo-list {
-  overflow-y: auto;
-  max-height: clamp(320px, 55vh, 70vh);
+  overflow: auto;
+  overscroll-behavior: contain;
+  min-height: 0;
+  max-height: min(55vh, 620px);
   padding: 4px 0;
 }
 #tpl-qo-modal[data-width="wide"] #tpl-qo-list {
-  max-height: clamp(420px, 72vh, 84vh);
+  max-height: min(72vh, 760px);
 }
 .tpl-qo-section-label {
   padding: 4px 16px 2px;
@@ -286,25 +301,25 @@ const CSS = `
   gap: 2px;
 }
 .tpl-qo-item.tpl-qo-selected {
-  background: var(--select-bg, rgba(100,100,255,0.12));
+  background: var(--tpl-ui-selection, var(--select-bg, rgba(100,100,255,0.12)));
 }
 .tpl-qo-name {
   font-size: 13.5px;
   font-weight: 500;
-  color: var(--text-color, inherit);
+  color: var(--tpl-ui-text, var(--text-color, inherit));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .tpl-qo-hit {
-  color: inherit;
-  background: rgba(255, 212, 59, 0.28);
+  color: var(--tpl-ui-accent, var(--accent-color, inherit));
+  background: var(--tpl-ui-selection, rgba(128,128,128,0.12));
   border-radius: 3px;
-  box-shadow: inset 0 -1px 0 rgba(255, 179, 0, 0.22);
 }
 .tpl-qo-path {
   font-size: 11.5px;
-  opacity: 0.42;
+  color: var(--tpl-ui-muted, currentColor);
+  opacity: 0.72;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -312,7 +327,8 @@ const CSS = `
 .tpl-qo-status {
   padding: 14px 16px;
   font-size: 13px;
-  opacity: 0.5;
+  color: var(--tpl-ui-muted, currentColor);
+  opacity: 0.8;
 }
 #tpl-qo-footer {
   display: flex;
@@ -321,8 +337,9 @@ const CSS = `
   gap: 12px;
   padding: 5px 16px;
   font-size: 11px;
-  opacity: 0.32;
-  border-top: 1px solid var(--border-color, rgba(128,128,128,0.12));
+  color: var(--tpl-ui-muted, currentColor);
+  opacity: 0.82;
+  border-top: 1px solid var(--tpl-ui-border, var(--border-color, rgba(128,128,128,0.12)));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -335,8 +352,8 @@ const CSS = `
   text-overflow: ellipsis;
 }
 #tpl-qo-footer-action {
-  border: 1px solid var(--border-color, rgba(128,128,128,0.2));
-  background: transparent;
+  border: 1px solid var(--tpl-ui-border, var(--border-color, rgba(128,128,128,0.2)));
+  background: var(--tpl-ui-surface-subtle, transparent);
   color: inherit;
   border-radius: 999px;
   padding: 2px 9px;
@@ -347,7 +364,7 @@ const CSS = `
   flex-shrink: 0;
 }
 #tpl-qo-footer-action:hover {
-  background: rgba(128,128,128,0.08);
+  background: var(--tpl-ui-selection, rgba(128,128,128,0.08));
 }
 #tpl-qo-footer-action[hidden] {
   display: none;
@@ -359,11 +376,16 @@ const CSS = `
 #tpl-qo-tab-bar {
   display: flex;
   align-items: center;
-  border-bottom: 1px solid var(--border-color, rgba(128,128,128,0.15));
+  border-bottom: 1px solid var(--tpl-ui-border, var(--border-color, rgba(128,128,128,0.15)));
   padding: 0 12px;
   flex-shrink: 0;
 }
 .tpl-qo-tab {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
   padding: 6px 14px;
   font-size: 12px;
   cursor: pointer;
@@ -377,7 +399,7 @@ const CSS = `
 }
 .tpl-qo-tab-active {
   opacity: 1;
-  border-bottom-color: var(--accent-color, #1a73e8);
+  border-bottom-color: var(--tpl-ui-accent, var(--accent-color, #1a73e8));
 }
 .tpl-qo-tab-hint {
   font-size: 10px;
@@ -392,7 +414,9 @@ const CSS = `
   flex-wrap: wrap;
   gap: 6px;
   padding: 7px 14px;
-  border-bottom: 1px solid var(--border-color, rgba(128,128,128,0.12));
+  border-bottom: 1px solid var(--tpl-ui-border, var(--border-color, rgba(128,128,128,0.12)));
+  max-height: 112px;
+  overflow: auto;
   flex-shrink: 0;
 }
 #tpl-qo-completions[hidden] { display: none; }
@@ -404,17 +428,18 @@ const CSS = `
   border-radius: 6px;
   font-size: 12px;
   cursor: pointer;
-  border: 1px solid var(--border-color, rgba(128,128,128,0.22));
-  background: rgba(128,128,128,0.05);
-  font-family: var(--monospace, 'SF Mono', 'Fira Code', 'Consolas', monospace);
+  color: inherit;
+  border: 1px solid var(--tpl-ui-border, var(--border-color, rgba(128,128,128,0.22)));
+  background: var(--tpl-ui-surface-subtle, rgba(128,128,128,0.05));
+  font-family: var(--tpl-ui-mono, var(--monospace, 'SF Mono', 'Fira Code', 'Consolas', monospace));
   transition: background 0.12s, border-color 0.12s;
 }
 .tpl-qo-completion:hover {
-  background: rgba(128,128,128,0.13);
+  background: var(--tpl-ui-selection, rgba(128,128,128,0.13));
 }
 .tpl-qo-completion-top {
-  border-color: var(--accent-color, #1a73e8);
-  box-shadow: inset 0 0 0 1px var(--accent-color, #1a73e8);
+  border-color: var(--tpl-ui-accent, var(--accent-color, #1a73e8));
+  box-shadow: inset 0 0 0 1px var(--tpl-ui-accent, var(--accent-color, #1a73e8));
 }
 .tpl-qo-completion-hint {
   opacity: 0.42;
@@ -423,7 +448,7 @@ const CSS = `
 .tpl-qo-content-name {
   font-size: 13px;
   font-weight: 500;
-  color: var(--text-color, inherit);
+  color: var(--tpl-ui-text, var(--text-color, inherit));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -434,7 +459,7 @@ const CSS = `
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-family: var(--monospace, 'SF Mono', 'Fira Code', 'Consolas', monospace);
+  font-family: var(--tpl-ui-mono, var(--monospace, 'SF Mono', 'Fira Code', 'Consolas', monospace));
 }
 
 /* Directory rows (browse mode) */
@@ -459,12 +484,55 @@ const CSS = `
   opacity: 0.55;
 }
 .tpl-qo-crumb {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
   cursor: pointer;
   border-radius: 3px;
   padding: 0 3px;
 }
 .tpl-qo-crumb:hover {
-  background: rgba(128,128,128,0.14);
+  background: var(--tpl-ui-selection, rgba(128,128,128,0.14));
+}
+.tpl-qo-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+#tpl-qo-modal :is(button, input, [role="option"]):focus-visible {
+  outline: 2px solid var(--tpl-ui-accent, var(--accent-color, #1a73e8)) !important;
+  outline-offset: -2px;
+}
+
+@media (max-width: 520px) {
+  #tpl-qo-overlay { padding-inline: 8px; padding-top: 8px; }
+  #tpl-qo-modal,
+  #tpl-qo-modal[data-width="wide"] {
+    width: calc(100vw - 16px);
+    max-height: calc(100vh - 16px);
+    max-height: calc(100dvh - 16px);
+  }
+  #tpl-qo-input-row { padding-inline: 12px; }
+  #tpl-qo-tab-bar { overflow-x: auto; padding-inline: 6px; }
+  .tpl-qo-tab { padding-inline: 10px; flex: 0 0 auto; }
+  .tpl-qo-tab-hint { display: none; }
+  #tpl-qo-footer { white-space: normal; padding-inline: 12px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #tpl-qo-modal,
+  .tpl-qo-tab,
+  .tpl-qo-completion { transition: none; }
+  .tpl-qo-item { scroll-behavior: auto; }
 }
 `
 
@@ -509,7 +577,10 @@ export default class QuickOpenPlugin extends Plugin {
   private activeTab: SearchTab = 'files'
   private contentFiltered: ContentMatch[] = []
   private tabBarEl: HTMLElement | null = null
-  private lastRecordedActiveFile = ''
+  private recentRecorder: ConfirmedOpenRecorder | null = null
+  private manualOpenHook: ConfirmedOpenHook | null = null
+  private lastPolledActiveFile = ''
+  private restoreFocusEl: HTMLElement | null = null
 
   /** Popup size preset, toggled with Cmd+[ / Cmd+]; persisted across opens. */
   private widthPreset: WidthPreset = 'default'
@@ -557,6 +628,15 @@ export default class QuickOpenPlugin extends Plugin {
     const hotkeys = this.getHotkeys()
     this.log('onload', { hotkeys, dataDir: platform.dataDir })
     this.loadFrecency()
+    this.recentRecorder = new ConfirmedOpenRecorder({
+      getStore: () => this.frecency,
+      setStore: store => {
+        this.frecency = store
+        this.settings.set('frecency' as never, store as never)
+      },
+      save: () => this.settings.save(),
+      maxEntries: MAX_FRECENCY,
+    })
     this.widthPreset = this.settings.get('widthPreset' as never) === 'wide' ? 'wide' : 'default'
     for (const key of hotkeys) {
       this.registerHotkey(key, () => this.open())
@@ -566,8 +646,17 @@ export default class QuickOpenPlugin extends Plugin {
       name: 'Quick Open: Install fzf',
       callback: () => this.promptInstallFzf(),
     })
+    this.addDisposable(() => {
+      this.manualOpenHook?.dispose()
+      this.manualOpenHook = null
+    })
+    this.installManualOpenObserver()
     this.syncActiveFileToRecent().catch(() => {})
     this.registerInterval(() => {
+      this.installManualOpenObserver()
+      void this.recentRecorder?.retryPending().catch(err => {
+        this.warn('recent persistence retry failed', err)
+      })
       void this.syncActiveFileToRecent()
     }, 1200)
   }
@@ -583,9 +672,44 @@ export default class QuickOpenPlugin extends Plugin {
 
   private async syncActiveFileToRecent(): Promise<void> {
     const activeFile = editor.getFilePath()
-    if (!activeFile || activeFile === this.lastRecordedActiveFile) return
-    this.lastRecordedActiveFile = activeFile
+    if (!activeFile) {
+      this.lastPolledActiveFile = ''
+      return
+    }
+    if (activeFile === this.lastPolledActiveFile) return
+    this.lastPolledActiveFile = activeFile
     await this.recordOpen(activeFile)
+  }
+
+  private installManualOpenObserver(): void {
+    const library = (window as any).File?.editor?.library as
+      | { openFile?: (path: string, callback: (...args: unknown[]) => unknown, ...args: unknown[]) => unknown }
+      | undefined
+    if (
+      library
+      && typeof library.openFile === 'function'
+      && this.manualOpenHook?.isCurrent(library as { openFile: (...args: any[]) => any })
+    ) return
+    this.manualOpenHook?.dispose()
+    this.manualOpenHook = null
+    if (!library || typeof library.openFile !== 'function') return
+    this.manualOpenHook = tryInstallConfirmedOpenHook(
+      library as { openFile: (path: string, callback: (...args: unknown[]) => unknown, ...args: unknown[]) => unknown },
+      path => {
+        // The hook is the precise transition signal; advance the polling
+        // baseline so its slower fallback cannot count the same open again.
+        this.lastPolledActiveFile = path
+        void this.recordOpen(path).catch(err => {
+          this.warn('manual open recent persistence failed', { file: path, err })
+        })
+      },
+      err => {
+        this.warn('manual open hook install failed', {
+          err,
+          fallback: 'active-file polling',
+        })
+      },
+    )
   }
 
   private log(...args: unknown[]): void {
@@ -920,10 +1044,8 @@ export default class QuickOpenPlugin extends Plugin {
 
   /** Record a file open: bump its frecency, prune the store, persist. */
   private async recordOpen(absPath: string): Promise<void> {
-    const now = Date.now()
-    this.frecency = pruneStore(recordFrecencyOpen(this.frecency, absPath, now), now, MAX_FRECENCY)
-    this.settings.set('frecency' as never, this.frecency as never)
-    await this.settings.save()
+    if (!this.recentRecorder) return
+    await this.recentRecorder.record(absPath)
   }
 
   // -------------------------------------------------------------------------
@@ -980,6 +1102,7 @@ export default class QuickOpenPlugin extends Plugin {
 
   private async searchWithFzf(query: string, limit = 50): Promise<FileEntry[]> {
     if (!this.fzfPath || !this.indexReady || !this.indexFilePath || !this.indexRoot) return []
+    const candidateLimit = Math.max(limit, limit * FZF_CANDIDATE_POOL_MULTIPLIER)
     const cmd = [
       'cat',
       platform.shell.escape(this.indexFilePath),
@@ -987,9 +1110,10 @@ export default class QuickOpenPlugin extends Plugin {
       platform.shell.escape(this.fzfPath),
       '--filter',
       platform.shell.escape(query),
+      '--ignore-case',
       '--algo=v2',
       '--scheme=path',
-      `| head -n ${limit}`,
+      `| head -n ${candidateLimit}`,
     ].join(' ')
 
     const output = await platform.shell.run(cmd, { timeout: 10_000 })
@@ -1005,23 +1129,11 @@ export default class QuickOpenPlugin extends Plugin {
       if (seen.has(absPath)) continue
       seen.add(absPath)
       results.push(this.makeFileEntry(absPath, root, currentDir))
-      if (results.length >= limit) break
+      if (results.length >= candidateLimit) break
     }
 
     this.searchBackend = 'fzf'
-    return results
-  }
-
-  private pushTopResult(
-    results: Array<{ file: FileEntry; score: number }>,
-    candidate: { file: FileEntry; score: number },
-    limit: number,
-  ): void {
-    let index = 0
-    while (index < results.length && results[index]!.score >= candidate.score) index += 1
-    if (index >= limit) return
-    results.splice(index, 0, candidate)
-    if (results.length > limit) results.length = limit
+    return this.rankFileCandidates(results, query, '', limit)
   }
 
   /**
@@ -1070,24 +1182,27 @@ export default class QuickOpenPlugin extends Plugin {
     const entries = await this.ensureIndexEntries()
     if (entries.length === 0) return []
 
+    return this.rankFileCandidates(entries, query, scope, limit)
+  }
+
+  private rankFileCandidates(
+    entries: ReadonlyArray<FileEntry>,
+    query: string,
+    scope: string,
+    limit: number,
+  ): FileEntry[] {
     const normalizedQuery = query.trim()
     const isPathQuery = isRelativePathQuery(normalizedQuery)
     const base = scope ? normalizePrefix(scope) : ''
     const prefix = base ? base.toLowerCase() + '/' : ''
     const now = Date.now()
-    const topResults: Array<{ file: FileEntry; score: number }> = []
-
-    for (const file of entries) {
-      if (prefix && !file.relPathKey.startsWith(prefix)) continue
-      const score = scoreCandidate(file, normalizedQuery, {
+    const candidates = prefix
+      ? entries.filter(file => file.relPathKey.startsWith(prefix))
+      : entries
+    return rankCandidates(candidates, normalizedQuery, file => ({
         isPathQuery,
         frecencyBoost: frecencySearchBoost(this.frecency, file.absPath, now),
-      })
-      if (score === -Infinity) continue
-      this.pushTopResult(topResults, { file, score }, limit)
-    }
-
-    return topResults.map(entry => entry.file)
+      }), limit)
   }
 
   private shouldUseExternalFzf(query: string): boolean {
@@ -1393,6 +1508,7 @@ export default class QuickOpenPlugin extends Plugin {
     if (this.debounceTimer) clearTimeout(this.debounceTimer)
     for (const fn of this.modalCleanups) fn()
     this.modalCleanups = []
+    const restoreFocus = this.restoreFocusEl
     this.overlay?.remove()
     this.overlay = null
     this.inputEl = null
@@ -1409,8 +1525,10 @@ export default class QuickOpenPlugin extends Plugin {
     this.selectedIdx = 0
     this.currentQuery = ''
     this.lastInputValue = ''
+    this.restoreFocusEl = null
     // Each open starts fresh on the files tab / recents, per the spec.
     this.activeTab = 'files'
+    if (restoreFocus?.isConnected) restoreFocus.focus()
   }
 
   /** The scope operator currently in the search box (browse location), or ''. */
@@ -1431,6 +1549,7 @@ export default class QuickOpenPlugin extends Plugin {
       this.addDisposable(() => style.remove())
     }
 
+    this.restoreFocusEl = document.activeElement instanceof HTMLElement ? document.activeElement : null
     const overlay = document.createElement('div')
     overlay.id = 'tpl-qo-overlay'
     overlay.addEventListener('mousedown', (e) => {
@@ -1440,18 +1559,33 @@ export default class QuickOpenPlugin extends Plugin {
     const modal = document.createElement('div')
     modal.id = 'tpl-qo-modal'
     modal.dataset.width = this.widthPreset
+    modal.setAttribute('role', 'dialog')
+    modal.setAttribute('aria-modal', 'true')
+    modal.setAttribute('aria-labelledby', 'tpl-qo-title')
+
+    const title = document.createElement('h2')
+    title.id = 'tpl-qo-title'
+    title.className = 'tpl-qo-sr-only'
+    title.textContent = 'Quick Open'
 
     const inputRow = document.createElement('div')
     inputRow.id = 'tpl-qo-input-row'
     const icon = document.createElement('span')
     icon.id = 'tpl-qo-icon'
     icon.textContent = '\u2315'
+    icon.setAttribute('aria-hidden', 'true')
     const input = document.createElement('input')
     input.id = 'tpl-qo-input'
     input.type = 'text'
     input.placeholder = '搜索文件名、工作区路径或相对当前文件的路径...'
     input.autocomplete = 'off'
     input.spellcheck = false
+    input.setAttribute('role', 'combobox')
+    input.setAttribute('aria-label', '搜索文件、目录或内容')
+    input.setAttribute('aria-autocomplete', 'list')
+    input.setAttribute('aria-haspopup', 'listbox')
+    input.setAttribute('aria-controls', 'tpl-qo-completions tpl-qo-list')
+    input.setAttribute('aria-expanded', 'true')
     inputRow.appendChild(icon)
     inputRow.appendChild(input)
 
@@ -1459,15 +1593,21 @@ export default class QuickOpenPlugin extends Plugin {
     const completionsEl = document.createElement('div')
     completionsEl.id = 'tpl-qo-completions'
     completionsEl.hidden = true
+    completionsEl.setAttribute('role', 'listbox')
+    completionsEl.setAttribute('aria-label', '搜索语法补全')
 
     const list = document.createElement('div')
     list.id = 'tpl-qo-list'
+    list.setAttribute('role', 'listbox')
+    list.setAttribute('aria-label', 'Quick Open 结果')
 
     const footer = document.createElement('div')
     footer.id = 'tpl-qo-footer'
     const footerText = document.createElement('div')
     footerText.id = 'tpl-qo-footer-text'
     footerText.textContent = '加载中...'
+    footerText.setAttribute('role', 'status')
+    footerText.setAttribute('aria-live', 'polite')
     const footerAction = document.createElement('button')
     footerAction.id = 'tpl-qo-footer-action'
     footerAction.type = 'button'
@@ -1479,12 +1619,20 @@ export default class QuickOpenPlugin extends Plugin {
 
     const tabBar = document.createElement('div')
     tabBar.id = 'tpl-qo-tab-bar'
+    tabBar.setAttribute('role', 'tablist')
+    tabBar.setAttribute('aria-label', '搜索类型')
     for (const tab of TAB_ORDER) {
-      const el = document.createElement('div')
+      const el = document.createElement('button')
+      el.type = 'button'
       el.className = 'tpl-qo-tab' + (tab === this.activeTab ? ' tpl-qo-tab-active' : '')
       el.textContent = TAB_LABELS[tab]
       el.dataset.mode = tab
+      el.setAttribute('role', 'tab')
+      el.setAttribute('aria-controls', 'tpl-qo-list')
+      el.setAttribute('aria-selected', String(tab === this.activeTab))
+      el.tabIndex = tab === this.activeTab ? 0 : -1
       el.addEventListener('click', () => this.switchTab(tab))
+      el.addEventListener('keydown', e => this.handleTabKey(e, tab))
       tabBar.appendChild(el)
     }
     const tabHint = document.createElement('div')
@@ -1492,6 +1640,7 @@ export default class QuickOpenPlugin extends Plugin {
     tabHint.textContent = IS_MAC ? '⌃Tab 切换 · ⌘[ ] 宽度' : 'Ctrl+Tab 切换 · Ctrl+[ ] 宽度'
     tabBar.appendChild(tabHint)
 
+    modal.appendChild(title)
     modal.appendChild(inputRow)
     modal.appendChild(tabBar)
     modal.appendChild(completionsEl)
@@ -1526,17 +1675,36 @@ export default class QuickOpenPlugin extends Plugin {
     const onEsc = (e: KeyboardEvent) => {
       if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); this.close() }
     }
+    const onFocusTrap = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab' || e.metaKey || e.ctrlKey || e.altKey) return
+      const focusable = [...modal.querySelectorAll<HTMLElement>(
+        'input, button:not([disabled]):not([hidden]), [tabindex]:not([tabindex="-1"])',
+      )].filter(el => !el.hasAttribute('hidden'))
+      if (focusable.length === 0) return
+      const first = focusable[0]!
+      const last = focusable[focusable.length - 1]!
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault()
+        last.focus()
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault()
+        first.focus()
+      }
+    }
     input.addEventListener('input', onInput)
     input.addEventListener('keydown', onKeydown)
     document.addEventListener('keydown', onEsc, { capture: true })
+    modal.addEventListener('keydown', onFocusTrap)
     this.modalCleanups.push(
       () => input.removeEventListener('input', onInput),
       () => input.removeEventListener('keydown', onKeydown),
       () => document.removeEventListener('keydown', onEsc, { capture: true }),
+      () => modal.removeEventListener('keydown', onFocusTrap),
     )
 
     void this.renderList('')
-    setTimeout(() => input.focus(), 30)
+    const focusTimer = window.setTimeout(() => input.focus(), 30)
+    this.modalCleanups.push(() => clearTimeout(focusTimer))
   }
 
   private updateFooter(text: string): void {
@@ -1842,7 +2010,7 @@ export default class QuickOpenPlugin extends Plugin {
   }
 
   private renderHighlightedText(el: HTMLElement, text: string): void {
-    const query = this.currentQuery.trim()
+    const query = highlightTerms(this.currentQuery)
     const positions = query ? fuzzyMatchPositions(text, query) : []
     if (!query || !positions || positions.length === 0) {
       el.textContent = text
@@ -1886,12 +2054,18 @@ export default class QuickOpenPlugin extends Plugin {
 
   /** Render a NavRow to a selectable list item, dispatched by kind. */
   private makeRow(row: NavRow, idx: number): HTMLElement {
+    let item: HTMLElement
     switch (row.kind) {
-      case 'file': return this.makeItem(row.file, idx)
-      case 'content': return this.makeContentItem(row.match, idx)
-      case 'dir': return this.makeDirItem(row, idx)
-      case 'up': return this.makeUpItem(idx)
+      case 'file': item = this.makeItem(row.file, idx); break
+      case 'content': item = this.makeContentItem(row.match, idx); break
+      case 'dir': item = this.makeDirItem(row, idx); break
+      case 'up': item = this.makeUpItem(idx); break
     }
+    item.id = `tpl-qo-option-${idx}`
+    item.setAttribute('role', 'option')
+    item.setAttribute('aria-selected', String(idx === this.selectedIdx))
+    item.tabIndex = -1
+    return item
   }
 
   private makeDirItem(row: { name: string; fileCount: number }, idx: number): HTMLElement {
@@ -1932,19 +2106,24 @@ export default class QuickOpenPlugin extends Plugin {
   private makeBreadcrumb(crumbs: Array<{ name: string; path: string }>): HTMLElement {
     const bar = document.createElement('div')
     bar.className = 'tpl-qo-section-label tpl-qo-breadcrumb'
-    const root = document.createElement('span')
+    const root = document.createElement('button')
+    root.type = 'button'
     root.className = 'tpl-qo-crumb'
     root.textContent = '/'
     root.addEventListener('click', () => this.enterDir(null))
     bar.appendChild(root)
     crumbs.forEach((crumb, i) => {
       bar.appendChild(document.createTextNode(' / '))
-      const el = document.createElement('span')
+      const actionable = i < crumbs.length - 1
+      const el = document.createElement(actionable ? 'button' : 'span')
+      if (actionable) (el as HTMLButtonElement).type = 'button'
       el.className = 'tpl-qo-crumb'
       el.textContent = crumb.name
       // Every crumb but the last is a jump target.
-      if (i < crumbs.length - 1) {
+      if (actionable) {
         el.addEventListener('click', () => this.enterDir(crumb.path))
+      } else {
+        el.setAttribute('aria-current', 'location')
       }
       bar.appendChild(el)
     })
@@ -1994,6 +2173,7 @@ export default class QuickOpenPlugin extends Plugin {
   private makeSectionLabel(text: string): HTMLElement {
     const div = document.createElement('div')
     div.className = 'tpl-qo-section-label'
+    div.setAttribute('role', 'presentation')
     div.textContent = text
     return div
   }
@@ -2001,6 +2181,8 @@ export default class QuickOpenPlugin extends Plugin {
   private makeStatus(msg: string): HTMLElement {
     const div = document.createElement('div')
     div.className = 'tpl-qo-status'
+    div.setAttribute('role', 'status')
+    div.setAttribute('aria-live', 'polite')
     div.textContent = msg
     return div
   }
@@ -2009,9 +2191,14 @@ export default class QuickOpenPlugin extends Plugin {
     const list = this.listEl
     if (!list) return
     list.querySelectorAll('.tpl-qo-item').forEach((el, i) => {
-      el.classList.toggle('tpl-qo-selected', i === this.selectedIdx)
+      const selected = i === this.selectedIdx
+      el.classList.toggle('tpl-qo-selected', selected)
+      el.setAttribute('aria-selected', String(selected))
     })
-    list.querySelectorAll('.tpl-qo-item')[this.selectedIdx]?.scrollIntoView({ block: 'nearest' })
+    const selected = list.querySelectorAll('.tpl-qo-item')[this.selectedIdx]
+    if (selected?.id && this.inputEl) this.inputEl.setAttribute('aria-activedescendant', selected.id)
+    else this.inputEl?.removeAttribute('aria-activedescendant')
+    selected?.scrollIntoView({ block: 'nearest' })
   }
 
   // -------------------------------------------------------------------------
@@ -2127,11 +2314,22 @@ export default class QuickOpenPlugin extends Plugin {
   private openFileByPath(absPath: string): void {
     if (this.openingSelection) return
     this.openingSelection = true
+    const observedByHook = this.isManualOpenHookCurrent()
     this.log('openFileByPath', { index: this.selectedIdx, absPath })
     this.close()
-    this.lastRecordedActiveFile = absPath
-    this.recordOpen(absPath).catch(() => {})
-    editor.openFile(absPath)
+    recordAfterSuccessfulOpen(
+      () => editor.openFile(absPath),
+      async () => {
+        try {
+          await this.recordOpen(absPath)
+        } catch (err) {
+          this.warn('open succeeded but recent persistence failed', { file: absPath, err })
+          this.showNotice('文件已打开，但最近记录暂未保存；将自动重试', 5000)
+        }
+      },
+      observedByHook,
+      () => { this.lastPolledActiveFile = absPath },
+    )
       .then(() => this.revealInSidebar(absPath))
       .catch(err => {
         this.warn('openFileByPath failed', { file: absPath, err })
@@ -2142,6 +2340,15 @@ export default class QuickOpenPlugin extends Plugin {
       })
   }
 
+  private isManualOpenHookCurrent(): boolean {
+    const library = (window as any).File?.editor?.library as
+      | { openFile?: (...args: any[]) => any }
+      | undefined
+    return !!library
+      && typeof library.openFile === 'function'
+      && !!this.manualOpenHook?.isCurrent(library as { openFile: (...args: any[]) => any })
+  }
+
   /** Move `dir` tabs along the files → 目录 → content ring (Ctrl+Tab). */
   private cycleTab(dir: number): void {
     const idx = TAB_ORDER.indexOf(this.activeTab)
@@ -2149,8 +2356,25 @@ export default class QuickOpenPlugin extends Plugin {
     this.switchTab(next)
   }
 
-  private switchTab(tab: SearchTab): void {
-    if (tab === this.activeTab) { this.inputEl?.focus(); return }
+  private handleTabKey(event: KeyboardEvent, tab: SearchTab): void {
+    const index = TAB_ORDER.indexOf(tab)
+    let next: SearchTab | undefined
+    if (event.key === 'ArrowRight') next = TAB_ORDER[(index + 1) % TAB_ORDER.length]
+    else if (event.key === 'ArrowLeft') next = TAB_ORDER[(index - 1 + TAB_ORDER.length) % TAB_ORDER.length]
+    else if (event.key === 'Home') next = TAB_ORDER[0]
+    else if (event.key === 'End') next = TAB_ORDER[TAB_ORDER.length - 1]
+    if (!next) return
+    event.preventDefault()
+    event.stopPropagation()
+    this.switchTab(next, 'tab')
+  }
+
+  private switchTab(tab: SearchTab, focusTarget: 'input' | 'tab' = 'input'): void {
+    if (tab === this.activeTab) {
+      if (focusTarget === 'tab') this.focusActiveTab()
+      else this.inputEl?.focus()
+      return
+    }
     this.activeTab = tab
     this.updateTabBar()
     this.updatePlaceholder()
@@ -2159,7 +2383,14 @@ export default class QuickOpenPlugin extends Plugin {
     this.selectedIdx = 0
     this.refreshCompletions()
     void this.renderList(q)
-    this.inputEl?.focus()
+    if (focusTarget === 'tab') this.focusActiveTab()
+    else this.inputEl?.focus()
+  }
+
+  private focusActiveTab(): void {
+    this.tabBarEl
+      ?.querySelector<HTMLElement>(`.tpl-qo-tab[data-mode="${this.activeTab}"]`)
+      ?.focus()
   }
 
   /**
@@ -2177,7 +2408,10 @@ export default class QuickOpenPlugin extends Plugin {
     if (!this.tabBarEl) return
     this.tabBarEl.querySelectorAll('.tpl-qo-tab').forEach(el => {
       const tab = el as HTMLElement
-      tab.classList.toggle('tpl-qo-tab-active', tab.dataset.mode === this.activeTab)
+      const active = tab.dataset.mode === this.activeTab
+      tab.classList.toggle('tpl-qo-tab-active', active)
+      tab.setAttribute('aria-selected', String(active))
+      tab.tabIndex = active ? 0 : -1
     })
   }
 
@@ -2216,11 +2450,20 @@ export default class QuickOpenPlugin extends Plugin {
     const el = this.completionsEl
     if (!el) return
     while (el.firstChild) el.removeChild(el.firstChild)
-    if (this.completions.length === 0) { el.hidden = true; return }
+    if (this.completions.length === 0) {
+      el.hidden = true
+      // The result listbox remains visible even when syntax completions do not.
+      this.inputEl?.setAttribute('aria-expanded', 'true')
+      return
+    }
     el.hidden = false
+    this.inputEl?.setAttribute('aria-expanded', 'true')
     this.completions.forEach((c, i) => {
-      const chip = document.createElement('div')
+      const chip = document.createElement('button')
+      chip.type = 'button'
       chip.className = 'tpl-qo-completion' + (i === 0 ? ' tpl-qo-completion-top' : '')
+      chip.setAttribute('role', 'option')
+      chip.setAttribute('aria-selected', String(i === 0))
       const label = document.createElement('span')
       label.className = 'tpl-qo-completion-label'
       label.textContent = c.label
@@ -2231,8 +2474,7 @@ export default class QuickOpenPlugin extends Plugin {
         hint.textContent = c.hint
         chip.appendChild(hint)
       }
-      // mousedown (not click) so the input doesn't blur before we handle it.
-      chip.addEventListener('mousedown', e => { e.preventDefault(); this.acceptCompletion(c) })
+      chip.addEventListener('click', () => this.acceptCompletion(c))
       el.appendChild(chip)
     })
   }
