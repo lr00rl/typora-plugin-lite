@@ -1,4 +1,9 @@
-import { Plugin, type SettingsSchema } from '@typora-plugin-lite/core'
+import {
+  Plugin,
+  measureVisibleEditorHostWidth,
+  observeEditorHostResize,
+  type SettingsSchema,
+} from '@typora-plugin-lite/core'
 import { calculateWiderLayout, type WiderLayout, type WiderMode } from './layout'
 
 interface WiderSettings {
@@ -8,6 +13,7 @@ interface WiderSettings {
 
 interface AppliedWiderLayout extends WiderLayout {
   mode: WiderMode
+  hostWidth: number
   viewportWidth: number
   sidenoteReserve: number
   actualWidth: number
@@ -29,8 +35,6 @@ const MODE_LABELS: Record<WiderMode, string> = {
 }
 
 const FALLBACK_SIDENOTE_RESERVE = 300
-const SIDENOTE_BREAKPOINT = 1200
-
 export default class WiderPlugin extends Plugin<WiderSettings> {
   /** Declarative schema so the Plugin Center renders a segmented control for mode. */
   static settingsSchema: SettingsSchema<WiderSettings> = {
@@ -53,6 +57,7 @@ export default class WiderPlugin extends Plugin<WiderSettings> {
 
   private writeEl: HTMLElement | null = null
   private observer: MutationObserver | null = null
+  private stopObservingHost: (() => void) | null = null
   private currentMode: WiderMode = 'default'
 
   onload(): void {
@@ -92,6 +97,7 @@ export default class WiderPlugin extends Plugin<WiderSettings> {
 
   onunload(): void {
     this.observer?.disconnect()
+    this.stopObservingHost?.()
 
     document.documentElement.style.removeProperty('--tpl-wider-shell-gutter')
     document.documentElement.style.removeProperty('--tpl-wider-content-width')
@@ -163,13 +169,13 @@ export default class WiderPlugin extends Plugin<WiderSettings> {
     }
     if (!this.writeEl) return null
 
-    const viewportWidth = Math.max(window.innerWidth, document.documentElement.clientWidth)
-    const reserve = this.getActiveSidenoteReserve(viewportWidth)
+    const hostWidth = measureVisibleEditorHostWidth(this.writeEl)
+    const reserve = this.getActiveSidenoteReserve()
     const {
       shellGutter,
       contentWidth: appliedContentWidth,
       maxWidth,
-    } = calculateWiderLayout({ mode, viewportWidth, sidenoteReserve: reserve })
+    } = calculateWiderLayout({ mode, hostWidth, sidenoteReserve: reserve })
 
     this.writeEl.dataset.tplWiderMode = mode
     document.documentElement.style.setProperty('--tpl-wider-shell-gutter', `${shellGutter}px`)
@@ -187,7 +193,8 @@ export default class WiderPlugin extends Plugin<WiderSettings> {
     const computedStyle = getComputedStyle(this.writeEl)
     const appliedLayout: AppliedWiderLayout = {
       mode,
-      viewportWidth,
+      hostWidth,
+      viewportWidth: Math.max(window.innerWidth, document.documentElement.clientWidth),
       sidenoteReserve: reserve,
       shellGutter,
       contentWidth: appliedContentWidth,
@@ -216,9 +223,11 @@ export default class WiderPlugin extends Plugin<WiderSettings> {
 
   private bindWritingArea(writeEl: HTMLElement): void {
     this.observer?.disconnect()
+    this.stopObservingHost?.()
     this.clearWriteOverrides(this.writeEl)
     this.writeEl = writeEl
     this.observer?.observe(writeEl, { attributes: true, attributeFilter: ['class'] })
+    this.stopObservingHost = observeEditorHostResize(writeEl, () => this.handleViewportChange())
   }
 
   private clearWriteOverrides(writeEl: HTMLElement | null): void {
@@ -279,10 +288,10 @@ export default class WiderPlugin extends Plugin<WiderSettings> {
     }
   }
 
-  private getActiveSidenoteReserve(viewportWidth: number): number {
+  private getActiveSidenoteReserve(): number {
     if (!this.writeEl) return 0
-    if (viewportWidth < SIDENOTE_BREAKPOINT) return 0
     if (!this.writeEl.classList.contains('tpl-has-sidenotes')) return 0
+    if (!this.writeEl.classList.contains('tpl-sidenotes-margin')) return 0
 
     const rawValue = getComputedStyle(this.writeEl).getPropertyValue('--tpl-sidenote-reserve').trim()
     const parsed = Number.parseFloat(rawValue)
@@ -301,7 +310,7 @@ html #write[data-tpl-wider-mode],
 html #typora-source {
   box-sizing: border-box;
   width: min(
-    calc(100vw - (var(--tpl-wider-shell-gutter, 24px) * 2)),
+    calc(100% - (var(--tpl-wider-shell-gutter, 24px) * 2)),
     var(--tpl-wider-max-width, 860px)
   );
   max-width: var(--tpl-wider-max-width, 860px);

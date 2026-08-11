@@ -1,11 +1,22 @@
-import { IS_MAC, Plugin, editor } from '@typora-plugin-lite/core'
+import {
+  IS_MAC,
+  Plugin,
+  canFitEditorReserve,
+  editor,
+  findActiveWritingArea,
+  measureVisibleEditorHostWidth,
+  observeEditorHostResize,
+} from '@typora-plugin-lite/core'
 import { shouldMutateLiveSidenoteDom } from './dom-guards.js'
 import { getPortalPagePosition } from './portal-geometry.js'
 import { SIDENOTE_TAG_CLOSE, formatSidenoteInsertion } from './insertion.js'
+import { bindQuickAction, isQuickMenuOpen } from './quick-menu.js'
 
 const SIDENOTE_RE = /class=["'](?:side|margin)note["']/
 const ADD_SIDENOTE_CMD = 'sidenote:add'
 const ADD_SIDENOTE_HOTKEY = 'Mod+Alt+S'
+const MIN_MARGIN_PROSE_WIDTH = 860
+const FALLBACK_SIDENOTE_RESERVE = 300
 
 interface QuickAction {
   id: string
@@ -30,6 +41,8 @@ interface QuickAction {
  */
 export default class SidenotePlugin extends Plugin {
   private observer: MutationObserver | null = null
+  private stopObservingHost: (() => void) | null = null
+  private writeEventDisposables: Array<() => void> = []
   private rafId = 0
   private writeEl: HTMLElement | null = null
   private portalLayerEl: HTMLElement | null = null
@@ -52,37 +65,18 @@ export default class SidenotePlugin extends Plugin {
     })
     this.registerHotkey(ADD_SIDENOTE_HOTKEY, () => this.addSidenoteFromSelection())
 
-    this.writeEl = document.getElementById('write')
-    if (!this.writeEl) return
-
     this.registerCss(EDITOR_CSS)
     this.ensurePortalLayer()
-    this.processAll(this.writeEl)
-
-    this.observer = new MutationObserver((mutations) => {
-      const hasEditorMutation = mutations.some((mutation) => !this.isPortalMutation(mutation))
-      if (hasEditorMutation) this.scheduleProcess()
-    })
-
-    this.observer.observe(this.writeEl, {
-      childList: true,
-      subtree: true,
-    })
-    this.registerDomEvent(this.writeEl, 'input', () => this.scheduleProcess())
-    this.registerDomEvent(this.writeEl, 'focusin', () => this.scheduleProcess(), { capture: true })
-    this.registerDomEvent(this.writeEl, 'focusout', () => this.scheduleProcess(), { capture: true })
-    this.registerDomEvent(this.writeEl, 'compositionstart', () => this.handleCompositionStart(), { capture: true })
-    this.registerDomEvent(this.writeEl, 'compositionend', () => this.handleCompositionEnd(), { capture: true })
-    this.registerDomEvent(this.writeEl, 'mousedown', event => this.handleEditorMouseDown(event as MouseEvent), { capture: true })
-    this.registerDomEvent(this.writeEl, 'contextmenu', event => this.handleContextMenu(event as MouseEvent), { capture: true })
     this.registerDomEvent(document, 'selectionchange', () => this.handleSelectionChange())
     this.registerDomEvent(document, 'mousedown', event => this.handleDocumentMouseDown(event as MouseEvent), { capture: true })
     this.registerDomEvent(document, 'keydown', event => this.handleDocumentKeyDown(event as KeyboardEvent), { capture: true })
     this.registerDomEvent(window, 'resize', () => this.scheduleProcess())
     this.registerDomEvent(window, 'scroll', () => this.scheduleProcess(), { passive: true, capture: true })
     this.registerEvent('wider:mode-changed', () => this.scheduleProcessAfterTransition())
+    this.registerInterval(() => this.refreshWritingArea(), 500)
+    this.refreshWritingArea()
     this.addDisposable(() => {
-      this.observer?.disconnect()
+      this.unbindWritingArea()
       cancelAnimationFrame(this.rafId)
       clearTimeout(this.widerTransitionTimer)
       clearTimeout(this.contextMenuOpeningTimer)
@@ -94,20 +88,85 @@ export default class SidenotePlugin extends Plugin {
   }
 
   onunload(): void {
-    if (!this.writeEl) return
-    this.writeEl.classList.remove('tpl-has-sidenotes')
-    this.writeEl.classList.remove('tpl-has-table-sidenotes')
-    this.writeEl.querySelectorAll('.tpl-sn-num').forEach(marker => marker.remove())
-    this.writeEl.querySelectorAll('.md-html-inline.tpl-sidenote').forEach(el => {
-      el.classList.remove('tpl-sidenote')
-      el.classList.remove('tpl-sidenote-in-table')
-      delete (el as HTMLElement).dataset.tplSnIndex
-    })
+    this.unbindWritingArea()
     this.portalLayerEl?.remove()
     this.portalLayerEl = null
     this.quickMenuEl?.remove()
     this.quickMenuEl = null
     this.clearSavedSelection()
+  }
+
+  private refreshWritingArea(): void {
+    const activeWriteEl = findActiveWritingArea()
+    if (activeWriteEl === this.writeEl) return
+
+    if (activeWriteEl) {
+      this.bindWritingArea(activeWriteEl)
+    } else if (this.writeEl && !this.writeEl.isConnected) {
+      this.unbindWritingArea()
+    }
+  }
+
+  private bindWritingArea(writeEl: HTMLElement): void {
+    this.unbindWritingArea()
+    this.writeEl = writeEl
+    this.processAll(writeEl)
+
+    this.observer = new MutationObserver((mutations) => {
+      const hasEditorMutation = mutations.some((mutation) => !this.isPortalMutation(mutation))
+      if (hasEditorMutation) this.scheduleProcess()
+    })
+    this.observer.observe(writeEl, { childList: true, subtree: true })
+    this.stopObservingHost = observeEditorHostResize(writeEl, () => this.scheduleProcess())
+
+    this.addWriteEvent(writeEl, 'input', () => this.scheduleProcess())
+    this.addWriteEvent(writeEl, 'focusin', () => this.scheduleProcess(), { capture: true })
+    this.addWriteEvent(writeEl, 'focusout', () => this.scheduleProcess(), { capture: true })
+    this.addWriteEvent(writeEl, 'compositionstart', () => this.handleCompositionStart(), { capture: true })
+    this.addWriteEvent(writeEl, 'compositionend', () => this.handleCompositionEnd(), { capture: true })
+    this.addWriteEvent(writeEl, 'mousedown', event => this.handleEditorMouseDown(event as MouseEvent), { capture: true })
+    this.addWriteEvent(writeEl, 'contextmenu', event => this.handleContextMenu(event as MouseEvent), { capture: true })
+  }
+
+  private unbindWritingArea(): void {
+    this.observer?.disconnect()
+    this.observer = null
+    this.stopObservingHost?.()
+    this.stopObservingHost = null
+    for (const dispose of this.writeEventDisposables.splice(0)) dispose()
+    cancelAnimationFrame(this.rafId)
+    this.rafId = 0
+    this.isComposing = false
+    this.pendingProcess = false
+    this.isContextMenuOpening = false
+    clearTimeout(this.selectionMenuTimer)
+    this.hideQuickMenu()
+
+    if (this.writeEl) this.cleanupWritingArea(this.writeEl)
+    this.writeEl = null
+    this.portalLayerEl?.replaceChildren()
+    this.portalLayerEl?.classList.remove('tpl-sidenote-margin-layer')
+    this.clearSavedSelection()
+  }
+
+  private cleanupWritingArea(writeEl: HTMLElement): void {
+    writeEl.classList.remove('tpl-has-sidenotes', 'tpl-has-table-sidenotes', 'tpl-sidenotes-margin')
+    writeEl.querySelectorAll('.tpl-sn-num').forEach(marker => marker.remove())
+    writeEl.querySelectorAll<HTMLElement>('.md-html-inline.tpl-sidenote').forEach(el => {
+      el.classList.remove('tpl-sidenote', 'tpl-sidenote-in-table')
+      el.removeAttribute('aria-hidden')
+      delete el.dataset.tplSnIndex
+    })
+  }
+
+  private addWriteEvent(
+    target: HTMLElement,
+    type: string,
+    listener: EventListener,
+    options?: AddEventListenerOptions,
+  ): void {
+    target.addEventListener(type, listener, options)
+    this.writeEventDisposables.push(() => target.removeEventListener(type, listener, options))
   }
 
   private addSidenoteFromSelection(): void {
@@ -278,7 +337,7 @@ export default class SidenotePlugin extends Plugin {
   }
 
   private isQuickMenuOpen(): boolean {
-    return this.quickMenuEl?.style.display === 'block'
+    return isQuickMenuOpen(this.quickMenuEl)
   }
 
   private ensureQuickMenu(): HTMLDivElement {
@@ -334,15 +393,7 @@ export default class SidenotePlugin extends Plugin {
       button.appendChild(shortcut)
     }
 
-    button.addEventListener('mousedown', event => {
-      event.preventDefault()
-      event.stopPropagation()
-      action.run()
-    })
-    button.addEventListener('click', event => {
-      event.preventDefault()
-      event.stopPropagation()
-    })
+    bindQuickAction(button, action.run)
 
     return button
   }
@@ -453,6 +504,7 @@ export default class SidenotePlugin extends Plugin {
 
     root.classList.toggle('tpl-has-sidenotes', sidenotes.length > 0)
     root.classList.toggle('tpl-has-table-sidenotes', hasTableSidenotes)
+    root.classList.toggle('tpl-sidenotes-margin', sidenotes.length > 0 && this.canUseMarginSidenotes())
     this.syncPortals(sidenotes)
   }
 
@@ -521,7 +573,6 @@ export default class SidenotePlugin extends Plugin {
 
     const layer = document.createElement('div')
     layer.id = 'tpl-sidenote-portal-layer'
-    layer.setAttribute('aria-hidden', 'true')
     layer.setAttribute('contenteditable', 'false')
     document.body.appendChild(layer)
     this.portalLayerEl = layer
@@ -532,8 +583,20 @@ export default class SidenotePlugin extends Plugin {
     if (!this.writeEl || !this.portalLayerEl) return
 
     this.portalLayerEl.replaceChildren()
+    this.portalLayerEl.classList.toggle(
+      'tpl-sidenote-margin-layer',
+      this.writeEl.classList.contains('tpl-sidenotes-margin'),
+    )
 
-    if (window.innerWidth < 1200) return
+    for (const sidenote of sidenotes) {
+      sidenote.removeAttribute('aria-hidden')
+      const marker = sidenote.previousElementSibling
+      if (marker?.classList.contains('tpl-sn-num')) {
+        marker.removeAttribute('aria-describedby')
+      }
+    }
+
+    if (!this.writeEl.classList.contains('tpl-sidenotes-margin')) return
 
     const writeRect = this.writeEl.getBoundingClientRect()
     const portalItems: Array<{ naturalTop: number, el: HTMLElement }> = []
@@ -547,6 +610,10 @@ export default class SidenotePlugin extends Plugin {
 
       const anchorRect = anchor.getBoundingClientRect()
       const portal = this.createPortal(sidenote)
+      sidenote.setAttribute('aria-hidden', 'true')
+      if (anchor.classList.contains('tpl-sn-num')) {
+        anchor.setAttribute('aria-describedby', portal.id)
+      }
       const { top, left } = getPortalPagePosition(
         anchorRect,
         writeRect,
@@ -579,6 +646,9 @@ export default class SidenotePlugin extends Plugin {
     const portal = document.createElement('aside')
     portal.className = 'tpl-sidenote-portal'
     portal.dataset.tplSnIndex = source.dataset.tplSnIndex ?? ''
+    portal.id = `tpl-sidenote-note-${portal.dataset.tplSnIndex || 'unknown'}`
+    portal.setAttribute('role', 'note')
+    portal.setAttribute('aria-label', `Sidenote ${portal.dataset.tplSnIndex || ''}`.trim())
     portal.setAttribute('contenteditable', 'false')
 
     const body = document.createElement('span')
@@ -605,6 +675,15 @@ export default class SidenotePlugin extends Plugin {
 
     const parsed = Number.parseFloat(getComputedStyle(this.writeEl).getPropertyValue(name).trim())
     return Number.isFinite(parsed) ? parsed : fallback
+  }
+
+  private canUseMarginSidenotes(): boolean {
+    if (!this.writeEl) return false
+    return canFitEditorReserve(
+      measureVisibleEditorHostWidth(this.writeEl),
+      this.parseCssLength('--tpl-sidenote-reserve', FALLBACK_SIDENOTE_RESERVE),
+      MIN_MARGIN_PROSE_WIDTH,
+    )
   }
 }
 
@@ -776,76 +855,75 @@ const EDITOR_CSS = /* css */ `
   content: none;
 }
 
-/* Desktop: float into right margin */
-@media (min-width: 1200px) {
-#write.tpl-has-sidenotes {
+/* Margin mode is derived from the visible editor host, including sidebar width. */
+#write.tpl-has-sidenotes.tpl-sidenotes-margin {
   padding-right: var(--tpl-sidenote-reserve, 300px);
 }
 
 /* Typora sets #write pre { width: inherit }, which causes code blocks to
    overflow into the sidenote padding-right reserve. Reset to normal block
    flow so .md-fences fills only the content-box of #write. */
-#write.tpl-has-sidenotes .md-fences {
+#write.tpl-has-sidenotes.tpl-sidenotes-margin .md-fences {
   width: auto;
 }
-  #tpl-sidenote-portal-layer {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 0;
-    height: 0;
-    overflow: visible;
-    pointer-events: none;
-    z-index: 3;
-  }
 
-  .md-html-inline.tpl-sidenote {
-    display: none;
-  }
-  /* When editing the paragraph, pull sidenote back inline */
-  .md-focus .md-html-inline.tpl-sidenote {
-    display: inline;
-    width: auto;
-    margin-right: 0;
-    margin-bottom: 0;
-    border-left: none;
-    padding-left: 0;
-  }
-
-  .tpl-sidenote-portal {
-    position: absolute;
-    top: 0;
-    width: var(--tpl-sidenote-width, 250px);
-    font-size: 0.82rem;
-    line-height: 1.45;
-    color: var(--quote-text-color, #625950);
-    border-left: 2px solid var(--border-color, #ddd5ca);
-    padding-left: 10px;
-    margin: 0;
-    pointer-events: none;
-    box-sizing: border-box;
-    background: transparent;
-  }
-
-  .tpl-sidenote-portal::before {
-    content: attr(data-tpl-sn-index) ". ";
-    font-weight: 600;
-    color: var(--accent-color, #bc6a3a);
-    font-size: 0.78rem;
-  }
+#tpl-sidenote-portal-layer {
+  display: none;
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 3;
 }
 
-/* Narrow screens: inline callout */
-@media (max-width: 1199px) {
-  .md-html-inline.tpl-sidenote {
-    padding: 0.1em 0.4em;
-    background: var(--quote-bg-color, #f3ede5);
-    border-radius: 4px;
-    margin: 0 2px;
-  }
+#tpl-sidenote-portal-layer.tpl-sidenote-margin-layer {
+  display: block;
+}
 
-  #tpl-sidenote-portal-layer {
-    display: none;
-  }
+#write.tpl-sidenotes-margin .md-html-inline.tpl-sidenote {
+  display: none;
+}
+
+/* When editing the paragraph, pull sidenote back inline. */
+#write.tpl-sidenotes-margin .md-focus .md-html-inline.tpl-sidenote {
+  display: inline;
+  width: auto;
+  margin-right: 0;
+  margin-bottom: 0;
+  border-left: none;
+  padding-left: 0;
+}
+
+.tpl-sidenote-portal {
+  position: absolute;
+  top: 0;
+  width: var(--tpl-sidenote-width, 250px);
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--quote-text-color, #625950);
+  border-left: 2px solid var(--border-color, #ddd5ca);
+  padding-left: 10px;
+  margin: 0;
+  pointer-events: none;
+  box-sizing: border-box;
+  background: transparent;
+}
+
+.tpl-sidenote-portal::before {
+  content: attr(data-tpl-sn-index) ". ";
+  font-weight: 600;
+  color: var(--accent-color, #bc6a3a);
+  font-size: 0.78rem;
+}
+
+/* Inline mode when prose plus one margin reserve cannot fit. */
+#write:not(.tpl-sidenotes-margin) .md-html-inline.tpl-sidenote {
+  padding: 0.1em 0.4em;
+  background: var(--quote-bg-color, #f3ede5);
+  border-radius: 4px;
+  margin: 0 2px;
 }
 `

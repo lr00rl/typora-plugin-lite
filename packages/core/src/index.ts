@@ -10,6 +10,14 @@ import { EventBus } from './plugin/events.js'
 import { editor } from './editor/api.js'
 import { HotkeyManager } from './hotkey/manager.js'
 import { PluginCenterPanel } from './ui/plugin-center.js'
+import {
+  calculateEditorShellGutter,
+  canFitEditorReserve,
+  findActiveWritingArea,
+  getEditorHost,
+  measureVisibleEditorHostWidth,
+  observeEditorHostResize,
+} from './ui/editor-surface.js'
 import { CommandRegistry } from './command/registry.js'
 import {
   CODEBLOCK_MARKER_CSS,
@@ -22,6 +30,14 @@ import {
 } from './codeblock/whitespace.js'
 
 export { IS_MAC, IS_NODE, platform, Plugin, PluginManager, PluginSettings, EventBus, editor, HotkeyManager, PluginCenterPanel, CommandRegistry }
+export {
+  calculateEditorShellGutter,
+  canFitEditorReserve,
+  findActiveWritingArea,
+  getEditorHost,
+  measureVisibleEditorHostWidth,
+  observeEditorHostResize,
+}
 export {
   splitWhitespace,
   indentColumns,
@@ -137,6 +153,8 @@ const coreExports = {
   EventBus, editor, HotkeyManager, CommandRegistry, getApp, bootstrap,
   splitWhitespace, indentColumns, indentGuideColumns, indentGuideBackground,
   CODEBLOCK_MARKER_CSS, detectIndentUnit, guideColumnsPerLine,
+  calculateEditorShellGutter, canFitEditorReserve, findActiveWritingArea, getEditorHost,
+  measureVisibleEditorHostWidth, observeEditorHostResize,
 }
 ;(window as any).__tpl = {
   ...((window as any).__tpl || {}),

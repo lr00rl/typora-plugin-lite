@@ -1,8 +1,13 @@
+import {
+  calculateEditorShellGutter,
+  canFitEditorReserve,
+} from '../../../packages/core/src/ui/editor-surface.js'
+
 export type WiderMode = 'default' | 'wide' | 'full'
 
 export interface WiderLayoutInput {
   mode: WiderMode
-  viewportWidth: number
+  hostWidth: number
   sidenoteReserve: number
 }
 
@@ -20,16 +25,19 @@ const FULL_MAX_CONTENT_WIDTH = 1680
 const MIN_CONTENT_WIDTH = 560
 
 /**
- * Resolve the three editor widths against the actual window rather than a
+ * Resolve the three editor widths against the visible editor host rather than a
  * device label. Default remains a focused reading column, Wide scales within
  * a bounded technical-document range, and Full consumes remaining space up
  * to a desktop-safe cap. Sidenotes occupy shell width, never prose width.
  */
 export function calculateWiderLayout(input: WiderLayoutInput): WiderLayout {
-  const viewportWidth = Math.max(0, input.viewportWidth)
-  const sidenoteReserve = Math.max(0, input.sidenoteReserve)
-  const shellGutter = calcViewportGutter(viewportWidth)
-  const availableShellWidth = Math.max(0, viewportWidth - (shellGutter * 2))
+  const hostWidth = Math.max(0, input.hostWidth)
+  const requestedReserve = Math.max(0, input.sidenoteReserve)
+  const sidenoteReserve = canFitEditorReserve(hostWidth, requestedReserve, DEFAULT_CONTENT_WIDTH)
+    ? requestedReserve
+    : 0
+  const shellGutter = calculateEditorShellGutter(hostWidth)
+  const availableShellWidth = Math.max(0, hostWidth - (shellGutter * 2))
   const availableContentWidth = Math.max(0, availableShellWidth - sidenoteReserve)
   const safeContentFloor = Math.min(MIN_CONTENT_WIDTH, availableContentWidth)
 
@@ -58,11 +66,6 @@ export function calculateWiderLayout(input: WiderLayoutInput): WiderLayout {
     contentWidth,
     maxWidth,
   }
-}
-
-function calcViewportGutter(viewportWidth: number): number {
-  if (viewportWidth < 1024) return 16
-  return clamp(Math.round(viewportWidth * 0.04), 24, 72)
 }
 
 function clamp(value: number, min: number, max: number): number {

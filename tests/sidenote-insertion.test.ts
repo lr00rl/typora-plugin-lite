@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { Window } from 'happy-dom'
 
 import { formatSidenoteInsertion } from '../plugins/sidenote/src/insertion.ts'
 
@@ -32,16 +33,20 @@ test('creates an empty sidenote span when there is no selection', () => {
 })
 
 test('registers add command even when the write element is not ready', async () => {
-  const originalWindow = globalThis.window
-  const originalDocument = globalThis.document
-  Object.defineProperty(globalThis, 'window', {
-    value: {},
-    configurable: true,
-  })
-  Object.defineProperty(globalThis, 'document', {
-    value: { getElementById: () => null },
-    configurable: true,
-  })
+  const dom = new Window()
+  const saved = new Map<string, PropertyDescriptor | undefined>()
+  for (const name of [
+    'window', 'document', 'Node', 'HTMLElement', 'MutationObserver', 'ResizeObserver',
+    'getComputedStyle', 'requestAnimationFrame', 'cancelAnimationFrame',
+  ]) {
+    saved.set(name, Object.getOwnPropertyDescriptor(globalThis, name))
+    const value = name === 'window'
+      ? dom
+      : name === 'document'
+        ? dom.document
+        : (dom as any)[name]
+    Object.defineProperty(globalThis, name, { value, configurable: true, writable: true })
+  }
 
   const { default: SidenotePlugin } = await import('../plugins/sidenote/src/main.ts')
   const emitted: Array<{ event: string, payload: any }> = []
@@ -53,11 +58,14 @@ test('registers add command even when the write element is not ready', async () 
       emit: (event: string, payload: any) => {
         emitted.push({ event, payload })
       },
+      on: () => {},
+      off: () => {},
     },
     hotkeys: {
       register: (key: string, callback: () => void) => {
         hotkeys.push({ key, callback })
       },
+      unregister: () => {},
     },
     platform: {},
   }
@@ -65,22 +73,20 @@ test('registers add command even when the write element is not ready', async () 
   try {
     plugin.onload()
   } finally {
-    Object.defineProperty(globalThis, 'window', {
-      value: originalWindow,
-      configurable: true,
-    })
-    Object.defineProperty(globalThis, 'document', {
-      value: originalDocument,
-      configurable: true,
-    })
+    plugin._destroy()
+    for (const [name, descriptor] of saved) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor)
+      else delete (globalThis as Record<string, unknown>)[name]
+    }
+    dom.close()
   }
 
-  assert.equal(emitted.length, 1)
-  assert.equal(emitted[0]?.event, 'command:register')
-  assert.equal(emitted[0]?.payload.id, 'sidenote:add')
-  assert.equal(emitted[0]?.payload.name, 'Sidenote: Add from Selection')
-  assert.equal(emitted[0]?.payload.pluginId, 'sidenote')
-  assert.equal(typeof emitted[0]?.payload.callback, 'function')
+  const registration = emitted.find(item => item.event === 'command:register')
+  assert.ok(registration)
+  assert.equal(registration.payload.id, 'sidenote:add')
+  assert.equal(registration.payload.name, 'Sidenote: Add from Selection')
+  assert.equal(registration.payload.pluginId, 'sidenote')
+  assert.equal(typeof registration.payload.callback, 'function')
   assert.equal(hotkeys.length, 1)
   assert.equal(hotkeys[0]?.key, 'Mod+Alt+S')
   assert.equal(typeof hotkeys[0]?.callback, 'function')
