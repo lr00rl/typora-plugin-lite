@@ -34,11 +34,15 @@ export interface RenderContext<T extends Record<string, unknown>> {
   /** Live settings instance (loaded) or a detached one backed by defaults. */
   settings: PluginSettings<T>
   schema: SettingsSchema<T>
+  /** Stable manifest id used for control ids; falls back to pluginName for direct callers. */
+  pluginId?: string
   pluginName: string
   pluginVersion: string
   pluginDescription?: string
   /** If false, renders a "Plugin is disabled — changes apply on next enable" banner. */
   isLoaded: boolean
+  /** Persistent user intent; an enabled lazy plugin may still be runtime-idle. */
+  isEnabled?: boolean
   /** Hook fired after every successful save (debounced). Optional. */
   onFieldSaved?: (key: string, value: unknown) => void
 }
@@ -48,19 +52,35 @@ export interface RenderContext<T extends Record<string, unknown>> {
 // walks them. WeakMap prevents leaks if the caller forgets to destroy.
 
 const cleanups = new WeakMap<HTMLElement, Array<() => void>>()
+const flushers = new WeakMap<HTMLElement, Array<() => Promise<void>>>()
 function registerCleanup(root: HTMLElement, fn: () => void): void {
   let list = cleanups.get(root)
   if (!list) { list = []; cleanups.set(root, list) }
   list.push(fn)
 }
 
+function registerFlusher(root: HTMLElement, fn: () => Promise<void>): void {
+  let list = flushers.get(root)
+  if (!list) { list = []; flushers.set(root, list) }
+  list.push(fn)
+}
+
+export async function flushRender(root: HTMLElement): Promise<void> {
+  const list = flushers.get(root) ?? []
+  await Promise.all(list.map(flush => flush()))
+}
+
 export function destroyRender(root: HTMLElement): void {
+  void flushRender(root).catch(err => {
+    console.error('[tpl:settings] failed to flush pending settings while closing the form:', err)
+  })
   const list = cleanups.get(root)
   if (!list) return
   for (const fn of list) {
     try { fn() } catch { /* swallow, teardown must not throw */ }
   }
   cleanups.delete(root)
+  flushers.delete(root)
 }
 
 // ---- Save orchestration -------------------------------------------------
@@ -70,6 +90,10 @@ interface FieldStatusApi {
   setSaved(): void
   setError(message: string | null): void
   setIdle(): void
+}
+
+function safeIdPart(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'setting'
 }
 
 /**
@@ -85,37 +109,76 @@ function makeSaver<T extends Record<string, unknown>>(
 ): (raw: T[keyof T]) => void {
   let debounceTimer: number | null = null
   let savedTimer: number | null = null
+  let revision = 0
+  let destroyed = false
+  let pending: { raw: T[keyof T]; revision: number } | null = null
+  const inFlight = new Set<Promise<void>>()
 
-  const clearTimers = () => {
-    if (debounceTimer !== null) { window.clearTimeout(debounceTimer); debounceTimer = null }
-    if (savedTimer !== null) { window.clearTimeout(savedTimer); savedTimer = null }
+  const persist = async (entry: { raw: T[keyof T]; revision: number }): Promise<void> => {
+    try {
+      ctx.settings.set(key, entry.raw)
+      await ctx.settings.save()
+      ctx.onFieldSaved?.(String(key), entry.raw)
+      if (destroyed || entry.revision !== revision) return
+      status.setSaved()
+      savedTimer = window.setTimeout(() => {
+        if (!destroyed && entry.revision === revision) status.setIdle()
+        savedTimer = null
+      }, SAVE_CONFIRM_MS)
+    } catch (err) {
+      if (!destroyed && entry.revision === revision) {
+        status.setError(err instanceof Error ? err.message : 'Save failed')
+      }
+      throw err
+    }
   }
-  registerCleanup(root, clearTimers)
+
+  const startPersist = (entry: { raw: T[keyof T]; revision: number }): Promise<void> => {
+    const run = persist(entry)
+    inFlight.add(run)
+    void run.then(
+      () => { inFlight.delete(run) },
+      () => { inFlight.delete(run) },
+    )
+    return run
+  }
+
+  const flushPending = async (): Promise<void> => {
+    if (debounceTimer !== null) {
+      window.clearTimeout(debounceTimer)
+      debounceTimer = null
+    }
+    const entry = pending
+    pending = null
+    if (entry) startPersist(entry)
+    await Promise.all([...inFlight])
+  }
+
+  registerFlusher(root, flushPending)
+
+  registerCleanup(root, () => {
+    destroyed = true
+    if (savedTimer !== null) { window.clearTimeout(savedTimer); savedTimer = null }
+  })
 
   return (raw: T[keyof T]) => {
+    revision += 1
     const err = runValidator(field, raw)
     if (err != null) {
+      pending = null
+      if (debounceTimer !== null) { window.clearTimeout(debounceTimer); debounceTimer = null }
       status.setError(err)
       return
     }
     status.setError(null)
     status.setSaving()
     if (debounceTimer !== null) window.clearTimeout(debounceTimer)
-
-    debounceTimer = window.setTimeout(async () => {
-      debounceTimer = null
-      try {
-        ctx.settings.set(key, raw)
-        await ctx.settings.save()
-        ctx.onFieldSaved?.(String(key), raw)
-        status.setSaved()
-        savedTimer = window.setTimeout(() => {
-          status.setIdle()
-          savedTimer = null
-        }, SAVE_CONFIRM_MS)
-      } catch (err) {
-        status.setError(err instanceof Error ? err.message : 'Save failed')
-      }
+    if (savedTimer !== null) { window.clearTimeout(savedTimer); savedTimer = null }
+    pending = { raw, revision }
+    debounceTimer = window.setTimeout(() => {
+      void flushPending().catch(err => {
+        console.error(`[tpl:settings] failed to save "${String(key)}":`, err)
+      })
     }, SAVE_DEBOUNCE_MS)
   }
 }
@@ -136,7 +199,10 @@ function runValidator(field: FieldDescriptor, raw: unknown): string | null {
 function makeField(
   field: FieldDescriptor,
   control: HTMLElement,
+  pluginName: string,
+  key: string,
 ): { wrapper: HTMLElement; status: FieldStatusApi } {
+  const baseId = `tpl-setting-${safeIdPart(pluginName)}-${safeIdPart(key)}`
   const wrapper = document.createElement('div')
   wrapper.className = `${CLS}field${field.advanced ? ` ${CLS}field-advanced` : ''}`
 
@@ -144,9 +210,13 @@ function makeField(
   header.className = `${CLS}field-header`
   const label = document.createElement('label')
   label.className = `${CLS}field-label`
+  label.id = `${baseId}-label`
   label.textContent = field.label
   const statusSlot = document.createElement('span')
   statusSlot.className = `${CLS}field-status`
+  statusSlot.id = `${baseId}-status`
+  statusSlot.setAttribute('role', 'status')
+  statusSlot.setAttribute('aria-live', 'polite')
   header.appendChild(label)
   header.appendChild(statusSlot)
   wrapper.appendChild(header)
@@ -154,6 +224,7 @@ function makeField(
   if (field.description) {
     const desc = document.createElement('div')
     desc.className = `${CLS}field-desc`
+    desc.id = `${baseId}-description`
     desc.textContent = field.description
     wrapper.appendChild(desc)
   }
@@ -165,16 +236,35 @@ function makeField(
 
   const errorEl = document.createElement('div')
   errorEl.className = `${CLS}field-error`
-  errorEl.setAttribute('aria-live', 'polite')
+  errorEl.id = `${baseId}-error`
+  errorEl.setAttribute('aria-live', 'assertive')
   wrapper.appendChild(errorEl)
 
+  const primary = control.matches('[data-setting-control]')
+    ? control
+    : control.querySelector<HTMLElement>('[data-setting-control]')
+  if (primary) {
+    primary.id = baseId
+    primary.setAttribute('name', key)
+    primary.setAttribute('aria-labelledby', label.id)
+    const describedBy = [
+      field.description ? `${baseId}-description` : null,
+      statusSlot.id,
+      errorEl.id,
+    ].filter(Boolean).join(' ')
+    primary.setAttribute('aria-describedby', describedBy)
+    primary.setAttribute('aria-errormessage', errorEl.id)
+    if (primary.matches('input, select, button')) label.htmlFor = primary.id
+  }
+
   const status: FieldStatusApi = {
-    setSaving() { statusSlot.textContent = '\u25d0'; statusSlot.className = `${CLS}field-status ${CLS}saving` },
-    setSaved()  { statusSlot.textContent = '\u2713'; statusSlot.className = `${CLS}field-status ${CLS}saved` },
+    setSaving() { statusSlot.textContent = 'Saving…'; statusSlot.className = `${CLS}field-status ${CLS}saving` },
+    setSaved()  { statusSlot.textContent = 'Saved'; statusSlot.className = `${CLS}field-status ${CLS}saved` },
     setIdle()   { statusSlot.textContent = ''; statusSlot.className = `${CLS}field-status` },
     setError(msg) {
       errorEl.textContent = msg ?? ''
       errorEl.style.display = msg ? 'block' : 'none'
+      if (primary) primary.setAttribute('aria-invalid', String(!!msg))
       if (msg) statusSlot.className = `${CLS}field-status ${CLS}error`
       else if (!statusSlot.textContent) statusSlot.className = `${CLS}field-status`
     },
@@ -204,12 +294,13 @@ function buildToggle<T extends Record<string, unknown>>(
   const btn = document.createElement('button')
   btn.type = 'button'
   btn.setAttribute('role', 'switch')
+  btn.dataset.settingControl = ''
   btn.className = `${CLS}toggle${field.dangerous ? ` ${CLS}toggle-dangerous` : ''}`
   const knob = document.createElement('span')
   knob.className = `${CLS}toggle-knob`
   btn.appendChild(knob)
 
-  const { wrapper, status } = makeField(field, btn)
+  const { wrapper, status } = makeField(field, btn, ctx.pluginId ?? ctx.pluginName, String(key))
   const save = makeSaver(root, ctx, key, field, status)
 
   const v0 = !!ctx.settings.get(key)
@@ -238,13 +329,14 @@ function buildString<T extends Record<string, unknown>>(
 ): HTMLElement {
   const input = document.createElement('input')
   input.type = 'text'
+  input.dataset.settingControl = ''
   const mono = field.kind === 'path' || (field.kind === 'string' && field.monospace)
   input.className = `${CLS}input${mono ? ` ${CLS}input-mono` : ''}`
   if (field.placeholder) input.placeholder = field.placeholder
   input.value = String(ctx.settings.get(key) ?? '')
 
   const prefix = field.kind === 'path' ? '\u{1F4C1}' : null // 📁
-  const { wrapper, status } = makeField(field, wrapControl(input, prefix))
+  const { wrapper, status } = makeField(field, wrapControl(input, prefix), ctx.pluginId ?? ctx.pluginName, String(key))
   const save = makeSaver(root, ctx, key, field, status)
 
   input.addEventListener('input', () => save(input.value as T[keyof T]))
@@ -258,6 +350,7 @@ function buildNumber<T extends Record<string, unknown>>(
 ): HTMLElement {
   const input = document.createElement('input')
   input.type = 'number'
+  input.dataset.settingControl = ''
   input.className = `${CLS}input`
   if (field.min != null) input.min = String(field.min)
   if (field.max != null) input.max = String(field.max)
@@ -266,7 +359,7 @@ function buildNumber<T extends Record<string, unknown>>(
   const initial = ctx.settings.get(key)
   input.value = initial != null ? String(initial) : ''
 
-  const { wrapper, status } = makeField(field, input)
+  const { wrapper, status } = makeField(field, input, ctx.pluginId ?? ctx.pluginName, String(key))
   const save = makeSaver(root, ctx, key, field, status)
 
   const commit = () => {
@@ -291,10 +384,13 @@ function buildEnum<T extends Record<string, unknown>>(
   if (useSegmented) {
     const control = document.createElement('div')
     control.className = `${CLS}segmented`
+    control.dataset.settingControl = ''
+    control.setAttribute('role', 'group')
     const btns = field.options.map(opt => {
       const b = document.createElement('button')
       b.type = 'button'
       b.className = `${CLS}segmented-opt`
+      b.name = String(key)
       b.dataset.value = opt.value
       b.textContent = opt.label
       if (opt.hint) b.title = opt.hint
@@ -308,7 +404,7 @@ function buildEnum<T extends Record<string, unknown>>(
         b.classList.toggle(`${CLS}segmented-opt-active`, active)
       }
     }
-    const { wrapper, status } = makeField(field, control)
+    const { wrapper, status } = makeField(field, control, ctx.pluginId ?? ctx.pluginName, String(key))
     const save = makeSaver(root, ctx, key, field, status)
     apply(String(ctx.settings.get(key) ?? ''))
     for (const b of btns) {
@@ -323,6 +419,7 @@ function buildEnum<T extends Record<string, unknown>>(
 
   const select = document.createElement('select')
   select.className = `${CLS}select`
+  select.dataset.settingControl = ''
   for (const opt of field.options) {
     const o = document.createElement('option')
     o.value = opt.value
@@ -332,7 +429,7 @@ function buildEnum<T extends Record<string, unknown>>(
   }
   select.value = String(ctx.settings.get(key) ?? '')
 
-  const { wrapper, status } = makeField(field, select)
+  const { wrapper, status } = makeField(field, select, ctx.pluginId ?? ctx.pluginName, String(key))
   const save = makeSaver(root, ctx, key, field, status)
   select.addEventListener('change', () => save(select.value as T[keyof T]))
   return wrapper
@@ -346,6 +443,7 @@ function buildSecret<T extends Record<string, unknown>>(
 
   const input = document.createElement('input')
   input.type = 'password'
+  input.dataset.settingControl = ''
   input.readOnly = true
   input.className = `${CLS}input ${CLS}input-mono`
   // NEVER write the raw value to the DOM before Reveal.
@@ -410,7 +508,7 @@ function buildSecret<T extends Record<string, unknown>>(
   wrap.appendChild(input)
   wrap.appendChild(actions)
 
-  const { wrapper, status } = makeField(field, wrap)
+  const { wrapper, status } = makeField(field, wrap, ctx.pluginId ?? ctx.pluginName, String(key))
   const save = makeSaver(root, ctx, key, field, status)
 
   if (field.regenerate) {
@@ -465,10 +563,15 @@ export function renderSettings<T extends Record<string, unknown>>(
   }
   root.appendChild(header)
 
-  if (!ctx.isLoaded) {
+  if (ctx.isEnabled === false) {
     const banner = document.createElement('div')
     banner.className = `${CLS}banner`
     banner.textContent = 'Plugin is disabled — changes will apply on next enable.'
+    root.appendChild(banner)
+  } else if (!ctx.isLoaded) {
+    const banner = document.createElement('div')
+    banner.className = `${CLS}banner`
+    banner.textContent = 'Plugin is enabled and will load when its trigger runs.'
     root.appendChild(banner)
   }
 

@@ -84,6 +84,7 @@ function makeSettings(overrides: Partial<TestShape> = {}): PluginSettings<TestSh
 const baseCtx = (schema: SettingsSchema<TestShape>, settings = makeSettings()) => ({
   settings,
   schema,
+  pluginId: 'test-plugin',
   pluginName: 'Test Plugin',
   pluginVersion: '1.0.0',
   pluginDescription: 'A stub for tests',
@@ -114,6 +115,53 @@ test('toggle field renders and flips aria-checked on click', () => {
 
   btn.dispatchEvent(new (globalThis as any).Event('click', { bubbles: true }))
   assert.equal(btn.getAttribute('aria-checked'), 'true')
+  destroyRender(root)
+})
+
+test('settings controls have stable names and announced label, description, status, and error', () => {
+  const root = renderSettings(baseCtx({
+    fields: {
+      host: {
+        kind: 'string',
+        label: 'Host address',
+        description: 'The interface to bind.',
+        validate: value => value ? null : 'Host is required',
+      },
+      enabled: { kind: 'toggle', label: 'Enabled' },
+    },
+  }))
+
+  const input = root.querySelector<HTMLInputElement>('.tpl-pc-input')!
+  const label = root.querySelector<HTMLLabelElement>('.tpl-pc-field-label')!
+  const describedBy = (input.getAttribute('aria-describedby') ?? '').split(/\s+/)
+  assert.equal(input.id, 'tpl-setting-test-plugin-host')
+  assert.equal(input.name, 'host')
+  assert.equal(label.htmlFor, input.id)
+  assert.ok(describedBy.includes('tpl-setting-test-plugin-host-description'))
+  assert.ok(describedBy.includes('tpl-setting-test-plugin-host-status'))
+  assert.ok(describedBy.includes('tpl-setting-test-plugin-host-error'))
+  assert.equal(root.querySelector('#tpl-setting-test-plugin-host-status')?.getAttribute('role'), 'status')
+  assert.equal(root.querySelector('#tpl-setting-test-plugin-host-error')?.getAttribute('aria-live'), 'assertive')
+
+  const toggle = root.querySelector<HTMLButtonElement>('.tpl-pc-toggle')!
+  assert.equal(toggle.id, 'tpl-setting-test-plugin-enabled')
+  assert.equal(toggle.name, 'enabled')
+  assert.equal(toggle.getAttribute('aria-labelledby'), 'tpl-setting-test-plugin-enabled-label')
+  destroyRender(root)
+})
+
+test('validation errors are associated with the invalid control', () => {
+  const root = renderSettings(baseCtx({
+    fields: {
+      host: { kind: 'string', label: 'Host', validate: value => value ? null : 'Host is required' },
+    },
+  }))
+  const input = root.querySelector<HTMLInputElement>('.tpl-pc-input')!
+  input.value = ''
+  input.dispatchEvent(new (globalThis as any).Event('input', { bubbles: true }))
+
+  assert.equal(input.getAttribute('aria-invalid'), 'true')
+  assert.equal(root.querySelector('.tpl-pc-field-error')?.textContent, 'Host is required')
   destroyRender(root)
 })
 
@@ -228,6 +276,7 @@ test('banner renders when plugin is not loaded', () => {
   const root = renderSettings({
     ...baseCtx({ fields: { enabled: { kind: 'toggle', label: 'x' } } }),
     isLoaded: false,
+    isEnabled: false,
   })
   const banner = root.querySelector('.tpl-pc-banner')
   assert.ok(banner)
@@ -235,7 +284,7 @@ test('banner renders when plugin is not loaded', () => {
   destroyRender(root)
 })
 
-test('destroyRender clears pending save timers (no crash after timers would have fired)', async () => {
+test('destroyRender flushes the last valid pending value before removing the form', async () => {
   const settings = makeSettings()
   let saveCalls = 0
   const origSave = settings.save.bind(settings)
@@ -249,7 +298,35 @@ test('destroyRender clears pending save timers (no crash after timers would have
   input.dispatchEvent(new (globalThis as any).Event('input', { bubbles: true }))
 
   destroyRender(root)
-  await new Promise(r => setTimeout(r, 600))
+  await new Promise(r => setTimeout(r, 50))
 
-  assert.equal(saveCalls, 0, 'save must not fire after destroy clears the timer')
+  assert.equal(saveCalls, 1, 'leaving the detail view must persist the pending edit')
+  assert.equal(settings.get('host'), 'new-host')
+})
+
+test('an older in-flight save cannot announce Saved for a newer edit', async () => {
+  const settings = makeSettings()
+  const releases: Array<() => void> = []
+  settings.save = () => new Promise<void>(resolve => { releases.push(resolve) })
+  const root = renderSettings(baseCtx({
+    fields: { host: { kind: 'string', label: 'Host' } },
+  }, settings))
+  const input = root.querySelector<HTMLInputElement>('.tpl-pc-input')!
+  const status = root.querySelector<HTMLElement>('.tpl-pc-field-status')!
+
+  input.value = 'first'
+  input.dispatchEvent(new Event('input', { bubbles: true }))
+  await new Promise(resolve => setTimeout(resolve, 450))
+  input.value = 'second'
+  input.dispatchEvent(new Event('input', { bubbles: true }))
+  await new Promise(resolve => setTimeout(resolve, 450))
+  assert.equal(releases.length, 2)
+
+  releases[0]!()
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.equal(status.textContent, 'Saving…')
+  releases[1]!()
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.equal(status.textContent, 'Saved')
+  destroyRender(root)
 })

@@ -13,6 +13,7 @@ export class PluginSettings<T extends Record<string, unknown> = Record<string, u
   private data: T
   private filePath: string
   private changeHandlers: Set<SettingsChangeHandler<T>> = new Set()
+  private saveQueue: Promise<void> = Promise.resolve()
 
   constructor(
     private pluginId: string,
@@ -42,10 +43,15 @@ export class PluginSettings<T extends Record<string, unknown> = Record<string, u
     }
   }
 
-  async save(): Promise<void> {
-    const dir = this.platform.path.dirname(this.filePath)
-    await this.platform.fs.mkdir(dir)
-    await this.platform.fs.writeText(this.filePath, JSON.stringify(this.data, null, 2))
+  save(): Promise<void> {
+    const snapshot = JSON.stringify(this.data, null, 2)
+    const run = this.saveQueue.catch(() => {}).then(async () => {
+      const dir = this.platform.path.dirname(this.filePath)
+      await this.platform.fs.mkdir(dir)
+      await this.platform.fs.writeText(this.filePath, snapshot)
+    })
+    this.saveQueue = run
+    return run
   }
 
   get<K extends keyof T>(key: K): T[K] {
