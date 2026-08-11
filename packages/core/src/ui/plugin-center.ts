@@ -18,7 +18,7 @@ import type { SettingsSchema } from '../plugin/settings-schema.js'
 import { PluginSettings } from '../plugin/settings.js'
 import { platform } from '../platform/index.js'
 import { themeVars } from './theme.js'
-import { renderSettings, destroyRender, type RenderContext } from './plugin-settings-renderer.js'
+import { renderSettings, destroyRender, flushRender, type RenderContext } from './plugin-settings-renderer.js'
 
 const ID = 'tpl-plugin-center'
 const VERSION = '0.1.0'
@@ -41,6 +41,9 @@ export class PluginCenterPanel {
   private hotkeys: HotkeyManager
   private selectedId: string | null = null
   private currentDetailEl: HTMLElement | null = null
+  private previousFocus: HTMLElement | null = null
+  private enabling = new Set<string>()
+  private detailRenderToken = 0
 
   constructor(plugins: PluginManager, hotkeys: HotkeyManager) {
     this.plugins = plugins
@@ -57,6 +60,7 @@ export class PluginCenterPanel {
 
   open(): void {
     if (this.el) return
+    this.previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
     this.injectStyle()
 
     const manifests = this.plugins.getManifests()
@@ -71,6 +75,7 @@ export class PluginCenterPanel {
   }
 
   close(): void {
+    this.detailRenderToken += 1
     if (this.currentDetailEl) {
       destroyRender(this.currentDetailEl)
       this.currentDetailEl = null
@@ -79,6 +84,9 @@ export class PluginCenterPanel {
     this.el = null
     this.styleEl?.remove()
     this.styleEl = null
+    const focusTarget = this.previousFocus
+    this.previousFocus = null
+    if (focusTarget?.isConnected) focusTarget.focus()
   }
 
   // ---- Rendering ------------------------------------------------------
@@ -90,12 +98,16 @@ export class PluginCenterPanel {
     const panel = document.createElement('div')
     panel.className = `${ID}-panel`
     panel.tabIndex = -1
+    panel.setAttribute('role', 'dialog')
+    panel.setAttribute('aria-modal', 'true')
+    panel.setAttribute('aria-labelledby', `${ID}-title`)
 
     // Header
     const header = document.createElement('div')
     header.className = `${ID}-header`
     const titleSpan = document.createElement('span')
     titleSpan.className = `${ID}-title`
+    titleSpan.id = `${ID}-title`
     titleSpan.textContent = 'typora-plugin-lite'
     const versionSpan = document.createElement('span')
     versionSpan.className = `${ID}-version`
@@ -116,6 +128,13 @@ export class PluginCenterPanel {
     body.appendChild(listPane)
     body.appendChild(detailPane)
     panel.appendChild(body)
+
+    const statusEl = document.createElement('div')
+    statusEl.className = `${ID}-status`
+    statusEl.setAttribute('role', 'status')
+    statusEl.setAttribute('aria-live', 'polite')
+    statusEl.setAttribute('aria-atomic', 'true')
+    panel.appendChild(statusEl)
 
     // Footer
     const footer = document.createElement('div')
@@ -141,6 +160,8 @@ export class PluginCenterPanel {
 
   private renderListInto(container: HTMLElement): void {
     container.replaceChildren()
+    container.setAttribute('role', 'list')
+    container.setAttribute('aria-label', 'Plugins')
     const manifests = this.plugins.getManifests()
     if (manifests.length === 0) {
       const empty = document.createElement('div')
@@ -157,19 +178,24 @@ export class PluginCenterPanel {
 
   private makeRow(m: PluginManifest): HTMLElement {
     const loaded = this.plugins.isLoaded(m.id)
+    const enabled = this.isPluginEnabled(m.id)
     const selected = this.selectedId === m.id
 
     const row = document.createElement('div')
     row.className = `${ID}-row${selected ? ` ${ID}-row-active` : ''}`
     row.dataset.pluginId = m.id
     row.tabIndex = 0
+    row.setAttribute('role', 'listitem')
+    if (selected) row.setAttribute('aria-current', 'true')
+    row.setAttribute('aria-label', `${m.name}, ${enabled ? (loaded ? 'enabled and loaded' : 'enabled and idle') : 'disabled'}`)
 
     const main = document.createElement('div')
     main.className = `${ID}-row-main`
 
     const dot = document.createElement('span')
-    dot.className = `${ID}-dot ${ID}-dot-${loaded ? 'on' : 'off'}`
-    dot.textContent = loaded ? '\u25cf' : '\u25cb'
+    dot.className = `${ID}-dot ${ID}-dot-${loaded ? 'on' : (enabled ? 'idle' : 'off')}`
+    dot.textContent = loaded ? '\u25cf' : (enabled ? '\u25cc' : '\u25cb')
+    dot.setAttribute('aria-hidden', 'true')
 
     const name = document.createElement('span')
     name.className = `${ID}-name`
@@ -181,9 +207,16 @@ export class PluginCenterPanel {
 
     const toggle = document.createElement('button')
     toggle.type = 'button'
-    toggle.className = `${ID}-toggle ${ID}-toggle-${loaded ? 'on' : 'off'}`
+    toggle.className = `${ID}-toggle ${ID}-toggle-${enabled ? 'on' : 'off'}`
     toggle.dataset.pluginId = m.id
-    toggle.textContent = loaded ? 'ON' : 'OFF'
+    toggle.textContent = enabled ? 'ON' : 'OFF'
+    toggle.setAttribute('role', 'switch')
+    toggle.setAttribute('aria-checked', String(enabled))
+    toggle.setAttribute('aria-label', `${enabled ? 'Disable' : 'Enable'} ${m.name}`)
+    if (this.enabling.has(m.id)) {
+      toggle.disabled = true
+      toggle.setAttribute('aria-busy', 'true')
+    }
 
     main.appendChild(dot)
     main.appendChild(name)
@@ -214,6 +247,7 @@ export class PluginCenterPanel {
   }
 
   private renderDetailInto(container: HTMLElement): void {
+    const renderToken = ++this.detailRenderToken
     container.replaceChildren()
     if (this.currentDetailEl) {
       destroyRender(this.currentDetailEl)
@@ -237,10 +271,12 @@ export class PluginCenterPanel {
       const ctx: RenderContext<Record<string, unknown>> = {
         settings: new PluginSettings(manifest.id, {}, platform),
         schema: { fields: {} },
+        pluginId: manifest.id,
         pluginName: manifest.name,
         pluginVersion: manifest.version,
         pluginDescription: manifest.description,
         isLoaded: this.plugins.isLoaded(manifest.id),
+        isEnabled: this.isPluginEnabled(manifest.id),
       }
       const el = renderSettings(ctx)
       container.appendChild(el)
@@ -248,14 +284,40 @@ export class PluginCenterPanel {
       return
     }
 
-    const el = renderSettings({
-      ...resolved,
-      pluginName: manifest.name,
-      pluginVersion: manifest.version,
-      pluginDescription: manifest.description,
+    const mount = (): void => {
+      if (renderToken !== this.detailRenderToken || this.selectedId !== manifest.id) return
+      container.replaceChildren()
+      const el = renderSettings({
+        ...resolved,
+        isEnabled: this.isPluginEnabled(manifest.id),
+        pluginId: manifest.id,
+        pluginName: manifest.name,
+        pluginVersion: manifest.version,
+        pluginDescription: manifest.description,
+      })
+      container.appendChild(el)
+      this.currentDetailEl = el
+    }
+
+    if (resolved.isLoaded) {
+      mount()
+      return
+    }
+
+    const loading = document.createElement('div')
+    loading.className = `${ID}-detail-idle`
+    loading.setAttribute('role', 'status')
+    loading.textContent = 'Loading saved settings…'
+    container.appendChild(loading)
+    void resolved.settings.load().then(mount).catch(err => {
+      if (renderToken !== this.detailRenderToken || this.selectedId !== manifest.id) return
+      container.replaceChildren()
+      const error = document.createElement('div')
+      error.className = `${ID}-detail-idle ${ID}-status-error`
+      error.setAttribute('role', 'alert')
+      error.textContent = `Could not render saved settings. ${this.errorMessage(err)}`
+      container.appendChild(error)
     })
-    container.appendChild(el)
-    this.currentDetailEl = el
   }
 
   /**
@@ -311,11 +373,10 @@ export class PluginCenterPanel {
     if (toggleBtn) {
       e.stopPropagation()
       const id = toggleBtn.dataset.pluginId!
-      if (this.plugins.isLoaded(id)) {
-        this.plugins.disablePlugin(id)
-        this.refresh()
+      if (this.isPluginEnabled(id)) {
+        void this.disablePlugin(id, toggleBtn)
       } else {
-        void this.plugins.enablePlugin(id).then(() => this.refresh())
+        void this.enablePlugin(id, toggleBtn)
       }
       return
     }
@@ -333,7 +394,14 @@ export class PluginCenterPanel {
       this.close()
       return
     }
+    if (e.key === 'Tab') {
+      this.trapFocus(e)
+      return
+    }
+    const target = e.target as HTMLElement
+    const activeRow = target.matches?.(`.${ID}-row`) ? target : null
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      if (!activeRow) return
       const ids = this.plugins.getManifests().map(m => m.id)
       if (ids.length === 0) return
       const currentIdx = this.selectedId ? ids.indexOf(this.selectedId) : -1
@@ -346,11 +414,14 @@ export class PluginCenterPanel {
       row?.focus()
       return
     }
-    if (e.key === 'Enter') {
-      // If focus is on a row, jump into detail pane's first focusable
-      const activeRow = (e.target as HTMLElement)?.closest?.(`.${ID}-row`)
-      if (activeRow) {
-        e.preventDefault()
+    if ((e.key === 'Enter' || e.key === ' ') && activeRow?.dataset.pluginId) {
+      e.preventDefault()
+      const id = activeRow.dataset.pluginId
+      if (this.selectedId !== id) {
+        this.selectPlugin(id)
+        return
+      }
+      if (e.key === 'Enter') {
         const firstField = this.el?.querySelector<HTMLElement>(
           '.tpl-pc-detail input, .tpl-pc-detail select, .tpl-pc-detail button:not(.tpl-pc-btn-quiet), .tpl-pc-toggle',
         )
@@ -366,7 +437,10 @@ export class PluginCenterPanel {
     const list = this.el?.querySelector<HTMLElement>(`.${ID}-list-pane`)
     if (list) {
       for (const row of list.querySelectorAll<HTMLElement>(`.${ID}-row`)) {
-        row.classList.toggle(`${ID}-row-active`, row.dataset.pluginId === id)
+        const selected = row.dataset.pluginId === id
+        row.classList.toggle(`${ID}-row-active`, selected)
+        if (selected) row.setAttribute('aria-current', 'true')
+        else row.removeAttribute('aria-current')
       }
     }
     const detail = this.el?.querySelector<HTMLElement>(`.${ID}-detail-pane`)
@@ -379,6 +453,101 @@ export class PluginCenterPanel {
     if (list) this.renderListInto(list)
     const detail = this.el.querySelector<HTMLElement>(`.${ID}-detail-pane`)
     if (detail) this.renderDetailInto(detail)
+  }
+
+  private async enablePlugin(id: string, toggle: HTMLButtonElement): Promise<void> {
+    if (this.enabling.has(id)) return
+    const name = this.pluginName(id)
+    this.enabling.add(id)
+    toggle.disabled = true
+    toggle.setAttribute('aria-busy', 'true')
+    this.showStatus(`Enabling ${name}…`)
+    try {
+      await this.flushCurrentSettings()
+      await this.plugins.enablePlugin(id)
+      if (!this.plugins.isLoaded(id)) throw new Error('The plugin did not finish loading.')
+      this.enabling.delete(id)
+      this.refresh()
+      this.showStatus(`${name} enabled.`)
+      this.el?.querySelector<HTMLButtonElement>(`.${ID}-toggle[data-plugin-id="${esc(id)}"]`)?.focus()
+    } catch (err) {
+      this.enabling.delete(id)
+      this.refresh()
+      this.showStatus(`Could not enable ${name}. ${this.errorMessage(err)} Try again.`, true)
+      this.el?.querySelector<HTMLButtonElement>(`.${ID}-toggle[data-plugin-id="${esc(id)}"]`)?.focus()
+    }
+  }
+
+  private async disablePlugin(id: string, toggle: HTMLButtonElement): Promise<void> {
+    if (this.enabling.has(id)) return
+    const name = this.pluginName(id)
+    this.enabling.add(id)
+    toggle.disabled = true
+    toggle.setAttribute('aria-busy', 'true')
+    this.showStatus(`Disabling ${name}…`)
+    try {
+      await this.flushCurrentSettings()
+      await this.plugins.disablePlugin(id)
+      this.enabling.delete(id)
+      this.refresh()
+      this.showStatus(`${name} disabled.`)
+      this.el?.querySelector<HTMLButtonElement>(`.${ID}-toggle[data-plugin-id="${esc(id)}"]`)?.focus()
+    } catch (err) {
+      this.enabling.delete(id)
+      toggle.disabled = false
+      toggle.removeAttribute('aria-busy')
+      this.showStatus(`Could not disable ${name}. ${this.errorMessage(err)} Try again.`, true)
+    }
+  }
+
+  private async flushCurrentSettings(): Promise<void> {
+    if (!this.currentDetailEl) return
+    await flushRender(this.currentDetailEl)
+  }
+
+  private trapFocus(e: KeyboardEvent): void {
+    const panel = this.el?.querySelector<HTMLElement>(`.${ID}-panel`)
+    if (!panel) return
+    const focusable = [...panel.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex="0"]',
+    )].filter(node => node.getAttribute('aria-hidden') !== 'true')
+    if (focusable.length === 0) {
+      e.preventDefault()
+      panel.focus()
+      return
+    }
+    const first = focusable[0]
+    const last = focusable[focusable.length - 1]
+    const active = document.activeElement
+    if (e.shiftKey && (active === panel || active === first || !panel.contains(active))) {
+      e.preventDefault()
+      last.focus()
+    } else if (!e.shiftKey && (active === panel || active === last || !panel.contains(active))) {
+      e.preventDefault()
+      first.focus()
+    }
+  }
+
+  private showStatus(message: string, error = false): void {
+    const status = this.el?.querySelector<HTMLElement>(`.${ID}-status`)
+    if (!status) return
+    status.textContent = message
+    status.classList.toggle(`${ID}-status-error`, error)
+    status.setAttribute('role', error ? 'alert' : 'status')
+    status.setAttribute('aria-live', error ? 'assertive' : 'polite')
+  }
+
+  private pluginName(id: string): string {
+    return this.plugins.getManifests().find(manifest => manifest.id === id)?.name ?? id
+  }
+
+  private errorMessage(err: unknown): string {
+    return err instanceof Error && err.message ? err.message : 'An unexpected error occurred.'
+  }
+
+  private isPluginEnabled(id: string): boolean {
+    const manager = this.plugins as PluginManager & { isEnabled?: (pluginId: string) => boolean }
+    return manager.isEnabled?.(id) ?? this.plugins.isLoaded(id)
   }
 
   // ---- Meta -----------------------------------------------------------
@@ -439,16 +608,16 @@ const CSS_BASE = `
   align-items: center;
   justify-content: center;
   background: rgba(0, 0, 0, 0.4);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-family: var(--tpl-ui-font, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif);
   font-size: 13px;
   color: var(--tpl-text);
 }
 .tpl-plugin-center-panel {
   background: var(--tpl-bg);
   border: 1px solid var(--tpl-border);
-  border-radius: 12px;
-  width: min(820px, 92vw);
-  height: min(560px, 86vh);
+  border-radius: var(--tpl-ui-radius, 12px);
+  width: min(820px, calc(100vw - 32px));
+  height: min(560px, calc(100vh - 32px));
   display: flex;
   flex-direction: column;
   outline: none;
@@ -480,7 +649,41 @@ const CSS_BASE = `
   color: var(--tpl-text-muted);
   border-top: 1px solid var(--tpl-panel-split);
 }
+.tpl-plugin-center-status {
+  min-height: 18px;
+  padding: 0 18px 6px;
+  color: var(--tpl-text-muted);
+  font-size: 12px;
+}
+.tpl-plugin-center-status-error { color: var(--tpl-danger); }
 .tpl-plugin-center-hotkeys { font-family: var(--tpl-mono); }
+
+@media (max-width: 640px) {
+  #tpl-plugin-center { align-items: stretch; padding: 8px; box-sizing: border-box; }
+  .tpl-plugin-center-panel {
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    max-height: none;
+    border-radius: min(var(--tpl-ui-radius, 12px), 8px);
+  }
+  .tpl-plugin-center-body { grid-template-columns: minmax(0, 1fr); }
+  .tpl-plugin-center-list-pane {
+    max-height: min(34vh, 220px);
+    border-right: 0;
+    border-bottom: 1px solid var(--tpl-panel-split);
+  }
+  .tpl-plugin-center-detail-pane { padding: 14px 16px; }
+  .tpl-plugin-center-footer { gap: 4px; flex-direction: column; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #tpl-plugin-center *, #tpl-plugin-center *::before, #tpl-plugin-center *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
 `
 
 const CSS_LIST = `
@@ -507,6 +710,7 @@ const CSS_LIST = `
 .tpl-plugin-center-row-main { display: flex; align-items: center; gap: 8px; }
 .tpl-plugin-center-dot { font-size: 10px; width: 10px; text-align: center; }
 .tpl-plugin-center-dot-on { color: var(--tpl-toggle-on); }
+.tpl-plugin-center-dot-idle { color: var(--tpl-accent); opacity: 0.72; }
 .tpl-plugin-center-dot-off { color: var(--tpl-toggle-off); }
 .tpl-plugin-center-name { font-weight: 500; flex: 1; }
 .tpl-plugin-center-plugin-version { font-size: 11px; color: var(--tpl-text-muted); }
@@ -523,6 +727,16 @@ const CSS_LIST = `
 .tpl-plugin-center-toggle-on { background: var(--tpl-toggle-on); color: #fff; }
 .tpl-plugin-center-toggle-off { background: var(--tpl-toggle-off); color: #fff; }
 .tpl-plugin-center-toggle:hover { opacity: 0.85; }
+.tpl-plugin-center-toggle:focus-visible,
+.tpl-pc-btn:focus-visible,
+.tpl-pc-toggle:focus-visible,
+.tpl-pc-segmented-opt:focus-visible,
+.tpl-pc-input:focus-visible,
+.tpl-pc-select:focus-visible {
+  outline: 2px solid var(--tpl-accent);
+  outline-offset: 2px;
+}
+.tpl-plugin-center-toggle:disabled { cursor: progress; opacity: 0.65; }
 .tpl-plugin-center-row-meta {
   display: flex;
   flex-direction: column;
@@ -582,16 +796,15 @@ const CSS_FIELDS = `
 .tpl-pc-field-label { font-size: 13px; font-weight: 500; }
 .tpl-pc-field-status {
   font-size: 12px;
-  width: 14px;
+  min-width: 42px;
   height: 14px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
 }
-.tpl-pc-field-status.tpl-pc-saving { color: var(--tpl-text-muted); animation: tpl-pc-spin 0.8s linear infinite; }
+.tpl-pc-field-status.tpl-pc-saving { color: var(--tpl-text-muted); }
 .tpl-pc-field-status.tpl-pc-saved  { color: var(--tpl-success); }
 .tpl-pc-field-status.tpl-pc-error  { color: var(--tpl-danger); }
-@keyframes tpl-pc-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 .tpl-pc-field-desc { font-size: 12px; color: var(--tpl-text-muted); line-height: 1.4; }
 .tpl-pc-field-error { font-size: 11px; color: var(--tpl-danger); display: none; }
 .tpl-pc-field-control { display: flex; }
@@ -723,4 +936,10 @@ const CSS_FIELDS = `
 .tpl-pc-btn:hover { background: var(--tpl-hover); }
 .tpl-pc-btn-quiet { background: transparent; }
 .tpl-pc-btn-success { background: var(--tpl-success); color: #fff; border-color: var(--tpl-success); }
+
+@media (max-width: 640px) {
+  .tpl-pc-secret-wrap { flex-direction: column; align-items: stretch; min-width: 0; }
+  .tpl-pc-secret-actions { flex-wrap: wrap; }
+  .tpl-pc-secret-actions .tpl-pc-btn { flex: 1 1 auto; text-align: center; }
+}
 `
