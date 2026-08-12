@@ -76,9 +76,11 @@ The standalone `session-archive` tool recovers visible user/agent turns, tool ca
 npm run build
 node dist/tools/session-archive/index.mjs codex <session-id> -o session.md
 node dist/tools/session-archive/index.mjs claude <session-id> -o session.md
+node dist/tools/session-archive/index.mjs codex <session-id> --output-dir ~/Notes/Agents --max-file-size 4MiB
+node dist/tools/session-archive/index.mjs codex <session-id> --output-dir ~/Notes/Agents --mode answers
 ```
 
-See [tools/session-archive/README.md](./tools/session-archive/README.md) for discovery rules, failure semantics, privacy boundaries, and the companion Claude-like Session themes.
+Directory output automatically switches from one note to an indexed set of size-limited parts for long sessions. See [tools/session-archive/README.md](./tools/session-archive/README.md) for heading structure, title discovery, export modes, failure semantics, privacy boundaries, and the companion Claude-like Session themes.
 
 ---
 

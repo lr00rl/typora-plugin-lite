@@ -21,15 +21,16 @@ function string(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined
 }
 
-function textContent(value: unknown): string {
-  if (typeof value === 'string') return value
+function textContent(value: unknown, omitContextual = false): string {
+  if (typeof value === 'string') return omitContextual && isContextualUserText(value) ? '' : value
   if (!Array.isArray(value)) return ''
   return value
     .map(part => {
       const item = object(part)
       if (!item) return ''
       if (item.type === 'input_text' || item.type === 'output_text' || item.type === 'text') {
-        return string(item.text) ?? ''
+        const text = string(item.text) ?? ''
+        return omitContextual && isContextualUserText(text) ? '' : text
       }
       if (item.type === 'input_image') return '[Image attachment]'
       if (item.type === 'input_audio') return '[Audio attachment]'
@@ -59,6 +60,36 @@ function displayOutput(value: unknown): string {
   return displayValue(value)
 }
 
+function isContextualUserText(value: string): boolean {
+  const text = value.trim()
+  const enclosedFragments: Array<[string, string]> = [
+    ['# AGENTS.md instructions', '</INSTRUCTIONS>'],
+    ['<environment_context>', '</environment_context>'],
+    ['<skill>', '</skill>'],
+    ['<user_shell_command>', '</user_shell_command>'],
+    ['<turn_aborted>', '</turn_aborted>'],
+    ['<subagent_notification>', '</subagent_notification>'],
+    ['<recommended_plugins>', '</recommended_plugins>'],
+    ['<goal_context>', '</goal_context>'],
+  ]
+  if (enclosedFragments.some(([start, end]) => text.startsWith(start) && text.endsWith(end))) {
+    return true
+  }
+  if (text.startsWith('<hook_prompt') && text.endsWith('</hook_prompt>')) return true
+  if (text.startsWith('<codex_internal_context') && text.endsWith('</codex_internal_context>')) return true
+  if (text.startsWith('<external_')) {
+    const tagEnd = text.indexOf('>')
+    const tag = tagEnd > 0
+      ? text.slice('<external_'.length, tagEnd).split(/\s/, 1)[0]
+      : undefined
+    if (tag && text.endsWith(`</external_${tag}>`)) return true
+  }
+  return text.startsWith('Warning: The maximum number of unified exec processes you can keep open is')
+    || (text.startsWith('Warning: apply_patch was requested via ')
+      && text.endsWith('Use the apply_patch tool instead of exec_command.'))
+    || text.startsWith('Warning: Your account was flagged for potentially high-risk cyber activity')
+}
+
 function responseItemEvent(
   payload: JsonObject,
   timestamp: string | undefined,
@@ -70,7 +101,7 @@ function responseItemEvent(
   if (type === 'message') {
     const role = string(payload.role)
     if (role !== 'user' && role !== 'assistant') return undefined
-    const body = textContent(payload.content)
+    const body = textContent(payload.content, role === 'user')
     if (!body.trim()) return undefined
     return {
       id,

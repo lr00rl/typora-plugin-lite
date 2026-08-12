@@ -22,6 +22,11 @@ interface ClaudeNode {
   value: JsonObject
 }
 
+interface ClaudeFileData {
+  nodes: Map<string, ClaudeNode>
+  title?: string
+}
+
 function object(value: unknown): JsonObject | undefined {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? value as JsonObject
@@ -198,12 +203,25 @@ function eventsForChain(chain: ClaudeNode[], prefix: string): ArchiveEvent[] {
 async function readClaudeFile(
   source: SourceFile,
   diagnostics: ArchiveDiagnostic[],
-): Promise<Map<string, ClaudeNode>> {
+): Promise<ClaudeFileData> {
   const nodes = new Map<string, ClaudeNode>()
+  let customTitle: string | undefined
+  let aiTitle: string | undefined
   let index = 0
   const issues = await visitStableJsonl(source.path, record => {
     const value = object(record.value)
-    if (!value || (value.type !== 'user' && value.type !== 'assistant')) return
+    if (!value) return
+    if (value.type === 'custom-title') {
+      const title = string(value.customTitle)?.trim()
+      if (title) customTitle = title
+      return
+    }
+    if (value.type === 'ai-title') {
+      const title = string(value.aiTitle)?.trim()
+      if (title) aiTitle = title
+      return
+    }
+    if (value.type !== 'user' && value.type !== 'assistant') return
     const uuid = string(value.uuid)
     if (!uuid) return
     nodes.set(uuid, {
@@ -223,7 +241,7 @@ async function readClaudeFile(
       message: `${basename(source.path)}:${issue.line} was skipped`,
     })
   }
-  return nodes
+  return { nodes, title: customTitle ?? aiTitle }
 }
 
 export async function parseClaudeSession(
@@ -237,7 +255,8 @@ export async function parseClaudeSession(
     throw new Error(`AMBIGUOUS_SESSION: found ${mainSources.length} Claude transcripts; pass --source`)
   }
 
-  const mainNodes = await readClaudeFile(mainSources[0]!, diagnostics)
+  const mainFile = await readClaudeFile(mainSources[0]!, diagnostics)
+  const mainNodes = mainFile.nodes
   const mainCandidates = [...mainNodes.values()].filter(node => !node.isSidechain)
   const primaryTip = newest(visibleLeaves(mainNodes, false)) ?? newest(mainCandidates)
   const primaryChain = primaryTip ? chainForTip(mainNodes, primaryTip) : []
@@ -271,7 +290,7 @@ export async function parseClaudeSession(
       sidechainGroups.set(key, group)
     }
     for (const source of sources.filter(item => item.kind === 'subagent')) {
-      const nodes = await readClaudeFile(source, diagnostics)
+      const nodes = (await readClaudeFile(source, diagnostics)).nodes
       const group = [...nodes.values()]
       if (group.length > 0) sidechainGroups.set(basename(source.path, '.jsonl'), group)
     }
@@ -300,6 +319,7 @@ export async function parseClaudeSession(
   return {
     provider: 'claude',
     sessionId,
+    title: mainFile.title,
     project: string(firstValue?.cwd),
     startedAt: timestamps[0],
     endedAt: timestamps.at(-1),

@@ -1,5 +1,7 @@
 export type Provider = 'codex' | 'claude'
 
+export type ArchiveMode = 'full' | 'answers'
+
 export type ArchiveRole = 'user' | 'assistant' | 'tool' | 'attachment' | 'notice'
 
 export interface ArchiveEvent {
