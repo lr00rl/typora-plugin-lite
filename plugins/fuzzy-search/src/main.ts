@@ -165,6 +165,20 @@ function splitPath(path: string): string[] {
   return normalizePath(path).split('/').filter(Boolean)
 }
 
+function getDisplayRootLabel(path: string): string {
+  if (!path) return '未挂载工作区'
+  const parts = splitPath(path)
+  return parts[parts.length - 1] || normalizePath(path)
+}
+
+function compactHomePath(path: string): string {
+  const normalized = normalizePath(path)
+  return normalized
+    .replace(/^\/Users\/[^/]+(?=\/|$)/, '~')
+    .replace(/^\/home\/[^/]+(?=\/|$)/, '~')
+    .replace(/^[A-Za-z]:\/Users\/[^/]+(?=\/|$)/i, '~')
+}
+
 function getPathRoot(path: string): string {
   const normalized = normalizePath(path)
   const driveMatch = normalized.match(/^[A-Za-z]:/)
@@ -215,58 +229,81 @@ function escapeHtml(text: string): string {
 // ---------------------------------------------------------------------------
 const CSS = `
 #tpl-qo-overlay {
+  --tpl-qo-panel-width: 680px;
+  --tpl-qo-panel-width-wide: 920px;
   position: fixed;
   inset: 0;
-  background: rgba(0,0,0,0.45);
+  background: rgba(22, 20, 18, 0.28);
   z-index: 99998;
   display: flex;
   align-items: flex-start;
   justify-content: center;
   box-sizing: border-box;
-  padding: min(10vh, 56px) 12px 12px;
+  padding: clamp(32px, 9vh, 80px) 16px 16px;
   overflow: hidden;
 }
 #tpl-qo-modal {
   color: var(--tpl-ui-text, var(--text-color, inherit));
   background: var(--tpl-ui-surface, var(--bg-color, #fff));
   font-family: var(--tpl-ui-font, inherit);
-  border-radius: var(--tpl-ui-radius, 12px);
-  box-shadow: 0 18px 60px rgba(0,0,0,0.34), 0 2px 8px rgba(0,0,0,0.12);
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+  border-radius: max(10px, var(--tpl-ui-radius, 10px));
+  box-shadow:
+    0 0 0 1px rgba(24, 22, 20, 0.07),
+    0 2px 6px rgba(24, 22, 20, 0.08),
+    0 24px 64px rgba(24, 22, 20, 0.18);
   overflow: hidden;
   border: 1px solid var(--tpl-ui-border, var(--border-color, rgba(128,128,128,0.18)));
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
   min-width: 0;
-  max-height: calc(100vh - min(10vh, 56px) - 12px);
-  max-height: calc(100dvh - min(10vh, 56px) - 12px);
-  width: min(clamp(460px, 46vw, 720px), calc(100vw - 24px));
-  transition: width 0.16s ease;
+  max-height: calc(100vh - 48px);
+  max-height: calc(100dvh - 48px);
+  width: min(var(--tpl-qo-panel-width), calc(100vw - 32px));
+  transition-property: width;
+  transition-duration: 140ms;
+  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
 }
 #tpl-qo-modal[data-width="wide"] {
-  width: min(clamp(560px, 64vw, 1040px), calc(100vw - 24px));
+  width: min(var(--tpl-qo-panel-width-wide), calc(100vw - 32px));
 }
 #tpl-qo-input-row {
   display: flex;
   align-items: center;
-  padding: 12px 16px;
+  min-height: 56px;
+  padding: 0 16px;
   gap: 10px;
   border-bottom: 1px solid var(--tpl-ui-border, var(--border-color, rgba(128,128,128,0.15)));
   flex-shrink: 0;
+  transition-property: box-shadow;
+  transition-duration: 120ms;
+  transition-timing-function: ease-out;
+}
+#tpl-qo-input-row:focus-within {
+  box-shadow: inset 0 -2px 0 var(--tpl-ui-accent, var(--accent-color, #a85d3b));
 }
 #tpl-qo-icon {
-  font-size: 17px;
-  opacity: 0.4;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  color: var(--tpl-ui-muted, currentColor);
+  opacity: 0.78;
   flex-shrink: 0;
-  line-height: 1;
   user-select: none;
 }
+#tpl-qo-icon svg { display: block; width: 18px; height: 18px; }
 #tpl-qo-input {
   border: none !important;
   outline: none !important;
   box-shadow: none !important;
   flex: 1;
-  font-size: 15px;
+  min-height: 56px;
+  font-size: 16px;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
   background: transparent;
   color: var(--tpl-ui-text, var(--text-color, inherit));
   font-family: var(--tpl-ui-font, inherit);
@@ -277,35 +314,46 @@ const CSS = `
 #tpl-qo-list {
   overflow: auto;
   overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   min-height: 0;
-  max-height: min(55vh, 620px);
-  padding: 4px 0;
+  max-height: min(54vh, 460px);
+  padding: 6px 6px 8px;
 }
 #tpl-qo-modal[data-width="wide"] #tpl-qo-list {
-  max-height: min(72vh, 760px);
+  max-height: min(54vh, 460px);
 }
 .tpl-qo-section-label {
-  padding: 4px 16px 2px;
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  opacity: 0.35;
+  padding: 7px 10px 5px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--tpl-ui-muted, currentColor);
   user-select: none;
 }
 .tpl-qo-item {
-  padding: 6px 16px;
+  min-height: 42px;
+  padding: 7px 12px 7px 10px;
   cursor: pointer;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(140px, 0.9fr);
+  align-items: center;
+  gap: 14px;
+  border-radius: max(5px, var(--tpl-ui-radius, 5px));
+  box-shadow: inset 2px 0 0 transparent;
 }
 .tpl-qo-item.tpl-qo-selected {
-  background: var(--tpl-ui-selection, var(--select-bg, rgba(100,100,255,0.12)));
+  background: var(--tpl-ui-selection, var(--select-bg, rgba(168, 93, 59, 0.12)));
+  box-shadow: inset 2px 0 0 var(--tpl-ui-accent, var(--accent-color, #a85d3b));
+}
+@media (hover: hover) and (pointer: fine) {
+  .tpl-qo-item:not(.tpl-qo-selected):hover {
+    background: var(--tpl-ui-surface-subtle, rgba(128,128,128,0.06));
+  }
 }
 .tpl-qo-name {
   font-size: 13.5px;
   font-weight: 500;
+  line-height: 1.35;
   color: var(--tpl-ui-text, var(--text-color, inherit));
   white-space: nowrap;
   overflow: hidden;
@@ -313,32 +361,40 @@ const CSS = `
 }
 .tpl-qo-hit {
   color: var(--tpl-ui-accent, var(--accent-color, inherit));
-  background: var(--tpl-ui-selection, rgba(128,128,128,0.12));
-  border-radius: 3px;
+  background: transparent;
+  border-radius: 0;
+  box-shadow: inset 0 -0.38em 0 var(--tpl-ui-selection, rgba(168, 93, 59, 0.15));
 }
 .tpl-qo-path {
   font-size: 11.5px;
+  line-height: 1.35;
   color: var(--tpl-ui-muted, currentColor);
-  opacity: 0.72;
+  font-family: var(--tpl-ui-mono, var(--monospace, 'SF Mono', Menlo, Consolas, monospace));
+  text-align: end;
+  opacity: 0.78;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .tpl-qo-status {
-  padding: 14px 16px;
+  padding: 24px 14px;
   font-size: 13px;
+  line-height: 1.5;
+  text-align: center;
   color: var(--tpl-ui-muted, currentColor);
-  opacity: 0.8;
+  opacity: 0.86;
 }
 #tpl-qo-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  min-height: 30px;
   padding: 5px 16px;
   font-size: 11px;
   color: var(--tpl-ui-muted, currentColor);
-  opacity: 0.82;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.76;
   border-top: 1px solid var(--tpl-ui-border, var(--border-color, rgba(128,128,128,0.12)));
   white-space: nowrap;
   overflow: hidden;
@@ -352,19 +408,20 @@ const CSS = `
   text-overflow: ellipsis;
 }
 #tpl-qo-footer-action {
-  border: 1px solid var(--tpl-ui-border, var(--border-color, rgba(128,128,128,0.2)));
-  background: var(--tpl-ui-surface-subtle, transparent);
-  color: inherit;
-  border-radius: 999px;
-  padding: 2px 9px;
+  border: 0;
+  border-bottom: 1px solid currentColor;
+  background: transparent;
+  color: var(--tpl-ui-accent, var(--accent-color, inherit));
+  border-radius: 0;
+  padding: 1px 0;
   font-size: 11px;
-  line-height: 1.5;
+  line-height: 1.35;
   cursor: pointer;
-  opacity: 0.9;
+  opacity: 0.88;
   flex-shrink: 0;
 }
 #tpl-qo-footer-action:hover {
-  background: var(--tpl-ui-selection, rgba(128,128,128,0.08));
+  color: var(--tpl-ui-accent-hover, var(--accent-hover-color, currentColor));
 }
 #tpl-qo-footer-action[hidden] {
   display: none;
@@ -376,8 +433,10 @@ const CSS = `
 #tpl-qo-tab-bar {
   display: flex;
   align-items: center;
-  border-bottom: 1px solid var(--tpl-ui-border, var(--border-color, rgba(128,128,128,0.15)));
-  padding: 0 12px;
+  gap: 2px;
+  margin-inline-start: 6px;
+  padding-inline-start: 10px;
+  border-inline-start: 1px solid var(--tpl-ui-border, var(--border-color, rgba(128,128,128,0.15)));
   flex-shrink: 0;
 }
 .tpl-qo-tab {
@@ -386,35 +445,34 @@ const CSS = `
   background: transparent;
   color: inherit;
   font-family: inherit;
-  padding: 6px 14px;
-  font-size: 12px;
+  min-height: 32px;
+  padding: 5px 9px 4px;
+  font-size: 11.5px;
+  line-height: 1;
   cursor: pointer;
-  opacity: 0.5;
+  opacity: 0.58;
   border-bottom: 2px solid transparent;
   user-select: none;
-  transition: opacity 0.15s;
+  transition-property: color, opacity, border-color;
+  transition-duration: 120ms;
+  transition-timing-function: ease-out;
 }
 .tpl-qo-tab:hover {
-  opacity: 0.75;
+  opacity: 0.82;
 }
 .tpl-qo-tab-active {
   opacity: 1;
-  border-bottom-color: var(--tpl-ui-accent, var(--accent-color, #1a73e8));
+  color: var(--tpl-ui-accent, var(--accent-color, currentColor));
+  border-bottom-color: var(--tpl-ui-accent, var(--accent-color, #a85d3b));
 }
-.tpl-qo-tab-hint {
-  font-size: 10px;
-  opacity: 0.35;
-  margin-left: auto;
-  user-select: none;
-}
-
 /* Magic-syntax autocomplete chips (type: / scope:) */
 #tpl-qo-completions {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  padding: 7px 14px;
+  gap: 5px;
+  padding: 7px 10px;
   border-bottom: 1px solid var(--tpl-ui-border, var(--border-color, rgba(128,128,128,0.12)));
+  background: var(--tpl-ui-surface-subtle, rgba(128,128,128,0.04));
   max-height: 112px;
   overflow: auto;
   flex-shrink: 0;
@@ -424,29 +482,31 @@ const CSS = `
   display: inline-flex;
   align-items: baseline;
   gap: 6px;
-  padding: 2px 9px;
-  border-radius: 6px;
-  font-size: 12px;
+  padding: 3px 7px;
+  border-radius: 4px;
+  font-size: 11.5px;
   cursor: pointer;
   color: inherit;
-  border: 1px solid var(--tpl-ui-border, var(--border-color, rgba(128,128,128,0.22)));
-  background: var(--tpl-ui-surface-subtle, rgba(128,128,128,0.05));
+  border: 1px solid transparent;
+  background: transparent;
   font-family: var(--tpl-ui-mono, var(--monospace, 'SF Mono', 'Fira Code', 'Consolas', monospace));
-  transition: background 0.12s, border-color 0.12s;
+  transition-property: color, background, border-color;
+  transition-duration: 120ms;
 }
 .tpl-qo-completion:hover {
-  background: var(--tpl-ui-selection, rgba(128,128,128,0.13));
+  background: var(--tpl-ui-selection, rgba(128,128,128,0.10));
 }
 .tpl-qo-completion-top {
-  border-color: var(--tpl-ui-accent, var(--accent-color, #1a73e8));
-  box-shadow: inset 0 0 0 1px var(--tpl-ui-accent, var(--accent-color, #1a73e8));
+  color: var(--tpl-ui-accent, var(--accent-color, currentColor));
+  border-color: var(--tpl-ui-border, var(--border-color, transparent));
+  background: var(--tpl-ui-selection, rgba(128,128,128,0.10));
 }
 .tpl-qo-completion-hint {
   opacity: 0.42;
   font-size: 11px;
 }
 .tpl-qo-content-name {
-  font-size: 13px;
+  font-size: 13.5px;
   font-weight: 500;
   color: var(--tpl-ui-text, var(--text-color, inherit));
   white-space: nowrap;
@@ -455,7 +515,9 @@ const CSS = `
 }
 .tpl-qo-content-line {
   font-size: 11.5px;
-  opacity: 0.55;
+  color: var(--tpl-ui-muted, currentColor);
+  text-align: end;
+  opacity: 0.8;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -466,12 +528,28 @@ const CSS = `
 .tpl-qo-dir .tpl-qo-name {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
 .tpl-qo-dir-icon {
-  font-size: 12px;
-  line-height: 1;
-  opacity: 0.8;
+  position: relative;
+  display: inline-block;
+  width: 13px;
+  height: 9px;
+  border: 1.25px solid currentColor;
+  border-radius: 2px;
+  opacity: 0.62;
+  flex: 0 0 auto;
+}
+.tpl-qo-dir-icon::before {
+  content: '';
+  position: absolute;
+  left: 1px;
+  top: -4px;
+  width: 6px;
+  height: 3px;
+  border: 1.25px solid currentColor;
+  border-bottom: 0;
+  border-radius: 2px 2px 0 0;
 }
 .tpl-qo-breadcrumb {
   display: flex;
@@ -480,8 +558,8 @@ const CSS = `
   flex-wrap: wrap;
   text-transform: none;
   letter-spacing: normal;
-  font-size: 11px;
-  opacity: 0.55;
+  font-family: var(--tpl-ui-mono, var(--monospace, 'SF Mono', Menlo, Consolas, monospace));
+  font-size: 10.5px;
 }
 .tpl-qo-crumb {
   appearance: none;
@@ -508,9 +586,32 @@ const CSS = `
   border: 0;
 }
 
-#tpl-qo-modal :is(button, input, [role="option"]):focus-visible {
-  outline: 2px solid var(--tpl-ui-accent, var(--accent-color, #1a73e8)) !important;
-  outline-offset: -2px;
+#tpl-qo-modal :is(button, [role="option"]):focus-visible {
+  outline: 2px solid var(--tpl-ui-accent, var(--accent-color, #a85d3b)) !important;
+  outline-offset: 2px;
+}
+#tpl-qo-input:focus-visible {
+  outline: none !important;
+}
+
+@media (max-width: 620px) {
+  #tpl-qo-input-row {
+    flex-wrap: wrap;
+    padding: 0 12px 6px;
+    column-gap: 9px;
+  }
+  #tpl-qo-input { flex: 1 1 calc(100% - 28px); min-height: 50px; }
+  #tpl-qo-tab-bar {
+    order: 2;
+    flex: 1 0 100%;
+    margin-inline-start: 27px;
+    padding: 4px 0 0;
+    border-inline-start: 0;
+    border-top: 1px solid var(--tpl-ui-border, var(--border-color, rgba(128,128,128,0.12)));
+  }
+  .tpl-qo-item { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .tpl-qo-path,
+  .tpl-qo-content-line { text-align: start; }
 }
 
 @media (max-width: 520px) {
@@ -521,15 +622,14 @@ const CSS = `
     max-height: calc(100vh - 16px);
     max-height: calc(100dvh - 16px);
   }
-  #tpl-qo-input-row { padding-inline: 12px; }
-  #tpl-qo-tab-bar { overflow-x: auto; padding-inline: 6px; }
+  #tpl-qo-tab-bar { overflow-x: auto; }
   .tpl-qo-tab { padding-inline: 10px; flex: 0 0 auto; }
-  .tpl-qo-tab-hint { display: none; }
   #tpl-qo-footer { white-space: normal; padding-inline: 12px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   #tpl-qo-modal,
+  #tpl-qo-input-row,
   .tpl-qo-tab,
   .tpl-qo-completion { transition: none; }
   .tpl-qo-item { scroll-behavior: auto; }
@@ -1333,14 +1433,18 @@ export default class QuickOpenPlugin extends Plugin {
   }
 
   private setFooter(fileCount: number, root: string, status = ''): void {
+    const rootLabel = getDisplayRootLabel(root)
     const parts = [
       `${fileCount} 个文件`,
-      root || '(无)',
-      `索引:${this.indexBackend}`,
-      `搜索:${this.searchBackend}`,
+      rootLabel,
     ]
     if (status) parts.push(status)
-    this.updateFooter(parts.join('  ·  '))
+    const diagnostics = [
+      root,
+      `索引:${this.indexBackend}`,
+      `搜索:${this.searchBackend}`,
+    ].filter(Boolean).join('\n')
+    this.updateFooter(parts.join('  ·  '), diagnostics)
     this.updateFooterAction()
   }
 
@@ -1572,12 +1676,16 @@ export default class QuickOpenPlugin extends Plugin {
     inputRow.id = 'tpl-qo-input-row'
     const icon = document.createElement('span')
     icon.id = 'tpl-qo-icon'
-    icon.textContent = '\u2315'
     icon.setAttribute('aria-hidden', 'true')
+    icon.innerHTML = `
+      <svg viewBox="0 0 20 20" fill="none" aria-hidden="true" focusable="false">
+        <circle cx="8.5" cy="8.5" r="5.25" stroke="currentColor" stroke-width="1.5" />
+        <path d="m12.4 12.4 4.1 4.1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+      </svg>`
     const input = document.createElement('input')
     input.id = 'tpl-qo-input'
     input.type = 'text'
-    input.placeholder = '搜索文件名、工作区路径或相对当前文件的路径...'
+    input.placeholder = '搜索文件、目录或内容…'
     input.autocomplete = 'off'
     input.spellcheck = false
     input.setAttribute('role', 'combobox')
@@ -1635,14 +1743,10 @@ export default class QuickOpenPlugin extends Plugin {
       el.addEventListener('keydown', e => this.handleTabKey(e, tab))
       tabBar.appendChild(el)
     }
-    const tabHint = document.createElement('div')
-    tabHint.className = 'tpl-qo-tab-hint'
-    tabHint.textContent = IS_MAC ? '⌃Tab 切换 · ⌘[ ] 宽度' : 'Ctrl+Tab 切换 · Ctrl+[ ] 宽度'
-    tabBar.appendChild(tabHint)
+    inputRow.appendChild(tabBar)
 
     modal.appendChild(title)
     modal.appendChild(inputRow)
-    modal.appendChild(tabBar)
     modal.appendChild(completionsEl)
     modal.appendChild(list)
     modal.appendChild(footer)
@@ -1707,8 +1811,10 @@ export default class QuickOpenPlugin extends Plugin {
     this.modalCleanups.push(() => clearTimeout(focusTimer))
   }
 
-  private updateFooter(text: string): void {
-    if (this.footerTextEl) this.footerTextEl.textContent = text
+  private updateFooter(text: string, title = ''): void {
+    if (!this.footerTextEl) return
+    this.footerTextEl.textContent = text
+    this.footerTextEl.title = title
   }
 
   private updateFooterAction(): void {
@@ -1998,10 +2104,10 @@ export default class QuickOpenPlugin extends Plugin {
 
   private getItemPathText(f: FileEntry): string {
     if (this.currentQuery.trim() && isRelativePathQuery(this.currentQuery) && f.cwdRelPath !== f.relPath) {
-      return f.cwdRelPath
+      return compactHomePath(f.cwdRelPath)
     }
     const lastSlash = f.relPath.lastIndexOf('/')
-    return lastSlash > 0 ? f.relPath.slice(0, lastSlash) : '/'
+    return compactHomePath(lastSlash > 0 ? f.relPath.slice(0, lastSlash) : '/')
   }
 
   private getItemPathTitle(f: FileEntry): string {
@@ -2076,7 +2182,7 @@ export default class QuickOpenPlugin extends Plugin {
     name.className = 'tpl-qo-name'
     const icon = document.createElement('span')
     icon.className = 'tpl-qo-dir-icon'
-    icon.textContent = '📁'
+    icon.setAttribute('aria-hidden', 'true')
     name.appendChild(icon)
     name.appendChild(document.createTextNode(row.name))
 
@@ -2096,7 +2202,7 @@ export default class QuickOpenPlugin extends Plugin {
     item.className = 'tpl-qo-item tpl-qo-dir' + (idx === this.selectedIdx ? ' tpl-qo-selected' : '')
     const name = document.createElement('div')
     name.className = 'tpl-qo-name'
-    name.textContent = '↑  ..'
+    name.textContent = '←  上一级'
     item.appendChild(name)
     item.addEventListener('mouseenter', () => { this.selectedIdx = idx; this.highlight() })
     item.addEventListener('click', () => { this.selectedIdx = idx; this.activateRow() })
@@ -2418,11 +2524,12 @@ export default class QuickOpenPlugin extends Plugin {
   private updatePlaceholder(): void {
     if (!this.inputEl) return
     const placeholders: Record<SearchTab, string> = {
-      files: '搜索文件  ·  可用 type: / scope: 过滤',
-      folders: '浏览或搜索目录  ·  回车进入，Backspace 返回上级',
-      content: '搜索文件内容 (需要 rg)',
+      files: '搜索文件…',
+      folders: '搜索目录…',
+      content: '搜索文件内容…',
     }
     this.inputEl.placeholder = placeholders[this.activeTab]
+    this.inputEl.title = '支持 type: 与 scope: 过滤'
   }
 
   // -------------------------------------------------------------------------

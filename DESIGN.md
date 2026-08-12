@@ -9,7 +9,7 @@
 ## Brand
 - Personality: Quiet, editorial, dependable, and native to the current Typora theme.
 - Trust signals: Successful actions reflect confirmed host state; failures remain visible and actionable; plugin UI never silently drops records or sub-operations.
-- Avoid: Generic dashboard styling, hard-coded GitHub blue, decorative gradients, fixed desktop minimum widths, and plugin/theme cascade fights.
+- Avoid: Generic dashboard or command-palette skins, hard-coded GitHub blue, decorative gradients, emoji as interface icons, fixed desktop minimum widths, and plugin/theme cascade fights.
 
 ## Product goals
 - Goals: Extend Typora without destabilizing editing; keep file navigation fast and trustworthy; make every overlay keyboard-first; preserve readable document geometry at every window and sidebar size.
@@ -37,14 +37,15 @@
 ## Visual language
 - Color: Consume host/theme semantic variables first (`--bg-color`, `--text-color`, `--border-color`, `--accent-color`, selection/success/danger equivalents); keep neutral fallbacks.
 - Typography: Inherit the active Typora/theme UI family; use the theme monospace family only for paths, shortcuts, and diagnostic values.
-- Spacing/layout rhythm: Compact 4/8px rhythm for transient tools; 12/16/24px hierarchy for dialogs and settings.
+- Spacing/layout rhythm: Compact 4/8px rhythm for transient tools; 12/16/24px hierarchy for dialogs and settings. Quick Open is one command surface rather than stacked header, tab, results, and footer cards: the input and search modes share one strip, results stay dense, and diagnostics remain quiet.
 - Shape/radius/elevation: Moderate 6-12px radii and one restrained dialog elevation; no ornamental gradients.
 - Motion: 120-180ms opacity/transform or geometry feedback only; all nonessential motion disabled under `prefers-reduced-motion`.
-- Imagery/iconography: Text and familiar platform glyphs; decorative glyphs are hidden from assistive technology.
+- Imagery/iconography: Small authored vector/CSS icons and familiar platform glyphs; no platform emoji in operational chrome; decorative glyphs are hidden from assistive technology.
+- Quick Open signature: Preserve the first version's lightweight, single-task character. Search is the sole visual anchor; paths read as quiet monospace marginalia; the selected result uses one 2px theme-accent rail plus a soft surface, never a loud full-row color block.
 
 ## Components
 - Existing components to reuse: Core `Plugin`, `PluginSettings`, event bus, settings renderer, theme variables, notices, and editor API.
-- New/changed components: Shared editor-host width measurement; reliable active-file recorder; accessible Quick Open dialog/list/tabs; responsive Plugin Center.
+- New/changed components: Shared editor-host width measurement; reliable active-file recorder; an accessible editorial Quick Open command surface; responsive Plugin Center.
 - Variants and states: Default/wide modal and editor modes; loaded/disabled/busy/error plugins; recent/indexing/searching/empty/error Quick Open states; inline/margin sidenotes.
 - Token/component ownership: Core owns plugin chrome tokens; each plugin owns its DOM and behavior; the companion theme may override semantic tokens but not `.tpl-*` runtime geometry.
 

@@ -37,11 +37,59 @@ test('Quick Open builds a responsive semantic dialog and restores focus', async 
     assert.equal(document.querySelector('#tpl-qo-list')?.getAttribute('role'), 'listbox')
     assert.equal(document.querySelector('#tpl-qo-footer-text')?.getAttribute('aria-live'), 'polite')
 
+    const inputRow = document.querySelector('#tpl-qo-input-row')!
+    const tabBar = document.querySelector('#tpl-qo-tab-bar')!
+    assert.equal(
+      tabBar.parentElement,
+      inputRow,
+      'search modes belong to the same compact command strip as the input',
+    )
+    assert.equal(document.querySelector('.tpl-qo-tab-hint'), null, 'shortcut help does not crowd the command strip')
+    assert.ok(
+      document.querySelector('#tpl-qo-icon svg'),
+      'the search affordance uses a crisp vector icon rather than a text glyph',
+    )
+    const directoryRow = plugin.makeDirItem({ name: 'Projects', fileCount: 12 }, 0)
+    assert.equal(directoryRow.textContent?.includes('📁'), false, 'folder rows avoid platform emoji')
+    assert.ok(directoryRow.querySelector('.tpl-qo-dir-icon'), 'folder rows keep a quiet authored icon')
+
     const css = document.querySelector<HTMLStyleElement>('#tpl-qo-style')?.textContent ?? ''
-    assert.match(css, /calc\(100vw - 24px\)/)
+    assert.match(css, /--tpl-qo-panel-width:\s*680px/)
+    assert.match(css, /--tpl-qo-panel-width-wide:\s*920px/)
+    assert.match(css, /calc\(100vw - 32px\)/)
     assert.match(css, /prefers-reduced-motion: reduce/)
     assert.match(css, /--tpl-ui-surface/)
     assert.match(css, /:focus-visible/)
+    assert.doesNotMatch(css, /rgba\(0\s*,\s*0\s*,\s*0\s*,\s*0\.45\)/)
+    assert.doesNotMatch(css, /#1a73e8/i, 'Quick Open must not fall back to a foreign hard-coded blue')
+
+    const selectedRule = css.match(/\.tpl-qo-item\.tpl-qo-selected\s*\{([^}]*)\}/)?.[1] ?? ''
+    assert.match(selectedRule, /inset 2px 0 0/)
+    assert.match(selectedRule, /--tpl-ui-accent/)
+
+    const itemRule = css.match(/\.tpl-qo-item\s*\{([^}]*)\}/)?.[1] ?? ''
+    assert.match(itemRule, /grid-template-columns/)
+
+    const footerActionRule = css.match(/#tpl-qo-footer-action\s*\{([^}]*)\}/)?.[1] ?? ''
+    assert.match(footerActionRule, /border:\s*0/)
+    assert.doesNotMatch(footerActionRule, /border-radius:\s*999px/)
+
+    const inputFocusRule = css.match(/#tpl-qo-input:focus-visible\s*\{([^}]*)\}/)?.[1] ?? ''
+    assert.match(inputFocusRule, /outline:\s*none/)
+
+    plugin.setFooter(7000, '/Users/cdcd/roobli/Nut/RooB')
+    const footerText = document.querySelector<HTMLElement>('#tpl-qo-footer-text')!
+    assert.equal(footerText.textContent, '7000 个文件  ·  RooB')
+    assert.match(footerText.title, /\/Users\/cdcd\/roobli\/Nut\/RooB/)
+    assert.match(footerText.title, /索引:/)
+
+    plugin.updatePlaceholder()
+    assert.equal(document.querySelector<HTMLInputElement>('#tpl-qo-input')?.placeholder, '搜索文件…')
+    assert.equal(
+      plugin.getItemPathText({ relPath: '/Users/cdcd/roobli/Nut/RooB/note.md', cwdRelPath: '' }),
+      '~/roobli/Nut/RooB',
+    )
+
     const hitRule = css.match(/\.tpl-qo-hit\s*\{([^}]*)\}/)?.[1] ?? ''
     assert.match(hitRule, /--tpl-ui-accent/)
     assert.match(hitRule, /--tpl-ui-selection/)
