@@ -80,7 +80,7 @@ node dist/tools/session-archive/index.mjs codex <session-id> --output-dir ~/Note
 node dist/tools/session-archive/index.mjs codex <session-id> --output-dir ~/Notes/Agents --mode answers
 ```
 
-Directory output automatically switches from one note to an indexed set of size-limited parts for long sessions. See [tools/session-archive/README.md](./tools/session-archive/README.md) for heading structure, title discovery, export modes, failure semantics, privacy boundaries, and the companion Claude-like Session themes.
+Directory output automatically switches from one note to an indexed set of size-limited parts for long sessions. Start with the [complete Session Archive tutorial](./docs/session-archive-tutorial.md), or see the concise [tool reference](./tools/session-archive/README.md) for heading structure, title discovery, export modes, failure semantics, privacy boundaries, and the companion Claude-like Session themes.
 
 ---
 
@@ -89,7 +89,7 @@ Directory output automatically switches from one note to an indexed set of size-
 ### Prerequisites
 
 - [Typora](https://typora.io/) installed
-- [Node.js](https://nodejs.org/) (v18+) and [pnpm](https://pnpm.io/) for building from source
+- [Node.js](https://nodejs.org/) (v22+) and [pnpm](https://pnpm.io/) for building from source
 
 ### Step 1: Clone & Build
 

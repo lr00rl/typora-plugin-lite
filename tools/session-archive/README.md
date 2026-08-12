@@ -2,6 +2,8 @@
 
 `session-archive` 是一个独立于 Typora 插件运行时的本地 CLI。给它一个 Codex 或 Claude Code 的 session ID，它会找到对应 JSONL、恢复可见的主对话与工具证据，并输出适合长期保存的 Markdown 笔记。
 
+第一次使用或需要查找 session ID、安装配套主题、配置自动分卷、理解隐私边界时，请阅读 [Session Archive 完整使用教程](../../docs/session-archive-tutorial.md)。
+
 它不会导出隐藏推理、system prompt 或 developer instructions。输出默认还会：
 
 - 把当前用户主目录替换为 `~`
