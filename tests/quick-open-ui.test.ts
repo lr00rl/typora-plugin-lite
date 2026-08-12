@@ -56,6 +56,11 @@ test('Quick Open builds a responsive semantic dialog and restores focus', async 
     const css = document.querySelector<HTMLStyleElement>('#tpl-qo-style')?.textContent ?? ''
     assert.match(css, /--tpl-qo-panel-width:\s*680px/)
     assert.match(css, /--tpl-qo-panel-width-wide:\s*920px/)
+    assert.match(css, /--tpl-qo-ink-soft:/)
+    assert.match(css, /--tpl-qo-ink-selected:/)
+    assert.match(css, /--tpl-qo-muted:/)
+    assert.match(css, /--tpl-qo-selection-soft:/)
+    assert.match(css, /color-mix\(in srgb/)
     assert.match(css, /calc\(100vw - 32px\)/)
     assert.match(css, /max-height:\s*min\(75vh,\s*calc\(100vh - 48px\)\)/)
     assert.match(css, /max-height:\s*min\(75dvh,\s*calc\(100dvh - 48px\)\)/)
@@ -63,14 +68,29 @@ test('Quick Open builds a responsive semantic dialog and restores focus', async 
     assert.match(css, /--tpl-ui-surface/)
     assert.match(css, /:focus-visible/)
     assert.doesNotMatch(css, /rgba\(0\s*,\s*0\s*,\s*0\s*,\s*0\.45\)/)
+    assert.doesNotMatch(css, /background:\s*rgba\(22,\s*20,\s*18,\s*0\.28\)/)
     assert.doesNotMatch(css, /#1a73e8/i, 'Quick Open must not fall back to a foreign hard-coded blue')
 
     const selectedRule = css.match(/\.tpl-qo-item\.tpl-qo-selected\s*\{([^}]*)\}/)?.[1] ?? ''
     assert.match(selectedRule, /inset 2px 0 0/)
-    assert.match(selectedRule, /--tpl-ui-accent/)
+    assert.match(selectedRule, /--tpl-qo-accent-soft/)
+    assert.match(selectedRule, /--tpl-qo-selection-soft/)
 
     const itemRule = css.match(/\.tpl-qo-item\s*\{([^}]*)\}/)?.[1] ?? ''
     assert.match(itemRule, /grid-template-columns/)
+
+    const nameRule = css.match(/\.tpl-qo-name\s*\{([^}]*)\}/)?.[1] ?? ''
+    assert.match(nameRule, /font-weight:\s*400/)
+    assert.match(nameRule, /color:\s*var\(--tpl-qo-ink-soft\)/)
+
+    const contentNameRule = css.match(/\.tpl-qo-content-name\s*\{([^}]*)\}/)?.[1] ?? ''
+    assert.match(contentNameRule, /font-weight:\s*400/)
+    assert.match(contentNameRule, /color:\s*var\(--tpl-qo-ink-soft\)/)
+    assert.doesNotMatch(css, /font-weight:\s*500/)
+
+    const pathRule = css.match(/\.tpl-qo-path\s*\{([^}]*)\}/)?.[1] ?? ''
+    assert.match(pathRule, /color:\s*var\(--tpl-qo-muted\)/)
+    assert.match(pathRule, /opacity:\s*1/)
 
     const listRule = css.match(/#tpl-qo-list\s*\{([^}]*)\}/)?.[1] ?? ''
     assert.match(listRule, /flex:\s*0 1 auto/)
@@ -98,8 +118,8 @@ test('Quick Open builds a responsive semantic dialog and restores focus', async 
     )
 
     const hitRule = css.match(/\.tpl-qo-hit\s*\{([^}]*)\}/)?.[1] ?? ''
-    assert.match(hitRule, /--tpl-ui-accent/)
-    assert.match(hitRule, /--tpl-ui-selection/)
+    assert.match(hitRule, /--tpl-qo-accent-soft/)
+    assert.match(hitRule, /--tpl-qo-selection-soft/)
     assert.doesNotMatch(hitRule, /255\s*,\s*(?:179|212)/)
 
     const tabs = [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
