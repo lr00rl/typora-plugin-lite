@@ -17,6 +17,7 @@ It is designed to solve the cross-platform compatibility issues of existing plug
 - **Standard-Compatible Metadata**: Uses YAML frontmatter and HTML comments (`tpl` markers) to store plugin data, ensuring zero conflict with other Markdown renderers.
 - **Spotlight UI**: A decoupled, high-performance UI runtime for search, commands, and navigation.
 - **External Storage**: Plugin settings, logs, and caches live outside Typora's bundled resources. On Linux, both third-party plugins and persistent data are stored exclusively under `~/.local/Typora/` (`plugins/` for bundles, `data/` for state).
+- **Session Archive CLI**: Export a Codex or Claude Code session into a private, Typora-friendly Markdown note without loading a Typora plugin.
 
 ---
 
@@ -66,6 +67,18 @@ Plugins never touch low-level APIs directly. They use `platform.fs`, `platform.s
 - Desktop sidenotes are rendered into a dedicated right-side portal layer in the editor
 - Table horizontal scrolling remains intact
 - Sidenotes stay docked on the outer editor gutter instead of participating in block layout
+
+### Archive Codex / Claude Code conversations
+
+The standalone `session-archive` tool recovers visible user/agent turns, tool calls and results from local provider JSONL files. It excludes hidden reasoning and instructions, redacts common credentials and home paths, neutralizes active HTML, and publishes the note atomically with private file permissions.
+
+```bash
+npm run build
+node dist/tools/session-archive/index.mjs codex <session-id> -o session.md
+node dist/tools/session-archive/index.mjs claude <session-id> -o session.md
+```
+
+See [tools/session-archive/README.md](./tools/session-archive/README.md) for discovery rules, failure semantics, privacy boundaries, and the companion Claude-like Session themes.
 
 ---
 

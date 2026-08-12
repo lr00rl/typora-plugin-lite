@@ -15,8 +15,12 @@
     "build": "tsx scripts/build.ts",
     "build:watch": "tsx scripts/build.ts --watch",
     "clean": "rm -rf dist",
+    "session:archive": "tsx tools/session-archive/src/cli.ts",
     "test": "node --import tsx --test tests/*.test.ts",
     "typecheck": "tsc --noEmit"
+  },
+  "bin": {
+    "session-archive": "dist/tools/session-archive/index.mjs"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",

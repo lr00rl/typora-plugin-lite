@@ -1,5 +1,5 @@
 import * as esbuild from 'esbuild'
-import { readdirSync, existsSync, copyFileSync, cpSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
+import { chmodSync, readdirSync, existsSync, copyFileSync, cpSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
 import { join, resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -148,6 +148,22 @@ const clientConfigs: esbuild.BuildOptions[] = [
   },
 ]
 
+const toolConfigs: esbuild.BuildOptions[] = [
+  {
+    bundle: true,
+    sourcemap: true,
+    target: 'node22',
+    platform: 'node' as const,
+    logLevel: 'info' as const,
+    minify: isProd,
+    entryPoints: [join(ROOT, 'tools', 'session-archive', 'src', 'cli.ts')],
+    outfile: join(DIST, 'tools', 'session-archive', 'index.mjs'),
+    format: 'esm' as const,
+    define: { __SESSION_ARCHIVE_BUNDLED__: 'true' },
+    banner: { js: '#!/usr/bin/env node' },
+  },
+]
+
 async function build() {
   if (isWatch) {
     const contexts = await Promise.all([
@@ -156,6 +172,7 @@ async function build() {
       ...pluginConfigs.map(c => esbuild.context(c)),
       ...sidecarConfigs.map(c => esbuild.context(c)),
       ...clientConfigs.map(c => esbuild.context(c)),
+      ...toolConfigs.map(c => esbuild.context(c)),
     ])
     await Promise.all(contexts.map(ctx => ctx.watch()))
     console.log('Watching for changes...')
@@ -166,6 +183,7 @@ async function build() {
       ...pluginConfigs.map(c => esbuild.build(c)),
       ...sidecarConfigs.map(c => esbuild.build(c)),
       ...clientConfigs.map(c => esbuild.build(c)),
+      ...toolConfigs.map(c => esbuild.build(c)),
     ])
     // Copy plugin manifests to dist
     for (const p of pluginEntries) {
@@ -188,6 +206,9 @@ async function build() {
       join(DIST, 'builtin-plugins.json'),
       JSON.stringify(pluginEntries.map(p => p.name), null, 2) + '\n',
     )
+    for (const config of toolConfigs) {
+      if (config.outfile) chmodSync(config.outfile, 0o755)
+    }
     console.log(`Built loader + core + ${pluginEntries.length} plugins`)
   }
 }
