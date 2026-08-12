@@ -32,6 +32,10 @@ import {
   removeToken,
   setToken,
 } from './query.js'
+import {
+  collapseDirectoryPathToFit,
+  directoryPathForDisplay,
+} from './path-display.js'
 
 interface FileEntry {
   absPath: string
@@ -169,14 +173,6 @@ function getDisplayRootLabel(path: string): string {
   if (!path) return '未挂载工作区'
   const parts = splitPath(path)
   return parts[parts.length - 1] || normalizePath(path)
-}
-
-function compactHomePath(path: string): string {
-  const normalized = normalizePath(path)
-  return normalized
-    .replace(/^\/Users\/[^/]+(?=\/|$)/, '~')
-    .replace(/^\/home\/[^/]+(?=\/|$)/, '~')
-    .replace(/^[A-Za-z]:\/Users\/[^/]+(?=\/|$)/i, '~')
 }
 
 function getPathRoot(path: string): string {
@@ -361,7 +357,7 @@ const CSS = `
   padding: 4px 12px 4px 10px;
   cursor: pointer;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(140px, 0.9fr);
+  grid-template-columns: max-content minmax(0, 1fr);
   align-items: center;
   gap: 10px;
   border-radius: 4px;
@@ -382,8 +378,8 @@ const CSS = `
   line-height: 1.25;
   color: var(--tpl-qo-ink-soft);
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow: visible;
+  text-overflow: clip;
 }
 .tpl-qo-hit {
   color: var(--tpl-qo-accent-soft);
@@ -392,6 +388,7 @@ const CSS = `
   box-shadow: inset 0 -0.34em 0 var(--tpl-qo-selection-soft);
 }
 .tpl-qo-path {
+  min-width: 0;
   font-size: 11.5px;
   line-height: 1.25;
   color: var(--tpl-qo-muted);
@@ -533,8 +530,8 @@ const CSS = `
   line-height: 1.25;
   color: var(--tpl-qo-ink-soft);
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow: visible;
+  text-overflow: clip;
 }
 .tpl-qo-content-line {
   font-size: 11.5px;
@@ -672,6 +669,11 @@ export default class QuickOpenPlugin extends Plugin {
   private debounceTimer: ReturnType<typeof setTimeout> | null = null
   private currentQuery = ''
   private renderToken = 0
+  private pathFitFrame: number | null = null
+  private pathFitUsesAnimationFrame = false
+  private pathMeasureCanvas: HTMLCanvasElement | null = null
+  private pathMeasureEl: HTMLElement | null = null
+  private pathMeasureUnavailableWarned = false
 
   /** Cached full vault index */
   private vaultIndex: FileEntry[] = []
@@ -1651,6 +1653,10 @@ export default class QuickOpenPlugin extends Plugin {
     this.selectedIdx = 0
     this.currentQuery = ''
     this.lastInputValue = ''
+    this.cancelQueuedPathFit()
+    this.pathMeasureCanvas = null
+    this.pathMeasureEl?.remove()
+    this.pathMeasureEl = null
     this.restoreFocusEl = null
     // Each open starts fresh on the files tab / recents, per the spec.
     this.activeTab = 'files'
@@ -1827,6 +1833,20 @@ export default class QuickOpenPlugin extends Plugin {
       () => document.removeEventListener('keydown', onEsc, { capture: true }),
       () => modal.removeEventListener('keydown', onFocusTrap),
     )
+
+    const ResizeObserverCtor = (window as unknown as {
+      ResizeObserver?: typeof ResizeObserver
+    }).ResizeObserver
+    if (typeof ResizeObserverCtor === 'function') {
+      const resizeObserver = new ResizeObserverCtor(() => this.queuePathLabelFit())
+      resizeObserver.observe(list)
+      this.modalCleanups.push(() => resizeObserver.disconnect())
+    } else {
+      const onResize = () => this.queuePathLabelFit()
+      window.addEventListener('resize', onResize)
+      this.modalCleanups.push(() => window.removeEventListener('resize', onResize))
+    }
+    this.modalCleanups.push(() => this.cancelQueuedPathFit())
 
     void this.renderList('')
     const focusTimer = window.setTimeout(() => input.focus(), 30)
@@ -2126,10 +2146,9 @@ export default class QuickOpenPlugin extends Plugin {
 
   private getItemPathText(f: FileEntry): string {
     if (this.currentQuery.trim() && isRelativePathQuery(this.currentQuery) && f.cwdRelPath !== f.relPath) {
-      return compactHomePath(f.cwdRelPath)
+      return directoryPathForDisplay(f.cwdRelPath)
     }
-    const lastSlash = f.relPath.lastIndexOf('/')
-    return compactHomePath(lastSlash > 0 ? f.relPath.slice(0, lastSlash) : '/')
+    return directoryPathForDisplay(f.relPath)
   }
 
   private getItemPathTitle(f: FileEntry): string {
@@ -2268,11 +2287,15 @@ export default class QuickOpenPlugin extends Plugin {
 
     const pathEl = document.createElement('div')
     pathEl.className = 'tpl-qo-path'
-    this.renderHighlightedText(pathEl, this.getItemPathText(f))
+    const fullPath = this.getItemPathText(f)
+    pathEl.dataset.fullPath = fullPath
+    pathEl.setAttribute('aria-label', fullPath)
+    this.renderHighlightedText(pathEl, fullPath)
     pathEl.title = this.getItemPathTitle(f)
 
     item.appendChild(name)
     item.appendChild(pathEl)
+    this.queuePathLabelFit()
     item.addEventListener('mouseenter', () => { this.selectedIdx = idx; this.highlight() })
     item.addEventListener('click', () => { this.selectedIdx = idx; this.activateRow() })
     return item
@@ -2327,6 +2350,106 @@ export default class QuickOpenPlugin extends Plugin {
     if (selected?.id && this.inputEl) this.inputEl.setAttribute('aria-activedescendant', selected.id)
     else this.inputEl?.removeAttribute('aria-activedescendant')
     selected?.scrollIntoView({ block: 'nearest' })
+  }
+
+  private cancelQueuedPathFit(): void {
+    if (this.pathFitFrame === null) return
+    if (this.pathFitUsesAnimationFrame && typeof window.cancelAnimationFrame === 'function') {
+      window.cancelAnimationFrame(this.pathFitFrame)
+    } else {
+      window.clearTimeout(this.pathFitFrame)
+    }
+    this.pathFitFrame = null
+    this.pathFitUsesAnimationFrame = false
+  }
+
+  private queuePathLabelFit(): void {
+    if (!this.listEl || this.pathFitFrame !== null) return
+    const run = () => {
+      this.pathFitFrame = null
+      this.pathFitUsesAnimationFrame = false
+      this.fitPathLabels()
+    }
+    if (typeof window.requestAnimationFrame === 'function') {
+      this.pathFitUsesAnimationFrame = true
+      this.pathFitFrame = window.requestAnimationFrame(run)
+    } else {
+      this.pathFitFrame = window.setTimeout(run, 0)
+    }
+  }
+
+  private makePathTextMeasure(pathEl: HTMLElement): (text: string) => number {
+    const view = pathEl.ownerDocument.defaultView
+    const style = view?.getComputedStyle(pathEl)
+    try {
+      this.pathMeasureCanvas ??= pathEl.ownerDocument.createElement('canvas')
+      const context = this.pathMeasureCanvas.getContext('2d')
+      if (context && style) {
+        context.font = style.font || [
+          style.fontStyle,
+          style.fontVariant,
+          style.fontWeight,
+          style.fontSize,
+          style.fontFamily,
+        ].filter(Boolean).join(' ')
+        const letterSpacing = Number.parseFloat(style.letterSpacing)
+        return text => (
+          context.measureText(text).width
+          + (Number.isFinite(letterSpacing) ? Math.max(0, [...text].length - 1) * letterSpacing : 0)
+        )
+      }
+    } catch {
+      // Fall through to exact DOM measurement for hosts without Canvas 2D.
+    }
+
+    this.pathMeasureEl ??= pathEl.ownerDocument.createElement('span')
+    const measureEl = this.pathMeasureEl
+    measureEl.setAttribute('aria-hidden', 'true')
+    Object.assign(measureEl.style, {
+      position: 'fixed',
+      insetInlineStart: '-100000px',
+      insetBlockStart: '0',
+      visibility: 'hidden',
+      pointerEvents: 'none',
+      whiteSpace: 'pre',
+      inlineSize: 'max-content',
+      maxInlineSize: 'none',
+      overflow: 'visible',
+      font: style?.font ?? '',
+      fontFamily: style?.fontFamily ?? '',
+      fontSize: style?.fontSize ?? '',
+      fontStyle: style?.fontStyle ?? '',
+      fontWeight: style?.fontWeight ?? '',
+      fontVariant: style?.fontVariant ?? '',
+      letterSpacing: style?.letterSpacing ?? '',
+    })
+    if (!measureEl.isConnected) pathEl.ownerDocument.body.appendChild(measureEl)
+    return text => {
+      measureEl.textContent = text
+      const width = Math.max(measureEl.getBoundingClientRect().width, measureEl.scrollWidth)
+      if (width > 0 || !text) return width
+      if (!this.pathMeasureUnavailableWarned) {
+        this.pathMeasureUnavailableWarned = true
+        this.warn('exact path text measurement unavailable; collapsing path safely')
+      }
+      return Number.POSITIVE_INFINITY
+    }
+  }
+
+  private fitPathLabels(): void {
+    const list = this.listEl
+    if (!list) return
+    for (const pathEl of list.querySelectorAll<HTMLElement>('.tpl-qo-path[data-full-path]')) {
+      const fullPath = pathEl.dataset.fullPath
+      if (!fullPath || pathEl.clientWidth <= 0) continue
+      const measure = this.makePathTextMeasure(pathEl)
+      const displayPath = collapseDirectoryPathToFit(
+        fullPath,
+        Math.max(0, pathEl.clientWidth - 1),
+        measure,
+      )
+      this.renderHighlightedText(pathEl, displayPath)
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -2560,6 +2683,7 @@ export default class QuickOpenPlugin extends Plugin {
   private setWidth(preset: WidthPreset): void {
     this.widthPreset = preset
     if (this.modalEl) this.modalEl.dataset.width = preset
+    this.queuePathLabelFit()
     this.settings.set('widthPreset' as never, preset as never)
     this.settings.save().catch(() => {})
   }

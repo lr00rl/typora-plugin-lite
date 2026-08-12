@@ -4,6 +4,28 @@ import { Window } from 'happy-dom'
 
 test('Quick Open builds a responsive semantic dialog and restores focus', async () => {
   const dom = new Window({ url: 'https://localhost/' })
+  let resizeCallback: ResizeObserverCallback | null = null
+  let resizeTarget: Element | null = null
+  let resizeDisconnected = false
+  let pendingFrame: FrameRequestCallback | null = null
+  class TestResizeObserver {
+    constructor(callback: ResizeObserverCallback) { resizeCallback = callback }
+    observe(target: Element): void { resizeTarget = target }
+    unobserve(): void {}
+    disconnect(): void { resizeDisconnected = true }
+  }
+  Object.defineProperty(dom, 'ResizeObserver', {
+    value: TestResizeObserver,
+    configurable: true,
+  })
+  Object.defineProperty(dom, 'requestAnimationFrame', {
+    value: (callback: FrameRequestCallback) => { pendingFrame = callback; return 17 },
+    configurable: true,
+  })
+  Object.defineProperty(dom, 'cancelAnimationFrame', {
+    value: () => { pendingFrame = null },
+    configurable: true,
+  })
   const saved = new Map<string, PropertyDescriptor | undefined>()
   for (const name of ['window', 'document', 'HTMLElement', 'navigator', 'Event', 'KeyboardEvent', 'MouseEvent'] as const) {
     saved.set(name, Object.getOwnPropertyDescriptor(globalThis, name))
@@ -36,6 +58,7 @@ test('Quick Open builds a responsive semantic dialog and restores focus', async 
     assert.equal(document.querySelectorAll('[role="tab"]').length, 3)
     assert.equal(document.querySelector('#tpl-qo-list')?.getAttribute('role'), 'listbox')
     assert.equal(document.querySelector('#tpl-qo-footer-text')?.getAttribute('aria-live'), 'polite')
+    assert.equal(resizeTarget, document.querySelector('#tpl-qo-list'))
 
     const inputRow = document.querySelector('#tpl-qo-input-row')!
     const tabBar = document.querySelector('#tpl-qo-tab-bar')!
@@ -84,7 +107,7 @@ test('Quick Open builds a responsive semantic dialog and restores focus', async 
     )
 
     const itemRule = css.match(/\.tpl-qo-item\s*\{([^}]*)\}/)?.[1] ?? ''
-    assert.match(itemRule, /grid-template-columns/)
+    assert.match(itemRule, /grid-template-columns:\s*max-content minmax\(0,\s*1fr\)/)
     assert.match(itemRule, /min-height:\s*34px/)
     assert.match(itemRule, /padding:\s*4px 12px 4px 10px/)
     assert.match(itemRule, /gap:\s*10px/)
@@ -95,6 +118,9 @@ test('Quick Open builds a responsive semantic dialog and restores focus', async 
     assert.match(nameRule, /font-weight:\s*400/)
     assert.match(nameRule, /line-height:\s*1\.25/)
     assert.match(nameRule, /color:\s*var\(--tpl-qo-ink-soft\)/)
+    assert.match(nameRule, /overflow:\s*visible/)
+    assert.doesNotMatch(nameRule, /max-width/)
+    assert.doesNotMatch(nameRule, /text-overflow:\s*ellipsis/)
 
     const contentNameRule = css.match(/\.tpl-qo-content-name\s*\{([^}]*)\}/)?.[1] ?? ''
     assert.match(contentNameRule, /font-weight:\s*400/)
@@ -128,8 +154,48 @@ test('Quick Open builds a responsive semantic dialog and restores focus', async 
     assert.equal(document.querySelector<HTMLInputElement>('#tpl-qo-input')?.placeholder, '搜索文件…')
     assert.equal(
       plugin.getItemPathText({ relPath: '/Users/cdcd/roobli/Nut/RooB/note.md', cwdRelPath: '' }),
-      '~/roobli/Nut/RooB',
+      '~/roobli/Nut/RooB/',
     )
+
+    const longPath = "E000_Works/Openjobs-ai/数据部门/部门负责的项目与资源/metix-ruiyi/TaskGroup_20260614_ruiyi_Inner/"
+    const fileRow = plugin.makeItem({
+      basename: '2026_08_12_codex修改第二版.md',
+      relPath: `${longPath}2026_08_12_codex修改第二版.md`,
+      cwdRelPath: `${longPath}2026_08_12_codex修改第二版.md`,
+    }, 0)
+    const filePath = fileRow.querySelector('.tpl-qo-path') as HTMLElement
+    assert.equal(filePath.dataset.fullPath, longPath)
+    assert.equal(filePath.textContent, longPath)
+
+    const fittedDirectory = 'folder-1/folder-2/folder-3/folder-4/folder-5/folder-6/folder-7/'
+    const fittedRow = plugin.makeItem({
+      basename: 'note.md',
+      relPath: `${fittedDirectory}note.md`,
+      cwdRelPath: `${fittedDirectory}note.md`,
+    }, 1)
+    const fittedPath = fittedRow.querySelector('.tpl-qo-path') as HTMLElement
+    document.querySelector('#tpl-qo-list')!.appendChild(fittedRow)
+    plugin.cancelQueuedPathFit()
+    let availablePathWidth = 'folder-1/folder-2/.../folder-6/folder-7/'.length + 1
+    Object.defineProperty(fittedPath, 'clientWidth', {
+      configurable: true,
+      get: () => availablePathWidth,
+    })
+    plugin.makePathTextMeasure = () => (value: string) => value.length
+    plugin.fitPathLabels()
+    assert.equal(fittedPath.textContent, 'folder-1/folder-2/.../folder-6/folder-7/')
+    assert.equal(fittedPath.dataset.fullPath, fittedDirectory)
+    assert.equal(fittedPath.getAttribute('aria-label'), fittedDirectory)
+    assert.equal(fittedPath.title, `${fittedDirectory}note.md`)
+
+    availablePathWidth = 4
+    plugin.fitPathLabels()
+    assert.equal(fittedPath.textContent, '...', 'the path yields when the filename leaves almost no room')
+    assert.equal(fittedRow.querySelector('.tpl-qo-name')?.textContent, 'note.md')
+
+    availablePathWidth = fittedDirectory.length + 1
+    plugin.fitPathLabels()
+    assert.equal(fittedPath.textContent, fittedDirectory, 'a wider popup restores the full path')
 
     const hitRule = css.match(/\.tpl-qo-hit\s*\{([^}]*)\}/)?.[1] ?? ''
     assert.match(hitRule, /--tpl-qo-accent-soft/)
@@ -152,8 +218,21 @@ test('Quick Open builds a responsive semantic dialog and restores focus', async 
     tabs[0]!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }))
     assert.equal(document.activeElement, tabs[2], 'ArrowLeft wraps to the last tab')
 
+    let resizeFitRuns = 0
+    plugin.fitPathLabels = () => { resizeFitRuns += 1 }
+    const observerCallback = resizeCallback as ResizeObserverCallback | null
+    assert.ok(observerCallback)
+    observerCallback([], {} as ResizeObserver)
+    observerCallback([], {} as ResizeObserver)
+    const scheduledFit = pendingFrame as FrameRequestCallback | null
+    assert.ok(scheduledFit, 'resize queues a path refit in the next animation frame')
+    pendingFrame = null
+    scheduledFit(0)
+    assert.equal(resizeFitRuns, 1, 'multiple resize notifications are coalesced')
+
     plugin.close()
     assert.equal(document.activeElement, trigger)
+    assert.equal(resizeDisconnected, true)
   } finally {
     for (const [name, descriptor] of saved) {
       if (descriptor) Object.defineProperty(globalThis, name, descriptor)
