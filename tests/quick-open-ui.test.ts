@@ -60,6 +60,7 @@ test('Quick Open builds a responsive semantic dialog and restores focus', async 
     assert.match(css, /--tpl-qo-ink-selected:/)
     assert.match(css, /--tpl-qo-muted:/)
     assert.match(css, /--tpl-qo-selection-soft:/)
+    assert.match(css, /--tpl-qo-row-selected:/)
     assert.match(css, /color-mix\(in srgb/)
     assert.match(css, /calc\(100vw - 32px\)/)
     assert.match(css, /max-height:\s*min\(75vh,\s*calc\(100vh - 48px\)\)/)
@@ -72,15 +73,27 @@ test('Quick Open builds a responsive semantic dialog and restores focus', async 
     assert.doesNotMatch(css, /#1a73e8/i, 'Quick Open must not fall back to a foreign hard-coded blue')
 
     const selectedRule = css.match(/\.tpl-qo-item\.tpl-qo-selected\s*\{([^}]*)\}/)?.[1] ?? ''
-    assert.match(selectedRule, /inset 2px 0 0/)
-    assert.match(selectedRule, /--tpl-qo-accent-soft/)
-    assert.match(selectedRule, /--tpl-qo-selection-soft/)
+    assert.match(selectedRule, /background:\s*var\(--tpl-qo-row-selected\)/)
+    assert.match(selectedRule, /box-shadow:\s*none/)
+    assert.doesNotMatch(selectedRule, /--tpl-qo-accent-soft/)
+    assert.doesNotMatch(selectedRule, /inset/)
+    assert.doesNotMatch(
+      css,
+      /\.tpl-qo-item\.tpl-qo-selected \.tpl-qo-(?:name|content-name)/,
+      'selection is communicated by the row surface alone, not darker or heavier text',
+    )
 
     const itemRule = css.match(/\.tpl-qo-item\s*\{([^}]*)\}/)?.[1] ?? ''
     assert.match(itemRule, /grid-template-columns/)
+    assert.match(itemRule, /min-height:\s*34px/)
+    assert.match(itemRule, /padding:\s*4px 12px 4px 10px/)
+    assert.match(itemRule, /gap:\s*10px/)
+    assert.match(itemRule, /border-radius:\s*4px/)
+    assert.match(itemRule, /box-shadow:\s*none/)
 
     const nameRule = css.match(/\.tpl-qo-name\s*\{([^}]*)\}/)?.[1] ?? ''
     assert.match(nameRule, /font-weight:\s*400/)
+    assert.match(nameRule, /line-height:\s*1\.25/)
     assert.match(nameRule, /color:\s*var\(--tpl-qo-ink-soft\)/)
 
     const contentNameRule = css.match(/\.tpl-qo-content-name\s*\{([^}]*)\}/)?.[1] ?? ''
@@ -90,6 +103,7 @@ test('Quick Open builds a responsive semantic dialog and restores focus', async 
 
     const pathRule = css.match(/\.tpl-qo-path\s*\{([^}]*)\}/)?.[1] ?? ''
     assert.match(pathRule, /color:\s*var\(--tpl-qo-muted\)/)
+    assert.match(pathRule, /line-height:\s*1\.25/)
     assert.match(pathRule, /opacity:\s*1/)
 
     const listRule = css.match(/#tpl-qo-list\s*\{([^}]*)\}/)?.[1] ?? ''

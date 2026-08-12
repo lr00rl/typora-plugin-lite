@@ -239,6 +239,7 @@ const CSS = `
   --tpl-qo-accent-soft: var(--tpl-ui-accent, var(--accent-color, #a85d3b));
   --tpl-qo-selection-soft: var(--tpl-ui-selection, rgba(168, 93, 59, 0.08));
   --tpl-qo-hover-soft: var(--tpl-ui-surface-subtle, rgba(128,128,128,0.035));
+  --tpl-qo-row-selected: var(--tpl-ui-surface-subtle, rgba(128,128,128,0.07));
   position: fixed;
   inset: 0;
   background: rgba(22, 20, 18, 0.20);
@@ -260,6 +261,7 @@ const CSS = `
     --tpl-qo-accent-soft: color-mix(in srgb, var(--tpl-ui-accent, var(--accent-color, #a85d3b)) 72%, transparent);
     --tpl-qo-selection-soft: color-mix(in srgb, var(--tpl-ui-accent, var(--accent-color, #a85d3b)) 8%, transparent);
     --tpl-qo-hover-soft: color-mix(in srgb, var(--tpl-ui-text, var(--text-color, #34312e)) 3.5%, transparent);
+    --tpl-qo-row-selected: color-mix(in srgb, var(--tpl-ui-text, var(--text-color, #34312e)) 7%, transparent);
   }
 }
 #tpl-qo-modal {
@@ -343,30 +345,31 @@ const CSS = `
   scrollbar-gutter: stable;
   min-height: 0;
   max-height: none;
-  padding: 6px 6px 8px;
+  padding: 4px 6px 6px;
 }
 .tpl-qo-section-label {
-  padding: 7px 10px 5px;
+  padding: 5px 10px 3px;
   font-size: 11px;
   font-weight: 400;
+  line-height: 1.3;
   letter-spacing: 0.02em;
   color: var(--tpl-qo-muted);
   user-select: none;
 }
 .tpl-qo-item {
-  min-height: 42px;
-  padding: 7px 12px 7px 10px;
+  min-height: 34px;
+  padding: 4px 12px 4px 10px;
   cursor: pointer;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(140px, 0.9fr);
   align-items: center;
-  gap: 14px;
-  border-radius: max(5px, var(--tpl-ui-radius, 5px));
-  box-shadow: inset 2px 0 0 transparent;
+  gap: 10px;
+  border-radius: 4px;
+  box-shadow: none;
 }
 .tpl-qo-item.tpl-qo-selected {
-  background: var(--tpl-qo-selection-soft);
-  box-shadow: inset 2px 0 0 var(--tpl-qo-accent-soft);
+  background: var(--tpl-qo-row-selected);
+  box-shadow: none;
 }
 @media (hover: hover) and (pointer: fine) {
   .tpl-qo-item:not(.tpl-qo-selected):hover {
@@ -376,14 +379,11 @@ const CSS = `
 .tpl-qo-name {
   font-size: 13.5px;
   font-weight: 400;
-  line-height: 1.35;
+  line-height: 1.25;
   color: var(--tpl-qo-ink-soft);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-.tpl-qo-item.tpl-qo-selected .tpl-qo-name {
-  color: var(--tpl-qo-ink-selected);
 }
 .tpl-qo-hit {
   color: var(--tpl-qo-accent-soft);
@@ -393,7 +393,7 @@ const CSS = `
 }
 .tpl-qo-path {
   font-size: 11.5px;
-  line-height: 1.35;
+  line-height: 1.25;
   color: var(--tpl-qo-muted);
   font-family: var(--tpl-ui-mono, var(--monospace, 'SF Mono', Menlo, Consolas, monospace));
   text-align: end;
@@ -530,16 +530,15 @@ const CSS = `
 .tpl-qo-content-name {
   font-size: 13.5px;
   font-weight: 400;
+  line-height: 1.25;
   color: var(--tpl-qo-ink-soft);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.tpl-qo-item.tpl-qo-selected .tpl-qo-content-name {
-  color: var(--tpl-qo-ink-selected);
-}
 .tpl-qo-content-line {
   font-size: 11.5px;
+  line-height: 1.25;
   color: var(--tpl-qo-muted);
   text-align: end;
   opacity: 1;
