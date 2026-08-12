@@ -4,7 +4,7 @@
 - Status: Active
 - Last refreshed: 2026-08-11
 - Primary product surfaces: Typora editor integrations, Quick Open, Plugin Center, plugin settings, sidenotes, code and note utilities.
-- Evidence reviewed: `README.md`, `packages/core/src/ui/*`, `plugins/*/src/main.ts`, responsive and Quick Open tests, live Typora DOM geometry, and `/Users/cdcd/roobli/lr00rl/Typora_Claude-Like_Theme/claude-like.css` plus its contract tests.
+- Evidence reviewed: `README.md`, `packages/core/src/ui/*`, `plugins/*/src/main.ts`, responsive and Quick Open tests, live Typora DOM geometry, and the companion `Typora_Claude-Like_Theme/claude-like.css` plus its contract tests.
 
 ## Brand
 - Personality: Quiet, editorial, dependable, and native to the current Typora theme.

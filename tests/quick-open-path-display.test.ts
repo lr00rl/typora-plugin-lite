@@ -16,8 +16,8 @@ test('Quick Open path display removes the basename and keeps a directory boundar
     'E000_Works/Openjobs-ai/数据部门/部门负责的项目与资源/metix-ruiyi/TaskGroup_20260614_ruiyi_Inner/',
   )
   assert.equal(
-    directoryPathForDisplay('/Users/cdcd/roobli/Nut/RooB/note.md'),
-    '~/roobli/Nut/RooB/',
+    directoryPathForDisplay('/Users/tester/workspace/notes/note.md'),
+    '~/workspace/notes/',
   )
   assert.equal(directoryPathForDisplay('../../folder/note.md'), '../../folder/')
 })

@@ -144,17 +144,17 @@ test('Quick Open builds a responsive semantic dialog and restores focus', async 
     const inputFocusRule = css.match(/#tpl-qo-input:focus-visible\s*\{([^}]*)\}/)?.[1] ?? ''
     assert.match(inputFocusRule, /outline:\s*none/)
 
-    plugin.setFooter(7000, '/Users/cdcd/roobli/Nut/RooB')
+    plugin.setFooter(7000, '/Users/tester/workspace/notes')
     const footerText = document.querySelector<HTMLElement>('#tpl-qo-footer-text')!
-    assert.equal(footerText.textContent, '7000 个文件  ·  RooB')
-    assert.match(footerText.title, /\/Users\/cdcd\/roobli\/Nut\/RooB/)
+    assert.equal(footerText.textContent, '7000 个文件  ·  notes')
+    assert.match(footerText.title, /\/Users\/tester\/workspace\/notes/)
     assert.match(footerText.title, /索引:/)
 
     plugin.updatePlaceholder()
     assert.equal(document.querySelector<HTMLInputElement>('#tpl-qo-input')?.placeholder, '搜索文件…')
     assert.equal(
-      plugin.getItemPathText({ relPath: '/Users/cdcd/roobli/Nut/RooB/note.md', cwdRelPath: '' }),
-      '~/roobli/Nut/RooB/',
+      plugin.getItemPathText({ relPath: '/Users/tester/workspace/notes/note.md', cwdRelPath: '' }),
+      '~/workspace/notes/',
     )
 
     const longPath = "E000_Works/Openjobs-ai/数据部门/部门负责的项目与资源/metix-ruiyi/TaskGroup_20260614_ruiyi_Inner/"
