@@ -41,7 +41,7 @@
 - Shape/radius/elevation: Moderate 6-12px radii and one restrained dialog elevation; no ornamental gradients.
 - Motion: 120-180ms opacity/transform or geometry feedback only; all nonessential motion disabled under `prefers-reduced-motion`.
 - Imagery/iconography: Small authored vector/CSS icons and familiar platform glyphs; no platform emoji in operational chrome; decorative glyphs are hidden from assistive technology.
-- Quick Open signature: Preserve the first version's lightweight, single-task character. Search is the sole visual anchor; paths read as quiet monospace marginalia; the selected result uses one 2px theme-accent rail plus a soft surface, never a loud full-row color block.
+- Quick Open signature: Preserve the first version's lightweight, single-task character. Search is the sole visual anchor; paths read as quiet monospace marginalia; the selected result uses one 2px theme-accent rail plus a soft surface, never a loud full-row color block. Let the dialog follow its result count naturally and cap dense result sets at 75% of the dynamic viewport height; do not impose a tall empty shell on short lists.
 
 ## Components
 - Existing components to reuse: Core `Plugin`, `PluginSettings`, event bus, settings renderer, theme variables, notices, and editor API.

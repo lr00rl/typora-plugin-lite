@@ -259,8 +259,8 @@ const CSS = `
   flex-direction: column;
   box-sizing: border-box;
   min-width: 0;
-  max-height: calc(100vh - 48px);
-  max-height: calc(100dvh - 48px);
+  max-height: min(75vh, calc(100vh - 48px));
+  max-height: min(75dvh, calc(100dvh - 48px));
   width: min(var(--tpl-qo-panel-width), calc(100vw - 32px));
   transition-property: width;
   transition-duration: 140ms;
@@ -312,15 +312,13 @@ const CSS = `
   margin: 0;
 }
 #tpl-qo-list {
+  flex: 0 1 auto;
   overflow: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
   min-height: 0;
-  max-height: min(54vh, 460px);
+  max-height: none;
   padding: 6px 6px 8px;
-}
-#tpl-qo-modal[data-width="wide"] #tpl-qo-list {
-  max-height: min(54vh, 460px);
 }
 .tpl-qo-section-label {
   padding: 7px 10px 5px;
@@ -619,8 +617,6 @@ const CSS = `
   #tpl-qo-modal,
   #tpl-qo-modal[data-width="wide"] {
     width: calc(100vw - 16px);
-    max-height: calc(100vh - 16px);
-    max-height: calc(100dvh - 16px);
   }
   #tpl-qo-tab-bar { overflow-x: auto; }
   .tpl-qo-tab { padding-inline: 10px; flex: 0 0 auto; }

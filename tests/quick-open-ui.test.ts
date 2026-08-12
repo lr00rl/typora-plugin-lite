@@ -57,6 +57,8 @@ test('Quick Open builds a responsive semantic dialog and restores focus', async 
     assert.match(css, /--tpl-qo-panel-width:\s*680px/)
     assert.match(css, /--tpl-qo-panel-width-wide:\s*920px/)
     assert.match(css, /calc\(100vw - 32px\)/)
+    assert.match(css, /max-height:\s*min\(75vh,\s*calc\(100vh - 48px\)\)/)
+    assert.match(css, /max-height:\s*min\(75dvh,\s*calc\(100dvh - 48px\)\)/)
     assert.match(css, /prefers-reduced-motion: reduce/)
     assert.match(css, /--tpl-ui-surface/)
     assert.match(css, /:focus-visible/)
@@ -69,6 +71,11 @@ test('Quick Open builds a responsive semantic dialog and restores focus', async 
 
     const itemRule = css.match(/\.tpl-qo-item\s*\{([^}]*)\}/)?.[1] ?? ''
     assert.match(itemRule, /grid-template-columns/)
+
+    const listRule = css.match(/#tpl-qo-list\s*\{([^}]*)\}/)?.[1] ?? ''
+    assert.match(listRule, /flex:\s*0 1 auto/)
+    assert.match(listRule, /max-height:\s*none/)
+    assert.doesNotMatch(css, /max-height:\s*min\(54vh,\s*460px\)/)
 
     const footerActionRule = css.match(/#tpl-qo-footer-action\s*\{([^}]*)\}/)?.[1] ?? ''
     assert.match(footerActionRule, /border:\s*0/)
