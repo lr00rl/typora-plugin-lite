@@ -29,13 +29,23 @@ import {
   effectiveType,
   highlightTerms,
   parseQuery,
-  removeToken,
   setToken,
 } from './query.js'
 import {
   collapseDirectoryPathToFit,
   directoryPathForDisplay,
 } from './path-display.js'
+import {
+  CONTENT_MIN_SCORE,
+  contentSearchFailureCopy,
+  contentSearchDebounceDelay,
+  type ContentMatch,
+  findContentHighlightRanges,
+  parseAndRankContentMatches,
+  parseRgFileCounts,
+  selectContentCandidateFiles,
+  tokenizeContentQuery,
+} from './content-search.js'
 
 interface FileEntry {
   absPath: string
@@ -54,13 +64,25 @@ interface InstallPlan {
   canRunDirectly: boolean
 }
 
-interface ContentMatch {
-  absPath: string
-  relPath: string
-  basename: string
-  line: number
-  col: number
-  matchText: string
+interface ContentSearchResult {
+  matches: ContentMatch[]
+  matchingFileCount: number
+  inspectedFileCount: number
+  candidateSetTruncated: boolean
+}
+
+interface CachedContentSearch {
+  createdAt: number
+  result: ContentSearchResult
+}
+
+function emptyContentSearchResult(): ContentSearchResult {
+  return {
+    matches: [],
+    matchingFileCount: 0,
+    inspectedFileCount: 0,
+    candidateSetTruncated: false,
+  }
 }
 
 /**
@@ -76,8 +98,8 @@ type NavRow =
   | { kind: 'content'; match: ContentMatch }
 
 /**
- * The three panels. They share one search core (parseQuery → type/scope/terms);
- * a tab only supplies the default type and the empty-query view.
+ * The three panels share one search core (parseQuery → type/scope/terms). The
+ * selected tab owns the explicit type token and its corresponding empty view.
  *   files   — recents when empty; searches file names.
  *   folders — the directory tree (drill in/out); searches within the folder.
  *   content — hint when empty; ripgreps file contents.
@@ -85,7 +107,7 @@ type NavRow =
 type SearchTab = 'files' | 'folders' | 'content'
 const TAB_ORDER: SearchTab[] = ['files', 'folders', 'content']
 const TAB_LABELS: Record<SearchTab, string> = { files: '文件', folders: '目录', content: '内容' }
-const TAB_DEFAULT_TYPE: Record<SearchTab, SearchType> = { files: 'file', folders: 'file', content: 'content' }
+const TAB_DEFAULT_TYPE: Record<SearchTab, SearchType> = { files: 'file', folders: 'folder', content: 'content' }
 
 /** Popup size presets, as a fraction of the window (never fixed px). */
 type WidthPreset = 'default' | 'wide'
@@ -101,6 +123,11 @@ const DEFAULT_HOTKEYS = ['Mod+.', "Mod+'"]
 const DEBOUNCE_MS = 120
 const INDEX_TTL_MS = 5 * 60_000
 const SEARCH_RESULT_LIMIT = 100
+const CONTENT_CANDIDATE_FILE_LIMIT = 120
+const CONTENT_FILE_HIT_COUNT_LIMIT = 12
+const CONTENT_MATCHES_PER_FILE = 3
+const CONTENT_CACHE_TTL_MS = 15_000
+const CONTENT_CACHE_LIMIT = 12
 const FZF_CANDIDATE_POOL_MULTIPLIER = 5
 const IGNORED_DIRS = ['.git', 'node_modules', '.obsidian', '.trash', '.Trash', '_archive']
 /**
@@ -225,8 +252,8 @@ function escapeHtml(text: string): string {
 // ---------------------------------------------------------------------------
 const CSS = `
 #tpl-qo-overlay {
-  --tpl-qo-panel-width: 680px;
-  --tpl-qo-panel-width-wide: 920px;
+  --tpl-qo-panel-width: 740px;
+  --tpl-qo-panel-width-wide: 1000px;
   --tpl-qo-ink-soft: var(--tpl-ui-text, var(--text-color, #34312e));
   --tpl-qo-ink-selected: var(--tpl-ui-text, var(--text-color, #34312e));
   --tpl-qo-muted: var(--tpl-ui-muted, var(--text-color, #6f6b66));
@@ -524,25 +551,55 @@ const CSS = `
   opacity: 0.42;
   font-size: 11px;
 }
+.tpl-qo-content-item {
+  display: block;
+  padding: 8px 10px;
+}
+.tpl-qo-content-meta {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+}
 .tpl-qo-content-name {
-  font-size: 13.5px;
+  font-size: 12.5px;
   font-weight: 400;
-  line-height: 1.25;
+  line-height: 1.3;
   color: var(--tpl-qo-ink-soft);
   white-space: nowrap;
   overflow: visible;
   text-overflow: clip;
 }
-.tpl-qo-content-line {
-  font-size: 11.5px;
-  line-height: 1.25;
-  color: var(--tpl-qo-muted);
-  text-align: end;
-  opacity: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.tpl-qo-content-path {
+  font-size: 10.75px;
+  text-align: start;
+}
+.tpl-qo-content-line-number {
+  color: var(--tpl-qo-faint);
   font-family: var(--tpl-ui-mono, var(--monospace, 'SF Mono', 'Fira Code', 'Consolas', monospace));
+  font-size: 10.5px;
+  line-height: 1.3;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.tpl-qo-content-context {
+  color: var(--tpl-qo-muted);
+  font-size: 12.25px;
+  line-height: 1.42;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.tpl-qo-content-context-line {
+  min-width: 0;
+}
+.tpl-qo-content-context-before,
+.tpl-qo-content-context-after {
+  color: var(--tpl-qo-faint);
+}
+.tpl-qo-content-context-match {
+  color: var(--tpl-qo-ink-soft);
 }
 
 /* Directory rows (browse mode) */
@@ -631,8 +688,9 @@ const CSS = `
     border-top: 1px solid var(--tpl-qo-hairline);
   }
   .tpl-qo-item { grid-template-columns: minmax(0, 1fr); gap: 2px; }
-  .tpl-qo-path,
-  .tpl-qo-content-line { text-align: start; }
+  .tpl-qo-path { text-align: start; }
+  .tpl-qo-content-item { padding-block: 7px; }
+  .tpl-qo-content-meta { gap: 6px; }
 }
 
 @media (max-width: 520px) {
@@ -700,6 +758,9 @@ export default class QuickOpenPlugin extends Plugin {
   /** Active panel. Sets the default search type and the empty-query view. */
   private activeTab: SearchTab = 'files'
   private contentFiltered: ContentMatch[] = []
+  private contentSearchCache = new Map<string, CachedContentSearch>()
+  /** Serializes bridge commands so superseded keystrokes cannot starve the latest query. */
+  private contentSearchTail: Promise<void> = Promise.resolve()
   private tabBarEl: HTMLElement | null = null
   private recentRecorder: ConfirmedOpenRecorder | null = null
   private manualOpenHook: ConfirmedOpenHook | null = null
@@ -1663,11 +1724,6 @@ export default class QuickOpenPlugin extends Plugin {
     if (restoreFocus?.isConnected) restoreFocus.focus()
   }
 
-  /** The scope operator currently in the search box (browse location), or ''. */
-  private currentScope(): string {
-    return parseQuery(this.currentQuery).scope ?? ''
-  }
-
   // -------------------------------------------------------------------------
   // Build DOM
   // -------------------------------------------------------------------------
@@ -1791,17 +1847,39 @@ export default class QuickOpenPlugin extends Plugin {
     this.footerActionEl = footerAction
     this.updatePlaceholder()
 
+    let composing = false
+    const scheduleSearch = (nextQuery: string): void => {
+      if (this.debounceTimer) clearTimeout(this.debounceTimer)
+      const parsedNext = parseQuery(nextQuery)
+      const debounceMs = effectiveType(
+        parsedNext,
+        TAB_DEFAULT_TYPE[this.activeTab],
+      ) === 'content' ? contentSearchDebounceDelay(parsedNext.terms) : DEBOUNCE_MS
+      this.debounceTimer = setTimeout(() => {
+        if (input.value === this.currentQuery) return
+        void this.renderList(input.value)
+      }, debounceMs)
+    }
     const onInput = () => {
       const nextQuery = input.value
       if (nextQuery === this.lastInputValue) return
       this.lastInputValue = nextQuery
       // Autocomplete reacts immediately; the (expensive) search is debounced.
       this.refreshCompletions()
+      if (composing) return
+      scheduleSearch(nextQuery)
+    }
+    const onCompositionStart = () => {
+      composing = true
       if (this.debounceTimer) clearTimeout(this.debounceTimer)
-      this.debounceTimer = setTimeout(() => {
-        if (input.value === this.currentQuery) return
-        void this.renderList(input.value)
-      }, DEBOUNCE_MS)
+      this.debounceTimer = null
+    }
+    const onCompositionEnd = () => {
+      composing = false
+      const nextQuery = input.value
+      this.lastInputValue = nextQuery
+      this.refreshCompletions()
+      scheduleSearch(nextQuery)
     }
     const onKeydown = (e: KeyboardEvent) => this.handleKey(e)
     const onEsc = (e: KeyboardEvent) => {
@@ -1824,11 +1902,15 @@ export default class QuickOpenPlugin extends Plugin {
       }
     }
     input.addEventListener('input', onInput)
+    input.addEventListener('compositionstart', onCompositionStart)
+    input.addEventListener('compositionend', onCompositionEnd)
     input.addEventListener('keydown', onKeydown)
     document.addEventListener('keydown', onEsc, { capture: true })
     modal.addEventListener('keydown', onFocusTrap)
     this.modalCleanups.push(
       () => input.removeEventListener('input', onInput),
+      () => input.removeEventListener('compositionstart', onCompositionStart),
+      () => input.removeEventListener('compositionend', onCompositionEnd),
       () => input.removeEventListener('keydown', onKeydown),
       () => document.removeEventListener('keydown', onEsc, { capture: true }),
       () => modal.removeEventListener('keydown', onFocusTrap),
@@ -1967,9 +2049,12 @@ export default class QuickOpenPlugin extends Plugin {
     const type = effectiveType(parsed, TAB_DEFAULT_TYPE[this.activeTab])
     const scope = parsed.scope ?? ''
     const terms = parsed.terms
+    list.classList.toggle('tpl-qo-list-content', type === 'content')
 
-    // Empty terms with no explicit type override → the tab's resting view.
-    if (terms === '' && parsed.type === null) {
+    // A tab-authored type token is still its resting view when no terms exist.
+    // Explicit cross-tab overrides (for example type:folder in Files) continue
+    // through the shared search core.
+    if (terms === '' && type === TAB_DEFAULT_TYPE[this.activeTab]) {
       if (this.activeTab === 'folders') {
         await this.renderTree(list, token, scope)
       } else if (this.activeTab === 'content') {
@@ -2008,12 +2093,47 @@ export default class QuickOpenPlugin extends Plugin {
         return
       }
       list.appendChild(this.makeStatus('搜索中… (rg)'))
-      const results = await this.searchContent(terms, scope, SEARCH_RESULT_LIMIT)
+      let searchResult: ContentSearchResult
+      try {
+        searchResult = await this.searchContent(
+          terms,
+          scope,
+          SEARCH_RESULT_LIMIT,
+          () => token !== this.renderToken || !this.listEl,
+        )
+      } catch (err) {
+        if (token !== this.renderToken || !this.listEl) return
+        while (list.firstChild) list.removeChild(list.firstChild)
+        const copy = contentSearchFailureCopy(err)
+        this.warn('searchContent failed', {
+          kind: copy.kind,
+          queryLength: terms.length,
+          scoped: Boolean(scope),
+          errorName: err instanceof Error ? err.name : typeof err,
+        })
+        list.appendChild(this.makeStatus(copy.message))
+        this.updateFooter(copy.footer + scopeLabel)
+        return
+      }
       if (token !== this.renderToken || !this.listEl) return
+      const results = searchResult.matches
       this.contentFiltered = results
       while (list.firstChild) list.removeChild(list.firstChild)
-      this.updateFooter(`${results.length} 条匹配  ·  内容${scopeLabel}`)
-      if (!results.length) { list.appendChild(this.makeStatus('没有匹配的内容')); return }
+      const inspected = searchResult.candidateSetTruncated
+        ? `  ·  分析 ${searchResult.inspectedFileCount}/${searchResult.matchingFileCount} 个命中文件`
+        : ''
+      this.updateFooter(
+        `${results.length} 条高相关匹配${inspected}  ·  内容${scopeLabel}`,
+        `按相关度排序；最低相关度 ${Math.round(CONTENT_MIN_SCORE * 100)}%`,
+      )
+      if (!results.length) {
+        list.appendChild(this.makeStatus(
+          searchResult.matchingFileCount > 0
+            ? '存在字面命中，但没有达到最低相关度的结果'
+            : '没有匹配的内容',
+        ))
+        return
+      }
       this.selectedIdx = 0
       this.rows = results.map(match => ({ kind: 'content', match }))
       this.renderRows(list)
@@ -2199,6 +2319,29 @@ export default class QuickOpenPlugin extends Plugin {
     flushHighlight()
   }
 
+  private renderContentHighlightedText(el: HTMLElement, text: string): void {
+    const terms = tokenizeContentQuery(highlightTerms(this.currentQuery))
+    const ranges = findContentHighlightRanges(text, terms)
+    if (ranges.length === 0) {
+      el.textContent = text
+      return
+    }
+
+    el.textContent = ''
+    let cursor = 0
+    for (const range of ranges) {
+      if (range.start > cursor) {
+        el.appendChild(document.createTextNode(text.slice(cursor, range.start)))
+      }
+      const mark = document.createElement('mark')
+      mark.className = 'tpl-qo-hit'
+      mark.textContent = text.slice(range.start, range.end)
+      el.appendChild(mark)
+      cursor = range.end
+    }
+    if (cursor < text.length) el.appendChild(document.createTextNode(text.slice(cursor)))
+  }
+
   /** Render a NavRow to a selectable list item, dispatched by kind. */
   private makeRow(row: NavRow, idx: number): HTMLElement {
     let item: HTMLElement
@@ -2303,19 +2446,48 @@ export default class QuickOpenPlugin extends Plugin {
 
   private makeContentItem(m: ContentMatch, idx: number): HTMLElement {
     const item = document.createElement('div')
-    item.className = 'tpl-qo-item' + (idx === this.selectedIdx ? ' tpl-qo-selected' : '')
+    item.className = 'tpl-qo-item tpl-qo-content-item' + (idx === this.selectedIdx ? ' tpl-qo-selected' : '')
+
+    const meta = document.createElement('div')
+    meta.className = 'tpl-qo-content-meta'
 
     const name = document.createElement('div')
     name.className = 'tpl-qo-content-name'
-    name.textContent = `${m.basename}:${m.line}`
+    name.textContent = m.basename
     name.title = m.relPath
 
-    const lineEl = document.createElement('div')
-    lineEl.className = 'tpl-qo-content-line'
-    lineEl.textContent = m.matchText.trim()
+    const pathEl = document.createElement('div')
+    pathEl.className = 'tpl-qo-path tpl-qo-content-path'
+    const fullPath = directoryPathForDisplay(m.relPath)
+    pathEl.dataset.fullPath = fullPath
+    pathEl.setAttribute('aria-label', fullPath)
+    pathEl.textContent = fullPath
+    pathEl.title = m.relPath
 
-    item.appendChild(name)
-    item.appendChild(lineEl)
+    const lineNumber = document.createElement('div')
+    lineNumber.className = 'tpl-qo-content-line-number'
+    lineNumber.textContent = `L${m.line}`
+    lineNumber.title = `第 ${m.line} 行`
+
+    meta.appendChild(name)
+    meta.appendChild(pathEl)
+    meta.appendChild(lineNumber)
+
+    const context = document.createElement('div')
+    context.className = 'tpl-qo-content-context'
+    for (const contextLine of m.contextLines) {
+      const lineEl = document.createElement('div')
+      lineEl.className = `tpl-qo-content-context-line tpl-qo-content-context-${contextLine.kind}`
+      this.renderContentHighlightedText(lineEl, contextLine.text)
+      context.appendChild(lineEl)
+    }
+
+    item.appendChild(meta)
+    item.appendChild(context)
+    const score = Math.round(m.score * 100)
+    item.setAttribute('aria-label', `${m.basename}，${directoryPathForDisplay(m.relPath)}，第 ${m.line} 行，相关度 ${score}%`)
+    item.title = `${m.relPath}:${m.line}  ·  相关度 ${score}%\n${m.contextLines.map(line => line.text).join('\n')}`
+    this.queuePathLabelFit()
     item.addEventListener('mouseenter', () => { this.selectedIdx = idx; this.highlight() })
     item.addEventListener('click', () => { this.selectedIdx = idx; this.activateRow() })
     return item
@@ -2483,8 +2655,12 @@ export default class QuickOpenPlugin extends Plugin {
       return
     }
 
-    const emptyInput = value === ''
-    const scope = this.currentScope()
+    // `type:` / `scope:` describe the browse state; they are not user search
+    // terms. Directory keyboard navigation must therefore stay available when
+    // those tab-authored tokens are the only text in the input.
+    const parsedInput = parseQuery(value)
+    const emptyInput = parsedInput.terms === ''
+    const scope = parsedInput.scope ?? ''
 
     if (e.key === 'ArrowDown') {
       e.preventDefault(); e.stopPropagation()
@@ -2543,9 +2719,9 @@ export default class QuickOpenPlugin extends Plugin {
    *
    * Drilling always lands in the folders tab and auto-writes `scope:<dir>/` into
    * the search box (so the same query afterwards searches inside that folder).
-   * It intentionally clears `type:`/terms: the point of a drill is to *see* the
-   * folder's tree, and the tree view only shows when there is no type override
-   * and no terms. `''`/null climbs back to the root tree.
+   * It intentionally clears free-text terms: the point of a drill is to *see*
+   * the folder's tree. The tab-owned `type:folder` token stays explicit so the
+   * input and the visible mode cannot disagree. `''`/null climbs to the root.
    */
   private enterDir(prefix: string | null): void {
     const normalized = prefix ? normalizePrefix(prefix) : ''
@@ -2554,7 +2730,8 @@ export default class QuickOpenPlugin extends Plugin {
       this.updateTabBar()
       this.updatePlaceholder()
     }
-    const q = normalized ? setToken('', 'scope', normalized + '/') : ''
+    const scoped = normalized ? setToken('', 'scope', normalized + '/') : ''
+    const q = setToken(scoped, 'type', 'folder')
     if (this.inputEl) { this.inputEl.value = q; this.lastInputValue = q }
     this.selectedIdx = 0
     this.refreshCompletions()
@@ -2645,14 +2822,12 @@ export default class QuickOpenPlugin extends Plugin {
   }
 
   /**
-   * Cross-tab query rules: `scope:` is always preserved (the user removes it by
-   * hand). The content tab auto-sets `type:content`; leaving it drops that auto
-   * type so the files/folders tab does its own job, while keeping an explicit
-   * `type:folder`/`type:file` override the user typed.
+   * Cross-tab query rules: `scope:` and free text are always preserved, while
+   * the selected tab owns `type:`. Keeping that token explicit makes the query
+   * truthful when the user moves from Files to Folders or Content.
    */
   private adjustQueryForTab(query: string, tab: SearchTab): string {
-    if (tab === 'content') return setToken(query, 'type', 'content')
-    return parseQuery(query).type === 'content' ? removeToken(query, 'type') : query
+    return setToken(query, 'type', TAB_DEFAULT_TYPE[tab])
   }
 
   private updateTabBar(): void {
@@ -2743,55 +2918,174 @@ export default class QuickOpenPlugin extends Plugin {
     input.focus()
   }
 
-  private async searchContent(query: string, scope: string, limit: number): Promise<ContentMatch[]> {
-    if (!this.rgPath || !query.trim()) return []
-    const root = this.getRootDir()
-    if (!root) return []
-    // Restrict ripgrep to the scoped subtree when a scope is active.
-    const searchRoot = scope ? platform.path.join(root, normalizePrefix(scope)) : root
+  private async acquireContentSearchSlot(): Promise<() => void> {
+    const previous = this.contentSearchTail
+    let release!: () => void
+    this.contentSearchTail = new Promise<void>(resolve => { release = resolve })
+    await previous
+    return release
+  }
 
-    const cmd = [
-      platform.shell.escape(this.rgPath),
-      '--no-heading', '--line-number', '--column',
-      '--max-count', '3',
-      '--max-columns', '200',
-      '-i',
-      ...BINARY_EXTS.flatMap(ext => ['--iglob', platform.shell.escape(`!*.${ext}`)]),
-      ...IGNORED_DIRS.flatMap(d => ['--glob', platform.shell.escape(`!${d}`)]),
-      '--', platform.shell.escape(query),
-      platform.shell.escape(searchRoot),
-    ].join(' ')
-
+  private async searchContent(
+    query: string,
+    scope: string,
+    limit: number,
+    isObsolete: () => boolean = () => false,
+  ): Promise<ContentSearchResult> {
+    const release = await this.acquireContentSearchSlot()
     try {
-      const stdout = await platform.shell.run(cmd, { timeout: 5000 })
-      return this.parseRgOutput(stdout, root, limit)
-    } catch (err) {
-      this.warn('searchContent failed', err)
-      return []
+      if (isObsolete()) return emptyContentSearchResult()
+      return await this.searchContentNow(query, scope, limit, isObsolete)
+    } finally {
+      release()
     }
   }
 
-  private parseRgOutput(stdout: string, root: string, limit: number): ContentMatch[] {
-    const results: ContentMatch[] = []
-    for (const line of stdout.split('\n')) {
-      if (!line.trim()) continue
-      // Format: filepath:line:col:text
-      const match = line.match(/^(.+?):(\d+):(\d+):(.*)$/)
-      if (!match) continue
-      const [, filepath, lineStr, colStr, matchText] = match
-      if (!filepath || !lineStr || !colStr) continue
-      const absPath = filepath.startsWith('/') ? filepath : platform.path.join(root, filepath)
-      results.push({
-        absPath,
-        relPath: toRelPath(absPath, root),
-        basename: platform.path.basename(absPath),
-        line: Number.parseInt(lineStr, 10),
-        col: Number.parseInt(colStr, 10),
-        matchText: matchText ?? '',
-      })
-      if (results.length >= limit) break
+  private async runContentRgToPrivateFile(
+    command: string,
+    root: string,
+    cacheKey: string,
+    kind: 'counts' | 'excerpts',
+    isObsolete: () => boolean,
+  ): Promise<string | null> {
+    const tempPath = platform.path.join(
+      this.getIndexCacheDir(),
+      `content-${kind}-${this.hashText(cacheKey)}-${Date.now().toString(36)}.tmp`,
+    )
+    const redirected = `umask 077; ${command} > ${platform.shell.escape(tempPath)}`
+    try {
+      await platform.shell.run(
+        this.allowRgNoMatches(redirected),
+        { cwd: root, timeout: 7000 },
+      )
+      if (isObsolete()) return null
+      return await platform.fs.readText(tempPath)
+    } finally {
+      try {
+        await platform.fs.remove(tempPath)
+      } catch (cleanupError) {
+        this.warn('searchContent temp cleanup failed', {
+          kind,
+          errorName: cleanupError instanceof Error ? cleanupError.name : typeof cleanupError,
+        })
+      }
     }
-    return results
+  }
+
+  private async searchContentNow(
+    query: string,
+    scope: string,
+    limit: number,
+    isObsolete: () => boolean,
+  ): Promise<ContentSearchResult> {
+    const empty = emptyContentSearchResult()
+    if (!this.rgPath || !query.trim()) return empty
+    const root = this.getRootDir()
+    if (!root) return empty
+    // Restrict ripgrep to the scoped subtree when a scope is active.
+    const searchRoot = scope ? platform.path.join(root, normalizePrefix(scope)) : root
+    const terms = tokenizeContentQuery(query)
+    if (terms.length === 0) return empty
+
+    const cacheKey = [root, normalizePrefix(scope), query.toLocaleLowerCase()].join('\u0000')
+    const cached = this.contentSearchCache.get(cacheKey)
+    if (cached && Date.now() - cached.createdAt <= CONTENT_CACHE_TTL_MS) {
+      // Refresh insertion order so the small map behaves as an LRU cache.
+      this.contentSearchCache.delete(cacheKey)
+      this.contentSearchCache.set(cacheKey, cached)
+      return cached.result
+    }
+
+    const commonArgs = [
+      '--no-config',
+      '--fixed-strings',
+      '-i',
+      ...terms.flatMap(term => ['-e', platform.shell.escape(term)]),
+      '--iglob', platform.shell.escape('*.md'),
+      ...IGNORED_DIRS.flatMap(dir => ['--glob', platform.shell.escape(`!**/${dir}/**`)]),
+    ]
+
+    // Phase 1 returns one compact count per matching file. The old path sent
+    // every matching source line over Typora's bridge and discarded almost all
+    // of it afterwards, which made broad queries disproportionately expensive.
+    const countCommand = [
+      platform.shell.escape(this.rgPath),
+      '--count-matches',
+      '--with-filename',
+      '--max-count', String(CONTENT_FILE_HIT_COUNT_LIMIT),
+      ...commonArgs,
+      '--',
+      platform.shell.escape(searchRoot),
+    ].join(' ')
+    const countStdout = await this.runContentRgToPrivateFile(
+      countCommand,
+      root,
+      cacheKey,
+      'counts',
+      isObsolete,
+    )
+    if (countStdout === null) return empty
+    const counts = parseRgFileCounts(countStdout)
+    const candidates = selectContentCandidateFiles(counts, CONTENT_CANDIDATE_FILE_LIMIT)
+    if (candidates.paths.length === 0) {
+      this.cacheContentSearch(cacheKey, empty)
+      return empty
+    }
+
+    // Phase 2 keeps bulk stdout out of controller.runCommand. Even one long
+    // Markdown line can produce a 48KB JSON context event; native rg finishes
+    // quickly, but returning that payload through WKWebView's command bridge
+    // can time out. Spill with mode 0600, read through the dedicated file API,
+    // and remove the transient note content in all success/failure paths.
+    const excerptCommand = [
+      platform.shell.escape(this.rgPath),
+      '--json',
+      '--line-number',
+      '--column',
+      '--context', '1',
+      '--max-count', String(CONTENT_MATCHES_PER_FILE),
+      ...commonArgs,
+      '--',
+      ...candidates.paths.map(path => platform.shell.escape(path)),
+    ].join(' ')
+    const excerptStdout = await this.runContentRgToPrivateFile(
+      excerptCommand,
+      root,
+      cacheKey,
+      'excerpts',
+      isObsolete,
+    )
+    if (excerptStdout === null) return empty
+    const fileHitCounts = new Map(counts.map(item => [normalizePath(item.path), item.count]))
+    const result: ContentSearchResult = {
+      matches: parseAndRankContentMatches(excerptStdout, query, {
+        root,
+        limit,
+        minScore: CONTENT_MIN_SCORE,
+        fileHitCounts,
+      }),
+      matchingFileCount: candidates.totalFiles,
+      inspectedFileCount: candidates.paths.length,
+      candidateSetTruncated: candidates.truncated,
+    }
+    this.cacheContentSearch(cacheKey, result)
+    return result
+  }
+
+  private allowRgNoMatches(command: string): string {
+    // ripgrep uses exit 1 for a valid search with no matches. Preserve every
+    // other non-zero status so permission, I/O, and syntax failures stay loud.
+    return `( ${command}; tpl_qo_rg_status=$?; if [ "$tpl_qo_rg_status" -eq 1 ]; then exit 0; fi; exit "$tpl_qo_rg_status" )`
+  }
+
+  private cacheContentSearch(key: string, result: ContentSearchResult): void {
+    this.contentSearchCache.delete(key)
+    this.contentSearchCache.set(key, { createdAt: Date.now(), result })
+    while (this.contentSearchCache.size > CONTENT_CACHE_LIMIT) {
+      const oldest = this.contentSearchCache.keys().next().value as string | undefined
+      if (oldest === undefined) break
+      this.contentSearchCache.delete(oldest)
+    }
   }
 
   private revealInSidebar(filepath: string): void {

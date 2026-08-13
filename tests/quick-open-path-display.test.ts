@@ -11,9 +11,9 @@ const byCharacters = (value: string): number => value.length
 test('Quick Open path display removes the basename and keeps a directory boundary', () => {
   assert.equal(
     directoryPathForDisplay(
-      "E000_Works/Openjobs-ai/数据部门/部门负责的项目与资源/metix-ruiyi/TaskGroup_20260614_ruiyi_Inner/2026_08_12_codex修改第二版.md",
+      'E000_Work/ProjectAtlas/数据平台/项目与资源/Research/TaskGroup_Archive/2026_08_12_revision.md',
     ),
-    'E000_Works/Openjobs-ai/数据部门/部门负责的项目与资源/metix-ruiyi/TaskGroup_20260614_ruiyi_Inner/',
+    'E000_Work/ProjectAtlas/数据平台/项目与资源/Research/TaskGroup_Archive/',
   )
   assert.equal(
     directoryPathForDisplay('/Users/tester/workspace/notes/note.md'),
@@ -35,8 +35,8 @@ test('Quick Open collapses complete directory segments from the centre, then lef
 })
 
 test('Quick Open preserves the first and last complete directories whenever they fit', () => {
-  const full = 'E000_Works/Openjobs-ai/数据部门/部门负责的项目与资源/metix-ruiyi/TaskGroup_20260614_ruiyi_Inner/'
-  const minimum = 'E000_Works/.../TaskGroup_20260614_ruiyi_Inner/'
+  const full = 'E000_Work/ProjectAtlas/数据平台/项目与资源/Research/TaskGroup_Archive/'
+  const minimum = 'E000_Work/.../TaskGroup_Archive/'
 
   assert.equal(
     collapseDirectoryPathToFit(full, minimum.length, byCharacters),
@@ -45,8 +45,8 @@ test('Quick Open preserves the first and last complete directories whenever they
 })
 
 test('Quick Open falls back to an ellipsis and the complete last directory under extreme pressure', () => {
-  const full = 'E000_Works/Openjobs-ai/TaskGroup_20260614_ruiyi_Inner/'
-  const fallback = '.../TaskGroup_20260614_ruiyi_Inner/'
+  const full = 'E000_Work/ProjectAtlas/TaskGroup_Archive/'
+  const fallback = '.../TaskGroup_Archive/'
 
   assert.equal(
     collapseDirectoryPathToFit(full, fallback.length, byCharacters),

@@ -43,7 +43,8 @@ test('Quick Open builds a responsive semantic dialog and restores focus', async 
     trigger.focus()
 
     const plugin = new QuickOpenPlugin() as any
-    plugin.renderList = async () => {}
+    const renderedQueries: string[] = []
+    plugin.renderList = async (query: string) => { renderedQueries.push(query) }
     plugin.addDisposable = () => {}
     plugin.buildModal()
 
@@ -77,8 +78,8 @@ test('Quick Open builds a responsive semantic dialog and restores focus', async 
     assert.ok(directoryRow.querySelector('.tpl-qo-dir-icon'), 'folder rows keep a quiet authored icon')
 
     const css = document.querySelector<HTMLStyleElement>('#tpl-qo-style')?.textContent ?? ''
-    assert.match(css, /--tpl-qo-panel-width:\s*680px/)
-    assert.match(css, /--tpl-qo-panel-width-wide:\s*920px/)
+    assert.match(css, /--tpl-qo-panel-width:\s*740px/)
+    assert.match(css, /--tpl-qo-panel-width-wide:\s*1000px/)
     assert.match(css, /--tpl-qo-ink-soft:/)
     assert.match(css, /--tpl-qo-ink-selected:/)
     assert.match(css, /--tpl-qo-muted:/)
@@ -157,11 +158,68 @@ test('Quick Open builds a responsive semantic dialog and restores focus', async 
       '~/workspace/notes/',
     )
 
-    const longPath = "E000_Works/Openjobs-ai/数据部门/部门负责的项目与资源/metix-ruiyi/TaskGroup_20260614_ruiyi_Inner/"
+    plugin.currentQuery = 'scope:Projects roadmap'
+    plugin.switchTab('folders')
+    assert.equal(
+      (document.querySelector<HTMLInputElement>('#tpl-qo-input')?.value),
+      'type:folder scope:Projects roadmap',
+      'the directory tab makes its search type explicit instead of inheriting file search',
+    )
+    plugin.switchTab('content')
+    assert.equal(
+      (document.querySelector<HTMLInputElement>('#tpl-qo-input')?.value),
+      'type:content scope:Projects roadmap',
+    )
+    plugin.switchTab('files')
+    assert.equal(
+      (document.querySelector<HTMLInputElement>('#tpl-qo-input')?.value),
+      'type:file scope:Projects roadmap',
+    )
+
+    const input = document.querySelector<HTMLInputElement>('#tpl-qo-input')!
+    let enteredDirectory = ''
+    const originalEnterDir = plugin.enterDir
+    plugin.enterDir = (path: string) => { enteredDirectory = path }
+    plugin.activeTab = 'folders'
+    plugin.rows = [{ kind: 'dir', name: 'Design', path: 'Projects/Design', fileCount: 3 }]
+    plugin.selectedIdx = 0
+    input.value = 'type:folder scope:Projects/'
+    plugin.currentQuery = input.value
+    plugin.handleKey(new KeyboardEvent('keydown', { key: 'ArrowRight' }))
+    assert.equal(
+      enteredDirectory,
+      'Projects/Design',
+      'tab-owned type/scope tokens do not disable keyboard directory drilling',
+    )
+    plugin.enterDir = originalEnterDir
+    plugin.activeTab = 'files'
+    plugin.updateTabBar()
+
+    plugin.switchTab('content')
+    renderedQueries.length = 0
+    input.dispatchEvent(new Event('compositionstart', { bubbles: true }))
+    input.value = 'type:content 中'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    await new Promise(resolve => setTimeout(resolve, 260))
+    assert.deepEqual(renderedQueries, [], 'IME composition never starts an incomplete content search')
+    input.dispatchEvent(new Event('compositionend', { bubbles: true }))
+    await new Promise(resolve => setTimeout(resolve, 440))
+    assert.deepEqual(renderedQueries, ['type:content 中'])
+
+    renderedQueries.length = 0
+    for (const query of ['type:content q', 'type:content qu', 'type:content quick']) {
+      input.value = query
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    }
+    await new Promise(resolve => setTimeout(resolve, 270))
+    assert.deepEqual(renderedQueries, ['type:content quick'], 'rapid input collapses to the latest precise query')
+    plugin.switchTab('files')
+
+    const longPath = 'E000_Work/ProjectAtlas/数据平台/项目与资源/Research/TaskGroup_Archive/'
     const fileRow = plugin.makeItem({
-      basename: '2026_08_12_codex修改第二版.md',
-      relPath: `${longPath}2026_08_12_codex修改第二版.md`,
-      cwdRelPath: `${longPath}2026_08_12_codex修改第二版.md`,
+      basename: '2026_08_12_revision.md',
+      relPath: `${longPath}2026_08_12_revision.md`,
+      cwdRelPath: `${longPath}2026_08_12_revision.md`,
     }, 0)
     const filePath = fileRow.querySelector('.tpl-qo-path') as HTMLElement
     assert.equal(filePath.dataset.fullPath, longPath)
@@ -201,6 +259,37 @@ test('Quick Open builds a responsive semantic dialog and restores focus', async 
     assert.match(hitRule, /--tpl-qo-accent-soft/)
     assert.match(hitRule, /--tpl-qo-selection-soft/)
     assert.doesNotMatch(hitRule, /255\s*,\s*(?:179|212)/)
+
+    plugin.currentQuery = 'type:content alpha beta'
+    const contentRow = plugin.makeContentItem({
+      absPath: '/vault/Projects/decision.md',
+      relPath: 'Projects/decision.md',
+      basename: 'decision.md',
+      line: 42,
+      col: 8,
+      matchText: 'The alpha beta decision is recorded here.',
+      score: 0.91,
+      contextLines: [
+        { line: 41, text: 'Context before the decision.', kind: 'before' },
+        { line: 42, text: 'The alpha beta decision is recorded here.', kind: 'match' },
+        { line: 43, text: 'Context after the decision.', kind: 'after' },
+      ],
+    }, 0)
+    assert.equal(contentRow.classList.contains('tpl-qo-content-item'), true)
+    assert.equal(contentRow.querySelector('.tpl-qo-content-name')?.textContent, 'decision.md')
+    assert.equal(contentRow.querySelector('.tpl-qo-content-path')?.textContent, 'Projects/')
+    assert.equal(contentRow.querySelector('.tpl-qo-content-line-number')?.textContent, 'L42')
+    assert.equal(contentRow.querySelectorAll('.tpl-qo-content-context-line').length, 3)
+    assert.equal(contentRow.querySelectorAll('.tpl-qo-content-context-match .tpl-qo-hit').length, 2)
+    assert.match(contentRow.getAttribute('aria-label') ?? '', /decision\.md.*第 42 行.*91%/)
+
+    const contentItemRule = css.match(/\.tpl-qo-content-item\s*\{([^}]*)\}/)?.[1] ?? ''
+    assert.match(contentItemRule, /display:\s*block/)
+    assert.match(contentItemRule, /padding:\s*8px 10px/)
+    const contentMetaRule = css.match(/\.tpl-qo-content-meta\s*\{([^}]*)\}/)?.[1] ?? ''
+    assert.match(contentMetaRule, /grid-template-columns:\s*max-content minmax\(0,\s*1fr\) max-content/)
+    const contentContextRule = css.match(/\.tpl-qo-content-context\s*\{([^}]*)\}/)?.[1] ?? ''
+    assert.match(contentContextRule, /white-space:\s*pre-wrap/)
 
     const tabs = [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
     tabs[0]!.focus()
