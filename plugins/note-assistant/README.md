@@ -1,27 +1,52 @@
 # Note Assistant
 
-`note-assistant` reads a generated vault graph from `.note-assistant/graph.json`
-and surfaces related notes for the current document directly inside Typora.
+`Cmd/Ctrl+;` 唤出相关笔记面板。数据来自 vault 侧的 `.note-assistant/graph.json`
+（由 `tools/note-assistant/build-graph.mjs` 生成），插件只做三件事：发现、打开、
+把 wiki-link 插进正文。
 
-## Features
+## 面板
 
-- show related notes for the current file
-- show explicit wiki-links and backlinks from the generated graph
-- open a related note directly from the panel
-- insert selected wiki-links back into the current document
-- rebuild the graph by running `node tools/note-assistant/build-graph.mjs`
+三个范围页签，`Tab` / `Shift+Tab` / `Cmd+←→` 循环切换：
 
-## Expected Vault Side Files
+- **相关**：图谱决策阶段挑出的精选相关笔记，按分数排序，每行带一个理由徽标
+  （链接 / 反链 / 同目录 / 同分区 / 共词·某词）。决策为空时打开会自动落到
+  第一个非空的范围，不会面对空列表发愣。
+- **链接**：确定性的出链（explicitLinks）与入链（backlinks），去重后按先出后入排列。
+- **候选**：图谱的宽池候选（TF-IDF 共词 + 目录邻近加权），找冷门关联用。
 
-This plugin expects the vault root to contain:
+输入即过滤（对标题 / 路径 / 标签做子序列匹配，CJK 安全，保持图谱原序不重排），
+命中字符用下划线淡标。键盘模型与 Quick Open 一致：`↑↓` 移动，`Enter` 打开并关闭，
+`Esc` 关闭并把焦点还给编辑器。
 
-- `.note-assistant/graph.json`
-- `tools/note-assistant/build-graph.mjs`
+**`⌥Enter`（macOS）/ `Alt+Enter`：把 `[[相对路径|标题]]` 插入正文光标处。**
+这是唯一写文档的动作，也是整个设计里最关键的一个：块内容会被 apply-graph
+重新生成，只有正文里的 wiki-link 会被 build-graph 吸收进图谱，让下次的「相关」
+更准。插入后 toast 会提醒「保存并重建索引后生效」。源代码模式下走
+CodeMirror 的 `replaceSelection`，两种模式都进各自的撤销栈。
 
-The current companion generator lives in your RooB vault and writes those files.
+footer 一行状态：未建索引 / 本篇未索引 / 共 N 篇 · 生成于日期；索引超过 7 天
+未更新时会安静地出现「重建索引」按钮（键盘路径是 `Cmd/Ctrl+R`）。
 
-## Usage
+## 内联块
 
-- `Mod+;`: open Note Assistant
-- Command: `Note Assistant: Open`
-- Command: `Note Assistant: Rebuild Graph`
+文档里的 `<!-- note-assistant:start/end -->` 区域是 vault 流水线的生成物
+（apply-graph 会重写，build-graph 分析前会剔除），所以渲染是只读的：
+一行小标题加条数，下面是一个朴素的链接列表，点击直接打开；「面板」按钮
+唤出面板。块内容要改就直接改 markdown，MutationObserver 会实时重渲染。
+observer 只响应「注释节点增删」和「块区域内编辑」两类 mutation，在文档
+别处打字不会触发任何重处理。
+
+## 命令
+
+- `笔记助手: 打开相关笔记`（`note-assistant:open`，同 `Cmd/Ctrl+;`，切换式）
+- `笔记助手: 重建索引`（`note-assistant:rebuild-graph`，运行
+  `node tools/note-assistant/build-graph.mjs --root <vault> --allow-heuristic-blocks`）
+- `笔记助手: 状态`（`note-assistant:state`）：返回 JSON 状态快照
+  （图谱路径、索引规模、当前篇收录情况、面板开关、内联块渲染计数、
+  buildMarker），供 remote-control 调用做自动化验证。
+
+## 数据文件
+
+插件从当前文件向上查找 `.note-assistant/graph.json`，路径计算一律使用
+「找到的那个根目录」，不信任文件内嵌的 `root` 字段（跨机器同步的 vault
+里它是上一台机器的绝对路径）。vault 侧流水线见 `tools/note-assistant/README.md`。

@@ -352,8 +352,8 @@ export class TyporaRemoteControlClient {
     return await this.invokePluginCommand('note-assistant', 'note-assistant:rebuild-graph')
   }
 
-  async noteAssistantReparseDocument(): Promise<TyporaPluginCommandResult> {
-    return await this.invokePluginCommand('note-assistant', 'note-assistant:reparse-document')
+  async noteAssistantState(): Promise<TyporaPluginCommandResult> {
+    return await this.invokePluginCommand('note-assistant', 'note-assistant:state')
   }
 
   async widerCycle(): Promise<TyporaPluginCommandResult> {
