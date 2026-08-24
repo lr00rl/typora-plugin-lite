@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 
 import {
   deriveTitleFromTarget,
+  findByBasename,
   normalizePath,
   relPathFromDir,
   relPathFromRoot,
@@ -77,4 +78,12 @@ test('targetCandidates strips heading suffixes and respects a given extension', 
 
 test('targetCandidates rejects an empty target', () => {
   assert.deepEqual(targetCandidates('#只有标题', '/v/a/note.md', '/v').candidates, [])
+})
+
+test('findByBasename heals a moved note by unique basename', () => {
+  const relPaths = ['A000/old/raft.md', 'A000/new/other.md', 'B000/x/raft copy.md']
+  assert.deepEqual(findByBasename(relPaths, 'old/raft'), ['A000/old/raft.md'])
+  assert.deepEqual(findByBasename(relPaths, 'raft.md#某一节'), ['A000/old/raft.md'])
+  assert.deepEqual(findByBasename(relPaths, '不存在'), [])
+  assert.deepEqual(findByBasename(['a/x/同名.md', 'b/y/同名.md'], 'x/同名'), ['a/x/同名.md', 'b/y/同名.md'])
 })

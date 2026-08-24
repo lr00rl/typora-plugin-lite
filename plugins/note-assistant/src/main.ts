@@ -26,7 +26,7 @@ export default class NoteAssistantPlugin extends Plugin {
 
     const palette = new NotePalette(this.store, message => this.showNotice(message))
     this.palette = palette
-    this.block = new BlockRenderer(this.store, () => void palette.toggle())
+    this.block = new BlockRenderer(this.store, () => void palette.toggle(), message => this.showNotice(message))
 
     const writeEl = document.getElementById('write')
     if (writeEl) this.block.attach(writeEl)

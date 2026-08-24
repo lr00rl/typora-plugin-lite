@@ -12,7 +12,7 @@
 
 import { editor, platform } from '@typora-plugin-lite/core'
 
-import { firstNonEmpty, relPathFromRoot } from './links.js'
+import { findByBasename, firstNonEmpty, relPathFromRoot, targetCandidates } from './links.js'
 import type { GraphFile, GraphNote } from './types.js'
 
 const GRAPH_DIR = '.note-assistant'
@@ -143,6 +143,44 @@ export class GraphStore {
     const root = this.graphRoot || this.getFallbackRootDir()
     const relPath = root ? relPathFromRoot(currentFile, root) : currentFile
     return { currentFile, relPath, note: this.noteMap.get(relPath) || null }
+  }
+
+  /**
+   * Resolve a wiki target to an existing file: direct candidates first
+   * (current-dir then root-relative), then the moved-note fallback — a unique
+   * basename match in the graph, with a same-directory preference on ties.
+   * Callers get the full picture (via + match count) so they can explain a
+   * healed or unresolvable link instead of failing silently.
+   */
+  async resolveNoteTarget(rawTarget: string, currentFile: string): Promise<{
+    absPath: string | null
+    via: 'direct' | 'basename' | null
+    basenameMatches: number
+  }> {
+    const root = this.rootDir()
+    const { candidates } = targetCandidates(rawTarget, currentFile, root)
+    for (const candidate of candidates) {
+      if (await platform.fs.exists(candidate)) {
+        return { absPath: candidate, via: 'direct', basenameMatches: 0 }
+      }
+    }
+
+    const matches = findByBasename(this.noteMap.keys(), rawTarget)
+    if (!matches.length || !root) {
+      return { absPath: null, via: null, basenameMatches: matches.length }
+    }
+    if (matches.length > 1) {
+      const currentRel = relPathFromRoot(currentFile, root)
+      const currentDir = platform.path.dirname(currentRel)
+      const sameDir = matches.find(rel => platform.path.dirname(rel) === currentDir)
+      if (!sameDir) return { absPath: null, via: null, basenameMatches: matches.length }
+      const absPath = platform.path.join(root, sameDir)
+      if (!(await platform.fs.exists(absPath))) return { absPath: null, via: null, basenameMatches: matches.length }
+      return { absPath, via: 'basename', basenameMatches: matches.length }
+    }
+    const absPath = platform.path.join(root, matches[0])
+    if (!(await platform.fs.exists(absPath))) return { absPath: null, via: null, basenameMatches: 1 }
+    return { absPath, via: 'basename', basenameMatches: 1 }
   }
 
   async rebuild(): Promise<boolean> {

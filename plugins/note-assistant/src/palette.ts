@@ -8,7 +8,7 @@
  * so Enter/⌥Enter land in a restored editor context.
  */
 
-import { IS_MAC, editor, platform } from '@typora-plugin-lite/core'
+import { IS_MAC, editor } from '@typora-plugin-lite/core'
 
 import type { GraphStore } from './graph.js'
 import { deriveTitleFromTarget } from './links.js'
@@ -465,20 +465,23 @@ export class NotePalette {
   }
 
   private async activateOpen(row: PaletteRow): Promise<void> {
-    const root = this.store.graphRoot
+    const currentFile = this.store.currentNote()?.currentFile ?? ''
     const relPath = row.relPath
     this.close()
-    if (!root) {
-      this.notify(`无法打开：${relPath}`)
-      return
-    }
-    const absPath = platform.path.join(root, relPath)
     try {
-      if (!(await platform.fs.exists(absPath))) {
-        this.notify(`文件不存在：${relPath}`)
+      const hit = await this.store.resolveNoteTarget(relPath, currentFile)
+      if (!hit.absPath) {
+        if (hit.basenameMatches > 1) {
+          this.notify(`「${row.title}」有 ${hit.basenameMatches} 篇同名笔记，无法确定目标`)
+        } else {
+          this.notify(`找不到：${relPath}。可能已移动或删除；Cmd+Shift+R 重建索引试试`)
+        }
         return
       }
-      await editor.openFile(absPath)
+      await editor.openFile(hit.absPath)
+      if (hit.via === 'basename') {
+        this.notify('已按文件名解析到新位置（原路径已失效，重建索引后自愈）')
+      }
     } catch (err) {
       console.error('[tpl:note-assistant] open failed', err)
       this.notify(`无法打开：${relPath}`)

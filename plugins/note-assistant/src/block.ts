@@ -13,10 +13,9 @@
  * appeared or disappeared) or lands inside an already-stamped block region.
  */
 
-import { editor, platform } from '@typora-plugin-lite/core'
+import { editor } from '@typora-plugin-lite/core'
 
 import type { GraphStore } from './graph.js'
-import { targetCandidates } from './links.js'
 import { parseWikiLine } from './wiki-line.js'
 
 const BLOCK_START = '<!-- note-assistant:start -->'
@@ -44,6 +43,7 @@ export class BlockRenderer {
   constructor(
     private store: GraphStore,
     private openPalette: () => void,
+    private notify: (message: string) => void,
   ) {}
 
   attach(writeEl: HTMLElement): void {
@@ -254,18 +254,24 @@ export class BlockRenderer {
   private async openTarget(rawTarget: string): Promise<void> {
     const currentFile = editor.getFilePath()
     if (!currentFile) return
-    const { candidates } = targetCandidates(rawTarget, currentFile, this.store.rootDir())
-    for (const candidate of candidates) {
-      if (await platform.fs.exists(candidate)) {
-        try {
-          await editor.openFile(candidate)
-          return
-        } catch (err) {
-          console.error('[tpl:note-assistant] open target failed', err)
+    try {
+      const hit = await this.store.resolveNoteTarget(rawTarget, currentFile)
+      if (!hit.absPath) {
+        if (hit.basenameMatches > 1) {
+          this.notify(`「${rawTarget}」有 ${hit.basenameMatches} 篇同名笔记，无法确定目标`)
+        } else {
+          this.notify(`找不到：${rawTarget}。可能已移动或删除；Cmd+Shift+R 重建索引试试`)
         }
+        return
       }
+      await editor.openFile(hit.absPath)
+      if (hit.via === 'basename') {
+        this.notify('已按文件名解析到新位置（原路径已失效，重建索引后自愈）')
+      }
+    } catch (err) {
+      console.error('[tpl:note-assistant] open target failed', err)
+      this.notify(`无法打开：${rawTarget}`)
     }
-    console.warn('[tpl:note-assistant] failed to resolve target', { rawTarget, candidates })
   }
 
   private connectObserver(): void {

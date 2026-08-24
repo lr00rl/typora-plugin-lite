@@ -170,3 +170,24 @@ export function targetCandidates(rawTarget: string, currentFile: string, rootDir
 
   return { normalizedTarget, candidates: [...candidates] }
 }
+
+function basenameWithoutExt(input: string): string {
+  const base = normalizePath(input).split('/').filter(Boolean).pop() || ''
+  return withoutMarkdownExt(base)
+}
+
+/**
+ * Last-resort resolution for a moved note: every relPath whose basename
+ * matches the target's (extension-insensitive). Mirrors the vault pipeline's
+ * resolver: a unique basename match heals a broken link after a move; ties
+ * are for the caller to disambiguate (same-directory preference).
+ */
+export function findByBasename(relPaths: Iterable<string>, rawTarget: string): string[] {
+  const wanted = basenameWithoutExt(rawTarget.split('#')[0].trim())
+  if (!wanted) return []
+  const matches: string[] = []
+  for (const relPath of relPaths) {
+    if (basenameWithoutExt(relPath) === wanted) matches.push(relPath)
+  }
+  return matches
+}

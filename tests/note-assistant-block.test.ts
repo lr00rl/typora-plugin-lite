@@ -56,7 +56,7 @@ function makeWrite(): HTMLElement {
 }
 
 function stubStore() {
-  return { rootDir: () => '/v' }
+  return { rootDir: () => '/v', resolveNoteTarget: async () => ({ absPath: null, via: null, basenameMatches: 0 }) }
 }
 
 test('BlockRenderer renders a quiet read-only list and hides the source', async () => {
@@ -66,7 +66,7 @@ test('BlockRenderer renders a quiet read-only list and hides the source', async 
     const write = makeWrite()
     write.innerHTML = BLOCK_HTML
 
-    const renderer = new BlockRenderer(stubStore() as any, () => {})
+    const renderer = new BlockRenderer(stubStore() as any, () => {}, () => {})
     renderer.attach(write)
 
     assert.equal(renderer.processCount, 1, 'attach processes once')
@@ -98,7 +98,7 @@ test('BlockRenderer ignores irrelevant mutations and reprocesses block edits', a
     const write = makeWrite()
     write.innerHTML = BLOCK_HTML
 
-    const renderer = new BlockRenderer(stubStore() as any, () => {})
+    const renderer = new BlockRenderer(stubStore() as any, () => {}, () => {})
     renderer.attach(write)
     assert.equal(renderer.processCount, 1)
 
