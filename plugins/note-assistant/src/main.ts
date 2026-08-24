@@ -45,7 +45,12 @@ export default class NoteAssistantPlugin extends Plugin {
     this.registerCommand({
       id: 'note-assistant:state',
       name: '笔记助手: 状态',
-      callback: () => this.state(),
+      // Load first so a cold-start call reports the graph truthfully instead
+      // of echoing an empty cache; the mtime check keeps warm calls free.
+      callback: async () => {
+        await this.store.load()
+        return this.state()
+      },
     })
   }
 
