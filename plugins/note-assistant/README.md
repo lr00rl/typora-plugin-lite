@@ -13,6 +13,7 @@
   第一个非空的范围，不会面对空列表发愣。
 - **链接**：确定性的出链（explicitLinks）与入链（backlinks），去重后按先出后入排列。
 - **候选**：图谱的宽池候选（TF-IDF 共词 + 目录邻近加权），找冷门关联用。
+  已被精选进「相关」的条目会从这里排除，两个范围读作「精选」与「池子的其余部分」。
 
 输入即过滤（对标题 / 路径 / 标签做子序列匹配，CJK 安全，保持图谱原序不重排），
 命中字符用下划线淡标。键盘模型与 Quick Open 一致：`↑↓` 移动，`Enter` 打开并关闭，
@@ -39,6 +40,7 @@ observer 只响应「注释节点增删」和「块区域内编辑」两类 muta
 ## 命令
 
 - `笔记助手: 打开相关笔记`（`note-assistant:open`，同 `Cmd/Ctrl+;`，切换式）
+- 全局 `Cmd/Ctrl+Shift+R`：面板关着也能触发重建（面板内的 `Cmd/Ctrl+R` 只在开着时有效）
 - `笔记助手: 重建索引`（`note-assistant:rebuild-graph`，运行
   `node tools/note-assistant/build-graph.mjs --root <vault> --allow-heuristic-blocks`）
 - `笔记助手: 状态`（`note-assistant:state`）：返回 JSON 状态快照

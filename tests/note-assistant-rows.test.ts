@@ -75,6 +75,18 @@ test('candidates scope preserves graph score order', () => {
   assert.deepEqual(rows.map(row => row.title), ['A', 'B', 'C'])
 })
 
+test('candidates scope hides entries already curated into related', () => {
+  const note = makeNote({
+    related: [{ relPath: 'A000/a.md', title: 'A', score: 100, reasons: {} }],
+    candidates: [
+      { relPath: 'A000/a.md', title: 'A', score: 100, reasons: {} },
+      { relPath: 'A000/b.md', title: 'B', score: 50, reasons: {} },
+    ],
+  })
+  const rows = deriveScopeRows(note, 'candidates', contextWith([]))
+  assert.deepEqual(rows.map(row => row.title), ['B'])
+})
+
 test('a missing note yields no rows in any scope', () => {
   const context = contextWith([])
   assert.deepEqual(deriveScopeRows(null, 'related', context), [])

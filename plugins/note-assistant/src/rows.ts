@@ -97,9 +97,16 @@ export function deriveScopeRows(
   }
 
   const items = scope === 'candidates' ? note.candidates ?? [] : note.related ?? []
+  // 相关 is the curated subset of the same pool, so 候选 hides whatever 相关
+  // already shows: the two scopes read as "the picks" vs "the rest of the pool".
+  const curated = scope === 'candidates'
+    ? new Set((note.related ?? []).map(item => item.relPath))
+    : null
   // A partially-populated graph can carry empty titles; derive one rather than
   // render a blank name column (the links scope already does this).
-  return items.map(item => toRow(item.relPath, item.title || noteTitle(noteMap, item.relPath), reasonBadge(item.reasons)))
+  return items
+    .filter(item => !curated || !curated.has(item.relPath))
+    .map(item => toRow(item.relPath, item.title || noteTitle(noteMap, item.relPath), reasonBadge(item.reasons)))
 }
 
 /** Order-preserving filter over title, path, and tags; threads highlight positions. */

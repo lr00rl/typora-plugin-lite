@@ -32,6 +32,9 @@ export default class NoteAssistantPlugin extends Plugin {
     if (writeEl) this.block.attach(writeEl)
 
     this.registerHotkey(HOTKEY, () => void palette.toggle())
+    // Rebuild is a legitimate global action; the palette's Mod+R only exists
+    // while it is open, so give the closed state a path too.
+    this.registerHotkey('Mod+Shift+R', () => void this.rebuild())
     this.registerCommand({
       id: 'note-assistant:open',
       name: '笔记助手: 打开相关笔记',
