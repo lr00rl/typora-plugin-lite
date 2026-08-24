@@ -13,6 +13,7 @@ import {
 import { isProbablyBinary } from './fence.js'
 import { HIGHLIGHT_LANGS, highlightLines } from './highlight.js'
 import { languageFor } from './languages.js'
+import { CodeTree } from './tree.js'
 
 interface CodeViewerSettings extends Record<string, unknown> {
   enabled: boolean
@@ -24,6 +25,8 @@ interface CodeViewerSettings extends Record<string, unknown> {
   showWhitespace: boolean
   /** Vertical indent-alignment guides at every tab stop. */
   indentGuides: boolean
+  /** Show non-Markdown text files in the sidebar file tree (opens read-only). */
+  showInTree: boolean
   /**
    * Per-extension language overrides set via the header picker
    * (managed by the picker itself; not shown in the settings form).
@@ -37,6 +40,7 @@ const DEFAULT_SETTINGS: CodeViewerSettings = {
   maxLines: 50_000,
   showWhitespace: true,
   indentGuides: true,
+  showInTree: true,
   langOverrides: {},
 }
 
@@ -201,6 +205,11 @@ export default class CodeViewerPlugin extends Plugin<CodeViewerSettings> {
         label: 'Show indent guides',
         description: 'Vertical alignment rules at every tab stop of a line\'s indentation.',
       },
+      showInTree: {
+        kind: 'toggle',
+        label: 'Show code files in the sidebar tree',
+        description: 'List non-Markdown text files in the file tree and open them in the read-only viewer on click.',
+      },
       maxBytes: {
         kind: 'number',
         label: 'Max file size (bytes)',
@@ -216,13 +225,21 @@ export default class CodeViewerPlugin extends Plugin<CodeViewerSettings> {
         max: 500_000,
       },
     },
-    order: ['enabled', 'showWhitespace', 'indentGuides', 'maxBytes', 'maxLines'],
+    order: ['enabled', 'showWhitespace', 'indentGuides', 'showInTree', 'maxBytes', 'maxLines'],
   }
 
   private activePath = ''
   private pane: HTMLElement | null = null
   private paneHeight = 0
   private restores: Array<() => void> = []
+  /**
+   * Set when a file was opened from the sidebar tree rather than through
+   * Typora's document model: Typora refuses to open unsupported extensions,
+   * so the tree click renders the pane directly and the underlying markdown
+   * document stays untouched (and unfocused) beneath it.
+   */
+  private forcedPath = ''
+  private tree = new CodeTree(path => void this.openForced(path))
 
   _init(...args: Parameters<Plugin<CodeViewerSettings>['_init']>): void {
     super._init(args[0], args[1], DEFAULT_SETTINGS)
@@ -246,6 +263,7 @@ export default class CodeViewerPlugin extends Plugin<CodeViewerSettings> {
   }
 
   onunload(): void {
+    this.tree.detach()
     this.teardown()
   }
 
@@ -279,6 +297,10 @@ export default class CodeViewerPlugin extends Plugin<CodeViewerSettings> {
 
   private shouldBlockSave(): boolean {
     if (!this.settings.get('enabled')) return false
+    // Forced mode: the live document is the user's markdown, not the code file.
+    // Its saves must pass through untouched; the code file is never the
+    // document here, so there is nothing to protect.
+    if (this.forcedPath) return false
     return languageFor(this.currentFileName()) !== null
   }
 
@@ -289,20 +311,45 @@ export default class CodeViewerPlugin extends Plugin<CodeViewerSettings> {
     const plugin = this
     file.onFileOpened = function hooked(this: unknown, ...args: unknown[]) {
       const result = original.apply(this, args)
-      queueMicrotask(() => void plugin.sync())
+      queueMicrotask(() => {
+        // A real document took over: any tree-forced view yields to it.
+        plugin.forcedPath = ''
+        void plugin.sync()
+      })
       return result
     }
     this.restores.push(() => { file.onFileOpened = original })
   }
 
   private currentFileName(): string {
+    if (this.forcedPath) return basename(this.forcedPath)
     return editor.getFileName() || basename(editor.getFilePath())
   }
 
-  private async sync(force = false): Promise<void> {
-    if (!this.settings.get('enabled')) { this.hidePane(); return }
+  /** Open a non-Markdown file directly, bypassing Typora's extension filter. */
+  private async openForced(path: string): Promise<void> {
+    if (!this.settings.get('enabled')) return
+    this.forcedPath = path
+    await this.renderPane(path)
+    if (this.pane) {
+      // Focus the pane so keystrokes land on a read-only surface instead of
+      // leaking into the hidden markdown document beneath.
+      this.pane.tabIndex = -1
+      this.pane.focus()
+    }
+  }
 
-    const path = editor.getFilePath()
+  private async sync(force = false): Promise<void> {
+    if (this.settings.get('showInTree')) this.tree.attach()
+    else this.tree.detach()
+
+    if (!this.settings.get('enabled')) {
+      this.forcedPath = ''
+      this.hidePane()
+      return
+    }
+
+    const path = this.forcedPath || editor.getFilePath()
     if (!path || languageFor(this.currentFileName()) === null) {
       // Markdown or nothing open → normal editor.
       this.hidePane()
@@ -336,6 +383,11 @@ export default class CodeViewerPlugin extends Plugin<CodeViewerSettings> {
       raw = await platform.fs.readText(path)
     } catch (err) {
       this.warn('failed to read', path, err)
+      // Clear a stale forced open so the 400ms poll does not retry forever.
+      if (this.forcedPath === path) {
+        this.forcedPath = ''
+        this.hidePane()
+      }
       return
     }
 
@@ -352,7 +404,10 @@ export default class CodeViewerPlugin extends Plugin<CodeViewerSettings> {
 
     // Belt-and-suspenders: a code file should be a clean document (we never
     // write to it). Force-clean in case Typora's own round-trip dirtied it.
-    this.markClean()
+    // FORCED MODE EXCLUDED: there the live document is the user's markdown —
+    // markSaved() would silently clear its dirty flag and drop unsaved edits
+    // on quit. Never touch the document state for a file Typora did not open.
+    if (!this.forcedPath) this.markClean()
 
     this.showTextPane(path, lang, null, raw)
     this.activePath = path
