@@ -177,7 +177,10 @@ export class CodeTree {
     // -mindepth 1 keeps a root literally named "dist"/"node_modules" from
     // matching its own prune rule and silently scanning nothing.
     const depth = maxDepth > 0 ? `-maxdepth ${maxDepth}` : ''
-    return `find ${platform.shell.escape(dir)} ${depth} -mindepth 1 -type d \\( ${prune} \\) -prune -o -type f -print 2>/dev/null`
+    // Filter BEFORE the bridge: an unfiltered vault listing is ~9k lines and
+    // controller.runCommand rejects that transfer (empty cache, feature dead).
+    // The md/dotfile drop leaves a few hundred lines, which crosses fine.
+    return `find ${platform.shell.escape(dir)} ${depth} -mindepth 1 -type d \\( ${prune} \\) -prune -o -type f -not -name '.*' -print 2>/dev/null | grep -vE '/\\.[^/]+/' | grep -viE '\\.(md|markdown|mdown|mkd|mdx)$'`
   }
 
   private parseListing(text: string): Map<string, TreeNodeData[]> {
