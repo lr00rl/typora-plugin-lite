@@ -159,8 +159,8 @@ export default class TrailPlugin extends Plugin {
       this.refreshButtons()
       return false
     }
-    return this.jump(target, () => {
-      this.fwdStack.push(this.current)
+    return this.jump(target, (origin) => {
+      this.fwdStack.push(origin)
       if (this.fwdStack.length > CAP) this.fwdStack.shift()
     }, () => {
       this.backStack.push(target)
@@ -174,8 +174,8 @@ export default class TrailPlugin extends Plugin {
       this.refreshButtons()
       return false
     }
-    return this.jump(target, () => {
-      this.backStack.push(this.current)
+    return this.jump(target, (origin) => {
+      this.backStack.push(origin)
       if (this.backStack.length > CAP) this.backStack.shift()
     }, () => {
       this.fwdStack.push(target)
@@ -183,11 +183,12 @@ export default class TrailPlugin extends Plugin {
   }
 
   /**
-   * Move to a stack target: on success run `commit` (push the current file to
-   * the other stack), on failure run `revert` (put the target back) so a dead
-   * path does not silently swallow history.
+   * Move to a stack target: on success run `commit(origin)` (push the file we
+   * came FROM to the other stack), on failure run `revert` (put the target
+   * back) so a dead path does not silently swallow history.
    */
-  private async jump(target: string, commit: () => void, revert: () => void): Promise<boolean> {
+  private async jump(target: string, commit: (origin: string) => void, revert: () => void): Promise<boolean> {
+    const origin = this.current
     try {
       this.replaying = true
       await editor.openFile(target)
@@ -199,7 +200,7 @@ export default class TrailPlugin extends Plugin {
         throw new Error(`open did not land on ${target}`)
       }
       this.current = target
-      commit()
+      commit(origin)
       this.refreshButtons()
       return true
     } catch (err) {
