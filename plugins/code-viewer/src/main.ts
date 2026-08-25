@@ -239,6 +239,8 @@ export default class CodeViewerPlugin extends Plugin<CodeViewerSettings> {
    * document stays untouched (and unfocused) beneath it.
    */
   private forcedPath = ''
+  /** Editor document at the moment of a forced open; the poll compares against it. */
+  private forcedBaseEditorPath = ''
   private tree = new CodeTree(path => void this.openForced(path))
 
   _init(...args: Parameters<Plugin<CodeViewerSettings>['_init']>): void {
@@ -330,6 +332,7 @@ export default class CodeViewerPlugin extends Plugin<CodeViewerSettings> {
   private async openForced(path: string): Promise<void> {
     if (!this.settings.get('enabled')) return
     this.forcedPath = path
+    this.forcedBaseEditorPath = editor.getFilePath()
     await this.renderPane(path)
     if (this.pane) {
       // Focus the pane so keystrokes land on a read-only surface instead of
@@ -345,8 +348,21 @@ export default class CodeViewerPlugin extends Plugin<CodeViewerSettings> {
 
     if (!this.settings.get('enabled')) {
       this.forcedPath = ''
+      this.forcedBaseEditorPath = ''
       this.hidePane()
       return
+    }
+
+    // Clear a forced view when the underlying document has moved on. This is
+    // the reliable exit: Typora does not call window.File.onFileOpened for
+    // library.openFile (it keeps its own reference, so the monkey-patch in
+    // hookFileOpen never fires on that path), but the poll sees every switch.
+    if (this.forcedPath && this.forcedBaseEditorPath) {
+      const current = editor.getFilePath()
+      if (current && current !== this.forcedBaseEditorPath) {
+        this.forcedPath = ''
+        this.forcedBaseEditorPath = ''
+      }
     }
 
     const path = this.forcedPath || editor.getFilePath()
