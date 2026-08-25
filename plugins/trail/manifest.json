@@ -1,0 +1,10 @@
+{
+  "id": "trail",
+  "name": "Trail",
+  "version": "0.1.0",
+  "description": "Bounded back/forward navigation across recently visited notes (up to 3 each way): floating quiet buttons and Cmd/Ctrl+Alt+Left/Right",
+  "main": "main.js",
+  "loading": {
+    "startup": true
+  }
+}

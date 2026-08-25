@@ -53,6 +53,7 @@ Plugins never touch low-level APIs directly. They use `platform.fs`, `platform.s
 | `title-shift` | S | `hotkey` | Quickly shift heading levels. |
 | `fuzzy-search` | M | `hotkey` | Quick-open with fzf-style ranking, relative-path matching, and rg/fallback indexing. |
 | `note-assistant` | M | `hotkey` | Keyboard-first related-notes palette (Mod+;); Alt+Enter inserts a wiki-link; quiet read-only inline blocks. |
+| `trail` | S | `startup` | Bounded back/forward navigation (up to 3 each way) across recently visited notes, with quiet floating buttons. |
 | `remote-control` | L | `startup` | Loopback JSON-RPC surface for external agents / CLIs. See [plugin README](./plugins/remote-control/README.md). |
 
 ### `wider` at a glance
