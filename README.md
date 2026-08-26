@@ -51,10 +51,26 @@ Plugins never touch low-level APIs directly. They use `platform.fs`, `platform.s
 | `sidenote` | M | `startup` | Render inline `<span class="sidenote">` as margin notes inside the editor. |
 | `wider` | M | `startup` | Switch editor width between `default / wide / full` with sidenote-aware spacing. |
 | `title-shift` | S | `hotkey` | Quickly shift heading levels. |
-| `fuzzy-search` | M | `hotkey` | Quick-open with fzf-style ranking, relative-path matching, and rg/fallback indexing. |
-| `note-assistant` | M | `hotkey` | Keyboard-first related-notes palette (Mod+;); Alt+Enter inserts a wiki-link; quiet read-only inline blocks. |
+| `fuzzy-search` | M | `hotkey` | Quick-open with fzf-style ranking, relative-path matching, and rg/fallback indexing; a leading `/` browses by path (`//` reaches the filesystem root). |
+| `note-assistant` | M | `hotkey` | Keyboard-first related-notes palette (Mod+;); Alt+Enter inserts a wiki-link; renders `[[wiki-links]]` inline anywhere in the body, and generated `00_索引` directory-index sections read-only. |
 | `trail` | S | `startup` | Bounded back/forward navigation (up to 3 each way) across recently visited notes, with quiet floating buttons. |
 | `remote-control` | L | `startup` | Loopback JSON-RPC surface for external agents / CLIs. See [plugin README](./plugins/remote-control/README.md). |
+
+### `fuzzy-search` path navigation
+
+- Typing `/` as the first character switches the list from searching the index to walking a path
+- `/` is the root of the open folder, `//` the filesystem root, `~/` the home directory
+- The segment after the last `/` filters its parent's listing rather than joining it, so typing and completing are one motion
+- `Tab` advances by the common prefix of every match, so it can never commit to the wrong entry
+- `Enter` drills or opens, `Backspace` at the end of the box climbs a level, deleting the `/` leaves the mode
+- Folders first, dotfiles hidden until the segment starts with `.`; hidden and truncated counts are stated in the footer
+
+### `note-assistant` inline rendering
+
+- `[[target|title]]` renders as a link anywhere in the body, showing the title and opening the target on click
+- Decoration never changes a character of the document: the text node is split into spans whose concatenated `textContent` is byte-identical, and the syntax halves are hidden with CSS
+- The block holding the caret reverts to raw markdown, the way Typora treats its own inline syntax; `Alt`+click places the caret instead of navigating
+- Targets missing from the index render dashed rather than looking live
 
 ### `wider` at a glance
 
