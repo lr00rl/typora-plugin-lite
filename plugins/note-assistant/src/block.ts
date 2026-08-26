@@ -16,19 +16,40 @@
 import { editor } from '@typora-plugin-lite/core'
 
 import type { GraphStore } from './graph.js'
-import { parseWikiLine } from './wiki-line.js'
+import { parseWikiItem } from './wiki-line.js'
 
-const BLOCK_START = '<!-- note-assistant:start -->'
-const BLOCK_END = '<!-- note-assistant:end -->'
+/**
+ * Marker families this renderer understands. `index` is what
+ * `tools/vault.mjs index` writes today (directory indexes and mocs/ pages);
+ * the bare pair is the older per-note 相关笔记 block. Both are recognised so a
+ * vault mid-migration renders either shape, and so the renderer never again
+ * silently matches nothing after the generator renames its markers.
+ */
+const BLOCK_MARKERS: ReadonlyArray<{ start: string; end: string }> = [
+  { start: '<!-- note-assistant:index:start -->', end: '<!-- note-assistant:index:end -->' },
+  { start: '<!-- note-assistant:start -->', end: '<!-- note-assistant:end -->' },
+]
 
 interface InlineItem {
   rawTarget: string
   displayTitle: string
+  /** Text trailing the link: a reason, or a `（N 篇）` count. */
+  trailing: string
+  /** Nesting depth inside the source list; 0 is top level. */
+  depth: number
+  /** A plain list line with no link (a sub-directory label). */
+  isLabel: boolean
+}
+
+interface InlineSection {
+  title: string
+  items: InlineItem[]
 }
 
 interface InlineBlock {
   title: string
-  items: InlineItem[]
+  sections: InlineSection[]
+  linkCount: number
 }
 
 export class BlockRenderer {
@@ -113,9 +134,11 @@ export class BlockRenderer {
 
       for (let index = 0; index < comments.length; index += 1) {
         const startComment = comments[index]
-        if ((startComment.textContent || '').trim() !== BLOCK_START) continue
+        const startText = (startComment.textContent || '').trim()
+        const marker = BLOCK_MARKERS.find(candidate => candidate.start === startText)
+        if (!marker) continue
 
-        const endComment = comments.slice(index + 1).find(el => (el.textContent || '').trim() === BLOCK_END)
+        const endComment = comments.slice(index + 1).find(el => (el.textContent || '').trim() === marker.end)
         if (!endComment) continue
 
         const startBlock = getTopLevelBlock(startComment, root)
@@ -159,20 +182,49 @@ export class BlockRenderer {
     })
   }
 
+  /**
+   * A generated block is a flat run of top-level elements, not a tree: the
+   * first heading names the block, later headings open sections, and every list
+   * in between contributes items to whichever section is open. Nested lists are
+   * walked so a `- dir（N 篇）` label keeps its children under it instead of
+   * losing them, which is what the old first-list-only parser did.
+   */
   private parseBlock(sourceBlocks: HTMLElement[]): InlineBlock {
-    const title = sourceBlocks.find(block => block.matches('h1,h2,h3,h4,h5,h6'))?.textContent?.trim() || '相关笔记'
-    const listBlock = sourceBlocks.find(block => block.matches('ul,ol'))
-    const items = listBlock
-      ? Array.from(listBlock.children)
-          .filter((child): child is HTMLElement => child instanceof HTMLElement && child.matches('li'))
-          .map(item => parseWikiLine(item.textContent || ''))
-          .filter((item): item is NonNullable<typeof item> => !!item)
-          .map(item => ({
-            rawTarget: item.rawTarget,
-            displayTitle: item.displayTitle || item.rawTarget.split('/').pop() || item.rawTarget,
-          }))
-      : []
-    return { title, items }
+    let title = ''
+    const sections: InlineSection[] = []
+    let current: InlineSection | null = null
+
+    const sectionFor = (): InlineSection => {
+      if (!current) {
+        current = { title: '', items: [] }
+        sections.push(current)
+      }
+      return current
+    }
+
+    for (const block of sourceBlocks) {
+      if (block.matches('h1,h2,h3,h4,h5,h6')) {
+        const text = (block.textContent || '').trim()
+        if (!text) continue
+        if (!title) {
+          title = text
+        } else {
+          current = { title: text, items: [] }
+          sections.push(current)
+        }
+        continue
+      }
+      if (block.matches('ul,ol')) {
+        collectItems(block, 0, sectionFor().items)
+      }
+    }
+
+    const populated = sections.filter(section => section.items.length > 0)
+    const linkCount = populated.reduce(
+      (sum, section) => sum + section.items.filter(item => !item.isLabel).length,
+      0,
+    )
+    return { title: title || '相关笔记', sections: populated, linkCount }
   }
 
   private renderBlock(data: InlineBlock): HTMLElement {
@@ -189,7 +241,7 @@ export class BlockRenderer {
 
     const count = document.createElement('span')
     count.className = 'tpl-note-assistant-inline-count'
-    count.textContent = data.items.length ? `${data.items.length} 条` : ''
+    count.textContent = data.linkCount ? `${data.linkCount} 条` : ''
 
     const open = document.createElement('button')
     open.className = 'tpl-note-assistant-inline-open'
@@ -212,12 +264,20 @@ export class BlockRenderer {
     header.appendChild(open)
     panel.appendChild(header)
 
-    const list = document.createElement('div')
-    list.className = 'tpl-note-assistant-inline-list'
-    for (const item of data.items) {
-      list.appendChild(this.renderItem(item))
+    for (const section of data.sections) {
+      if (section.title) {
+        const kicker = document.createElement('div')
+        kicker.className = 'tpl-note-assistant-inline-section'
+        kicker.textContent = section.title
+        panel.appendChild(kicker)
+      }
+      const list = document.createElement('div')
+      list.className = 'tpl-note-assistant-inline-list'
+      for (const item of section.items) {
+        list.appendChild(item.isLabel ? renderLabel(item) : this.renderItem(item))
+      }
+      panel.appendChild(list)
     }
-    panel.appendChild(list)
     return panel
   }
 
@@ -234,10 +294,11 @@ export class BlockRenderer {
 
     const path = document.createElement('span')
     path.className = 'tpl-note-assistant-inline-item-path'
-    path.textContent = item.rawTarget
+    path.textContent = item.trailing || item.rawTarget
 
     button.appendChild(title)
     button.appendChild(path)
+    if (item.depth > 0) button.style.setProperty('--tpl-note-depth', String(item.depth))
 
     button.addEventListener('mousedown', evt => {
       evt.preventDefault()
@@ -302,4 +363,44 @@ function getTopLevelBlock(node: Node, root: HTMLElement): HTMLElement | null {
     current = current.parentNode
   }
   return current instanceof HTMLElement ? current : null
+}
+
+/** A list line with no link: a sub-directory label that owns the items below it. */
+function renderLabel(item: InlineItem): HTMLElement {
+  const el = document.createElement('div')
+  el.className = 'tpl-note-assistant-inline-label'
+  el.textContent = item.displayTitle
+  if (item.depth > 0) el.style.setProperty('--tpl-note-depth', String(item.depth))
+  return el
+}
+
+/** A list item's own text, with the text of any nested list removed. */
+function ownTextOf(item: HTMLElement, nested: HTMLElement[]): string {
+  if (!nested.length) return item.textContent || ''
+  const clone = item.cloneNode(true) as HTMLElement
+  clone.querySelectorAll('ul,ol').forEach(list => list.remove())
+  return clone.textContent || ''
+}
+
+function collectItems(list: HTMLElement, depth: number, out: InlineItem[]): void {
+  for (const child of Array.from(list.children)) {
+    if (!(child instanceof HTMLElement) || !child.matches('li')) continue
+    const nested = Array.from(child.children).filter(
+      (node): node is HTMLElement => node instanceof HTMLElement && node.matches('ul,ol'),
+    )
+    const ownText = ownTextOf(child, nested).trim()
+    const parsed = ownText ? parseWikiItem(ownText) : null
+    if (parsed) {
+      out.push({
+        rawTarget: parsed.rawTarget,
+        displayTitle: parsed.displayTitle || parsed.rawTarget.split('/').pop() || parsed.rawTarget,
+        trailing: parsed.trailing,
+        depth,
+        isLabel: false,
+      })
+    } else if (ownText) {
+      out.push({ rawTarget: '', displayTitle: ownText, trailing: '', depth, isLabel: true })
+    }
+    for (const sub of nested) collectItems(sub, depth + 1, out)
+  }
 }

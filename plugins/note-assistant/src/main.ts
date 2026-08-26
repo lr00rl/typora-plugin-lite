@@ -11,6 +11,7 @@ import { Plugin } from '@typora-plugin-lite/core'
 
 import { BlockRenderer } from './block.js'
 import { GraphStore } from './graph.js'
+import { InlineRenderer } from './inline.js'
 import { NotePalette } from './palette.js'
 import { CSS } from './styles.js'
 
@@ -20,6 +21,7 @@ export default class NoteAssistantPlugin extends Plugin {
   private store = new GraphStore()
   private palette: NotePalette | null = null
   private block: BlockRenderer | null = null
+  private inline: InlineRenderer | null = null
 
   onload(): void {
     this.registerCss(CSS)
@@ -28,8 +30,16 @@ export default class NoteAssistantPlugin extends Plugin {
     this.palette = palette
     this.block = new BlockRenderer(this.store, () => void palette.toggle(), message => this.showNotice(message))
 
+    this.inline = new InlineRenderer(this.store, message => this.showNotice(message))
+
     const writeEl = document.getElementById('write')
-    if (writeEl) this.block.attach(writeEl)
+    if (writeEl) {
+      this.block.attach(writeEl)
+      this.inline.attach(writeEl)
+      // The probe that greys out unresolvable links needs the graph in memory;
+      // load it in the background and repaint once, rather than blocking load.
+      void this.store.load().then(() => this.inline?.processAll())
+    }
 
     this.registerHotkey(HOTKEY, () => void palette.toggle())
     // Rebuild is a legitimate global action; the palette's Mod+R only exists
@@ -58,6 +68,8 @@ export default class NoteAssistantPlugin extends Plugin {
   }
 
   onunload(): void {
+    this.inline?.detach()
+    this.inline = null
     this.block?.detach()
     this.block = null
     this.palette?.dispose()
@@ -81,6 +93,10 @@ export default class NoteAssistantPlugin extends Plugin {
       inline: {
         processCount: this.block?.processCount ?? 0,
         renderedCount: this.block?.renderedCount ?? 0,
+      },
+      wikiLinks: {
+        processCount: this.inline?.processCount ?? 0,
+        linkCount: this.inline?.linkCount ?? 0,
       },
     })
   }

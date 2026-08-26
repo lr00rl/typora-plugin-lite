@@ -407,4 +407,64 @@ export const CSS = `
   min-width: 0;
   flex-shrink: 2;
 }
+
+/* --- generated block: sections + nesting --- */
+#write .tpl-note-assistant-inline-section {
+  margin-top: 10px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: 0.02em;
+  color: var(--tpl-ui-muted, var(--text-color, inherit));
+  opacity: 0.55;
+  user-select: none;
+}
+#write .tpl-note-assistant-inline-section + .tpl-note-assistant-inline-list {
+  margin-top: 2px;
+}
+#write .tpl-note-assistant-inline-label {
+  font-size: 12px;
+  line-height: 1.45;
+  padding: 3px 8px;
+  margin-inline-start: -8px;
+  color: var(--tpl-ui-muted, var(--text-color, inherit));
+  opacity: 0.6;
+  padding-inline-start: calc(8px + var(--tpl-note-depth, 0) * 14px);
+}
+#write .tpl-note-assistant-inline-item {
+  padding-inline-start: calc(8px + var(--tpl-note-depth, 0) * 14px);
+}
+
+/* --- inline wiki links ---
+   The syntax halves stay in the DOM so the document text is unchanged; only
+   their boxes are removed. display:none rather than visibility:hidden, so the
+   hidden target never claims horizontal space. */
+#write .tpl-wl-mark,
+#write .tpl-wl-path {
+  display: none;
+}
+#write .tpl-wl {
+  cursor: pointer;
+  border-radius: 3px;
+}
+#write .tpl-wl-title {
+  color: var(--tpl-ui-accent, var(--accent-color, #0e7c74));
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--tpl-ui-accent, var(--accent-color, #0e7c74)) 30%, transparent);
+  padding-bottom: 1px;
+}
+@media (hover: hover) and (pointer: fine) {
+  #write .tpl-wl:hover .tpl-wl-title {
+    border-bottom-color: var(--tpl-ui-accent, var(--accent-color, #0e7c74));
+    background: var(--tpl-ui-surface-subtle, rgba(128, 128, 128, 0.06));
+  }
+}
+#write .tpl-wl-missing .tpl-wl-title {
+  color: var(--tpl-ui-muted, var(--text-color, inherit));
+  opacity: 0.75;
+  border-bottom-style: dashed;
+  border-bottom-color: color-mix(in srgb, currentColor 45%, transparent);
+}
+/* The block holding the caret is stripped back to raw markdown, the way
+   Typora treats its own inline syntax; the class is left as a theme hook. */
 `

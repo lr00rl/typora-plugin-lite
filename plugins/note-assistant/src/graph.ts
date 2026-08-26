@@ -145,6 +145,29 @@ export class GraphStore {
     return { currentFile, relPath, note: this.noteMap.get(relPath) || null }
   }
 
+  /** True once graph.json has been read at least once. */
+  get isLoaded(): boolean {
+    return !!this.graphCache
+  }
+
+  /**
+   * Synchronous, filesystem-free verdict on a wiki target, for decorating many
+   * inline links at once. `resolveNoteTarget` is the authority (it stats the
+   * disk); this only consults the in-memory graph, so it is cheap enough to run
+   * over every link on a page and is allowed to be optimistic: an `unknown`
+   * verdict means "not in the last index", not "definitely broken".
+   */
+  probeNoteTarget(rawTarget: string, currentFile: string): 'known' | 'basename' | 'unknown' {
+    if (!this.graphCache) return 'known'
+    const root = this.rootDir()
+    if (!root) return 'known'
+    const { candidates } = targetCandidates(rawTarget, currentFile, root)
+    for (const candidate of candidates) {
+      if (this.noteMap.has(relPathFromRoot(candidate, root))) return 'known'
+    }
+    return findByBasename(this.noteMap.keys(), rawTarget).length ? 'basename' : 'unknown'
+  }
+
   /**
    * Resolve a wiki target to an existing file: direct candidates first
    * (current-dir then root-relative), then the moved-note fallback — a unique

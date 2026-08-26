@@ -38,3 +38,38 @@ export function composeWikiLine(item: { target: string; title: string; reasonTex
   const reason = (item.reasonText || '').trim()
   return `- ${link}${reason ? ` - ${reason}` : ''}`
 }
+
+/**
+ * Permissive variant for generated index blocks, where a link is followed by a
+ * count rather than the ` - reason` shape `parseWikiLine` expects
+ * (`- [[ssh/00_索引|ssh]]（6 篇）`). Takes the first `[[...]]` anywhere in the
+ * line and returns whatever trails it, with a leading ` - ` separator stripped
+ * so both shapes collapse to the same result.
+ */
+export const WIKI_INLINE_RE = /\[\[([^|\][]+)(?:\|([^\]]*))?\]\]/
+
+export interface WikiItem {
+  rawTarget: string
+  displayTitle: string
+  trailing: string
+}
+
+export function parseWikiItem(rawText: string): WikiItem | null {
+  const text = rawText
+    .replace(/^[-*+]\s+/, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  const match = text.match(WIKI_INLINE_RE)
+  if (!match || match.index === undefined) return null
+
+  const rawTarget = match[1].trim()
+  if (!rawTarget) return null
+
+  const trailing = text
+    .slice(match.index + match[0].length)
+    .replace(/^\s*[-–]\s*/, '')
+    .trim()
+
+  return { rawTarget, displayTitle: (match[2] || '').trim(), trailing }
+}

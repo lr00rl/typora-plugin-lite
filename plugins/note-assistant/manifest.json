@@ -2,7 +2,7 @@
   "id": "note-assistant",
   "name": "Note Assistant",
   "version": "0.1.0",
-  "description": "Keyboard-first related-notes palette (Mod+;): open, filter, or Alt+Enter a wiki-link into the document; quiet read-only rendering of generated <!-- note-assistant --> blocks",
+  "description": "Keyboard-first related-notes palette (Mod+;): open, filter, or Alt+Enter a wiki-link into the document; inline [[wiki-link]] rendering everywhere in the body; quiet read-only rendering of generated <!-- note-assistant:index --> blocks",
   "main": "main.js",
   "loading": {
     "startup": true
