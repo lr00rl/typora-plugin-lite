@@ -8,6 +8,11 @@ export interface FileStats {
   mtimeMs?: number
 }
 
+export interface DirEntry {
+  name: string
+  isDirectory: boolean
+}
+
 export interface WalkOptions {
   /** File extensions to include (e.g. ['.md', '.markdown']). Empty = all files. */
   exts?: string[]
@@ -25,6 +30,12 @@ export interface IFileSystem {
   isDirectory(filepath: string): Promise<boolean>
   mkdir(dirpath: string): Promise<void>
   list(dirpath: string): Promise<string[]>
+  /**
+   * One directory level with entry types resolved. Separate from `list` because
+   * the caller would otherwise stat every name to learn what is a folder, which
+   * turns browsing a large directory into hundreds of round trips.
+   */
+  listEntries(dirpath: string): Promise<DirEntry[]>
   /** Recursively walk a directory, returning absolute paths of matching files. */
   walkDir(dirpath: string, opts?: WalkOptions): Promise<string[]>
   readText(filepath: string): Promise<string>

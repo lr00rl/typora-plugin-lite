@@ -1,7 +1,7 @@
 // Core entry point — wires together all subsystems
 // Registers on window.__tpl for IIFE-based loading (WKWebView doesn't support file:// ESM)
 
-import { IS_MAC, IS_NODE, platform } from './platform/index.js'
+import { IS_MAC, IS_NODE, getHomedir, platform } from './platform/index.js'
 import { Plugin } from './plugin/plugin.js'
 import type { PluginManifest, LoadingStrategy } from './plugin/manifest.js'
 import { PluginManager } from './plugin/manager.js'
@@ -29,7 +29,7 @@ import {
   splitWhitespace,
 } from './codeblock/whitespace.js'
 
-export { IS_MAC, IS_NODE, platform, Plugin, PluginManager, PluginSettings, EventBus, editor, HotkeyManager, PluginCenterPanel, CommandRegistry }
+export { IS_MAC, IS_NODE, getHomedir, platform, Plugin, PluginManager, PluginSettings, EventBus, editor, HotkeyManager, PluginCenterPanel, CommandRegistry }
 export {
   calculateEditorShellGutter,
   canFitEditorReserve,
@@ -149,7 +149,7 @@ function showLoadedToast(pluginCount: number): void {
 // scripts/build.ts parses it to generate the @typora-plugin-lite/core import
 // shim. Adding an export here automatically exposes it to plugins at runtime.
 const coreExports = {
-  IS_MAC, IS_NODE, platform, Plugin, PluginManager, PluginSettings,
+  IS_MAC, IS_NODE, getHomedir, platform, Plugin, PluginManager, PluginSettings,
   EventBus, editor, HotkeyManager, CommandRegistry, getApp, bootstrap,
   splitWhitespace, indentColumns, indentGuideColumns, indentGuideBackground,
   CODEBLOCK_MARKER_CSS, detectIndentUnit, guideColumnsPerLine,

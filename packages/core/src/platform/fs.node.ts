@@ -3,7 +3,7 @@
  * Uses reqnode('fs') for all operations.
  */
 
-import type { IFileSystem, FileStats, WalkOptions } from './filesystem.js'
+import type { IFileSystem, FileStats, WalkOptions, DirEntry } from './filesystem.js'
 const TAG = '[tpl:fs:node]'
 
 export class NodeFS implements IFileSystem {
@@ -37,6 +37,15 @@ export class NodeFS implements IFileSystem {
 
   list(dirpath: string): Promise<string[]> {
     return this._fsp.readdir(dirpath)
+  }
+
+  async listEntries(dirpath: string): Promise<DirEntry[]> {
+    // withFileTypes resolves the kind from the single readdir syscall.
+    const entries = await this._fsp.readdir(dirpath, { withFileTypes: true }) as Array<{
+      name: string
+      isDirectory(): boolean
+    }>
+    return entries.map(entry => ({ name: entry.name, isDirectory: entry.isDirectory() }))
   }
 
   async walkDir(dirpath: string, opts: WalkOptions = {}): Promise<string[]> {

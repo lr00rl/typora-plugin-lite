@@ -3,8 +3,8 @@
  * Plugins use `platform.fs`, `platform.shell`, `platform.path` — never touch bridge/reqnode directly.
  */
 
-export { IS_MAC, IS_NODE, getPluginsDir, getBuiltinPluginsDir, getBaseUrl, getDataDir, getMountFolder } from './detect.js'
-export type { IFileSystem, FileStats, WalkOptions } from './filesystem.js'
+export { IS_MAC, IS_NODE, getPluginsDir, getBuiltinPluginsDir, getBaseUrl, getDataDir, getMountFolder, getHomedir } from './detect.js'
+export type { IFileSystem, FileStats, WalkOptions, DirEntry } from './filesystem.js'
 export type { IShell } from './shell.js'
 export type { IPath } from './path.js'
 

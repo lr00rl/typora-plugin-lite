@@ -3,7 +3,7 @@
  * Uses bridge.callSync for reads, Shell.run for writes/stat/mkdir/list/remove.
  */
 
-import type { IFileSystem, FileStats, WalkOptions } from './filesystem.js'
+import type { IFileSystem, FileStats, WalkOptions, DirEntry } from './filesystem.js'
 import { shell } from './shell.js'
 const TAG = '[tpl:fs:darwin]'
 let rgBinaryPromise: Promise<string | null> | null = null
@@ -146,6 +146,21 @@ export class DarwinFS implements IFileSystem {
   list(dirpath: string): Promise<string[]> {
     return shell.run(`ls ${shell.escape(dirpath)}`)
       .then(out => out.trim().split('\n').filter(Boolean))
+  }
+
+  async listEntries(dirpath: string): Promise<DirEntry[]> {
+    // `ls -Ap` is a single call that already answers both questions: -A lists
+    // dotfiles without `.`/`..`, and -p suffixes directories with a slash, so
+    // no per-entry stat is needed. A symlink to a directory is reported as a
+    // file, which is the one thing this trades away.
+    const out = await shell.run(`ls -Ap ${shell.escape(dirpath)}`).catch(() => '')
+    return out
+      .split('\n')
+      .map(line => line.replace(/\r$/, ''))
+      .filter(Boolean)
+      .map(line => line.endsWith('/')
+        ? { name: line.slice(0, -1), isDirectory: true }
+        : { name: line, isDirectory: false })
   }
 
   async walkDir(dirpath: string, opts: WalkOptions = {}): Promise<string[]> {

@@ -1,4 +1,4 @@
-import { IS_MAC, Plugin, editor, platform } from '@typora-plugin-lite/core'
+import { IS_MAC, Plugin, editor, getHomedir, platform } from '@typora-plugin-lite/core'
 
 import { fuzzyMatchPositions, fzfScore, rankCandidates } from './scoring.js'
 import {
@@ -29,12 +29,25 @@ import {
   effectiveType,
   highlightTerms,
   parseQuery,
+  removeToken,
   setToken,
 } from './query.js'
 import {
   collapseDirectoryPathToFit,
   directoryPathForDisplay,
 } from './path-display.js'
+import {
+  type PathEntry,
+  type PathQuery,
+  completePath,
+  describeRoot,
+  joinPath,
+  filterEntries,
+  isPathQuery,
+  parentInput,
+  parsePathQuery,
+  withLeaf,
+} from './path-mode.js'
 import {
   CONTENT_MIN_SCORE,
   contentSearchFailureCopy,
@@ -93,6 +106,7 @@ function emptyContentSearchResult(): ContentSearchResult {
  */
 type NavRow =
   | { kind: 'file'; file: FileEntry }
+  | { kind: 'path'; name: string; absPath: string; isDirectory: boolean }
   | { kind: 'dir'; name: string; path: string; fileCount: number }
   | { kind: 'up'; path: string }
   | { kind: 'content'; match: ContentMatch }
@@ -123,6 +137,8 @@ const DEFAULT_HOTKEYS = ['Mod+.', "Mod+'"]
 const DEBOUNCE_MS = 120
 const INDEX_TTL_MS = 5 * 60_000
 const SEARCH_RESULT_LIMIT = 100
+/** Rows rendered for one directory in path mode; overflow is reported, never silent. */
+const PATH_ENTRY_LIMIT = 500
 const CONTENT_CANDIDATE_FILE_LIMIT = 120
 const CONTENT_FILE_HIT_COUNT_LIMIT = 12
 const CONTENT_MATCHES_PER_FILE = 3
@@ -239,6 +255,12 @@ function isRelativePathQuery(query: string): boolean {
     trimmed.includes('/') ||
     trimmed.includes('\\')
   )
+}
+
+/** Lowercase extension without the dot, or '' when the name has none. */
+function extensionOf(name: string): string {
+  const dot = name.lastIndexOf('.')
+  return dot > 0 ? name.slice(dot + 1).toLowerCase() : ''
 }
 
 function escapeHtml(text: string): string {
@@ -378,6 +400,35 @@ const CSS = `
   letter-spacing: 0.02em;
   color: var(--tpl-qo-muted);
   user-select: none;
+}
+/* Path mode location bar: the absolute directory being listed. */
+.tpl-qo-location {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding-bottom: 5px;
+}
+.tpl-qo-location-kind {
+  flex: none;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--tpl-qo-chip-bg, rgba(128, 128, 128, 0.12));
+  color: var(--tpl-qo-muted);
+}
+.tpl-qo-location-path {
+  min-width: 0;
+  font-family: var(--tpl-ui-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  color: var(--tpl-qo-muted);
+  /* A deep path stays readable by losing its head, not its tail. */
+  direction: rtl;
+  text-align: left;
+  unicode-bidi: plaintext;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .tpl-qo-item {
   min-height: 34px;
@@ -786,6 +837,8 @@ export default class QuickOpenPlugin extends Plugin {
   private indexEntriesCurrentDir = ''
   /** All directories derived from the index, for scope: autocomplete. */
   private cachedDirs: DirChild[] = []
+  /** Listing of the directory path mode is currently showing, for completion. */
+  private pathEntries: PathEntry[] = []
 
   /**
    * Frecency store (open counts + recency), replacing the old recency-only MRU.
@@ -2045,6 +2098,17 @@ export default class QuickOpenPlugin extends Plugin {
     this.rows = []
     while (list.firstChild) list.removeChild(list.firstChild)
 
+    // Path mode outranks the tabs: a leading slash is unambiguous, and it must
+    // work from the 目录 tab too, where the tab has authored type:/scope: into
+    // the box. Strip those first so the test sees only what the user typed.
+    const pathQuery = this.parsePathInput(query)
+    if (pathQuery) {
+      list.classList.remove('tpl-qo-list-content')
+      await this.renderPath(list, token, pathQuery)
+      return
+    }
+    this.pathEntries = []
+
     const parsed = parseQuery(query)
     const type = effectiveType(parsed, TAB_DEFAULT_TYPE[this.activeTab])
     const scope = parsed.scope ?? ''
@@ -2173,6 +2237,169 @@ export default class QuickOpenPlugin extends Plugin {
     this.selectedIdx = 0
     this.rows = results.map(file => ({ kind: 'file', file }))
     this.renderRows(list)
+  }
+
+  /** What the user typed, with the tab-authored operators removed. */
+  private typedText(query: string): string {
+    return removeToken(removeToken(query, 'type'), 'scope')
+  }
+
+  /** The path query for this input, or null when it is not one. */
+  private parsePathInput(query: string): PathQuery | null {
+    const typed = this.typedText(query)
+    if (!isPathQuery(typed)) return null
+    return parsePathQuery(typed, { workspace: this.getRootDir(), home: getHomedir() })
+  }
+
+  /**
+   * Path mode: list one real directory, filtered by the partially typed final
+   * segment. Unlike the folders tab this reads the filesystem rather than the
+   * index, which is the point — `//` reaches everything Typora can open, not
+   * just what has been indexed under the open folder.
+   */
+  private async renderPath(list: HTMLElement, token: number, query: PathQuery): Promise<void> {
+    let entries: PathEntry[]
+    try {
+      entries = await platform.fs.listEntries(query.dir)
+    } catch (err) {
+      if (token !== this.renderToken || !this.listEl) return
+      this.warn('listEntries failed', { dir: query.dir, err })
+      entries = []
+      this.pathEntries = []
+      while (list.firstChild) list.removeChild(list.firstChild)
+      list.appendChild(this.makeLocationBar(query))
+      list.appendChild(this.makeStatus('无法读取这个目录（可能不存在或没有权限）'))
+      this.updateFooter(`${describeRoot(query.kind)}  ·  ${query.dir}`)
+      return
+    }
+    if (token !== this.renderToken || !this.listEl) return
+
+    this.pathEntries = entries
+    const matched = filterEntries(entries, query.leaf)
+    const shown = matched.slice(0, PATH_ENTRY_LIMIT)
+    const hiddenCount = entries.length - matched.length
+
+    while (list.firstChild) list.removeChild(list.firstChild)
+    list.appendChild(this.makeLocationBar(query))
+
+    const rows: NavRow[] = []
+    this.selectedIdx = 0
+    for (const entry of shown) {
+      const row: NavRow = {
+        kind: 'path',
+        name: entry.name,
+        // Path mode is posix-normalized end to end (parsePathQuery produced
+        // query.dir); joining with the same helper keeps one convention.
+        absPath: joinPath(query.dir, entry.name),
+        isDirectory: entry.isDirectory,
+      }
+      rows.push(row)
+      list.appendChild(this.makeRow(row, rows.length - 1))
+    }
+    if (!shown.length) {
+      list.appendChild(this.makeStatus(query.leaf ? '没有匹配的条目' : '此目录为空'))
+    }
+    this.rows = rows
+
+    const truncated = matched.length > shown.length
+      ? `  ·  仅显示前 ${shown.length}/${matched.length} 条`
+      : ''
+    const hidden = !query.leaf.startsWith('.') && hiddenCount > 0
+      ? `  ·  ${hiddenCount} 项隐藏（输入 . 查看）`
+      : ''
+    this.updateFooter(
+      `${describeRoot(query.kind)}  ·  ${shown.length} 项${truncated}${hidden}`,
+      query.dir,
+    )
+    this.highlight()
+  }
+
+  /** The absolute directory path shown above a path-mode listing. */
+  private makeLocationBar(query: PathQuery): HTMLElement {
+    const bar = document.createElement('div')
+    bar.className = 'tpl-qo-section-label tpl-qo-location'
+    const kind = document.createElement('span')
+    kind.className = 'tpl-qo-location-kind'
+    kind.textContent = describeRoot(query.kind)
+    const path = document.createElement('span')
+    path.className = 'tpl-qo-location-path'
+    path.textContent = query.dir
+    bar.appendChild(kind)
+    bar.appendChild(path)
+    return bar
+  }
+
+  private makePathItem(row: { name: string; absPath: string; isDirectory: boolean }, idx: number): HTMLElement {
+    const item = document.createElement('div')
+    item.className = 'tpl-qo-item' + (row.isDirectory ? ' tpl-qo-dir' : '') + (idx === this.selectedIdx ? ' tpl-qo-selected' : '')
+
+    const name = document.createElement('div')
+    name.className = 'tpl-qo-name'
+    if (row.isDirectory) {
+      const icon = document.createElement('span')
+      icon.className = 'tpl-qo-dir-icon'
+      icon.setAttribute('aria-hidden', 'true')
+      name.appendChild(icon)
+    }
+    name.appendChild(document.createTextNode(row.name))
+
+    const meta = document.createElement('div')
+    meta.className = 'tpl-qo-path'
+    meta.textContent = row.isDirectory ? '目录' : (extensionOf(row.name) || '文件')
+
+    item.appendChild(name)
+    item.appendChild(meta)
+    item.title = row.absPath
+    item.addEventListener('mouseenter', () => { this.selectedIdx = idx; this.highlight() })
+    item.addEventListener('click', () => { this.selectedIdx = idx; this.activateRow() })
+    return item
+  }
+
+  private isPathInput(): boolean {
+    return isPathQuery(this.typedText(this.inputEl?.value ?? ''))
+  }
+
+  /**
+   * Whether Backspace should climb rather than edit. Only when the caret sits
+   * at the end of the box, so editing the middle of a path still works, and
+   * only while something remains above the prefix, so the mode is left by a
+   * deliberate keystroke rather than by one Backspace too many.
+   */
+  private pathCanClimb(): boolean {
+    const input = this.inputEl
+    if (!input) return false
+    const value = input.value
+    if (input.selectionStart !== value.length || input.selectionEnd !== value.length) return false
+    const typed = this.typedText(value)
+    return parentInput(typed) !== typed
+  }
+
+  private climbPath(): void {
+    const input = this.inputEl
+    if (!input) return
+    const next = parentInput(this.typedText(input.value))
+    input.value = next
+    this.lastInputValue = next
+    try { input.setSelectionRange(next.length, next.length) } catch {}
+    this.selectedIdx = 0
+    this.refreshCompletions()
+    void this.renderList(next)
+    input.focus()
+  }
+
+  /** Drill into a directory by extending the typed path, keeping path mode. */
+  private enterPathDir(name: string): void {
+    const input = this.inputEl
+    if (!input) return
+    const typed = this.typedText(input.value)
+    const next = withLeaf(typed, name) + '/'
+    input.value = next
+    this.lastInputValue = next
+    try { input.setSelectionRange(next.length, next.length) } catch {}
+    this.selectedIdx = 0
+    this.refreshCompletions()
+    void this.renderList(next)
+    input.focus()
   }
 
   /** Files tab resting view: frecency-ranked recents. */
@@ -2349,6 +2576,7 @@ export default class QuickOpenPlugin extends Plugin {
       case 'file': item = this.makeItem(row.file, idx); break
       case 'content': item = this.makeContentItem(row.match, idx); break
       case 'dir': item = this.makeDirItem(row, idx); break
+      case 'path': item = this.makePathItem(row, idx); break
       case 'up': item = this.makeUpItem(idx); break
     }
     item.id = `tpl-qo-option-${idx}`
@@ -2671,11 +2899,19 @@ export default class QuickOpenPlugin extends Plugin {
       e.preventDefault(); e.stopPropagation()
       this.selectedIdx = Math.max(this.selectedIdx - 1, 0)
       this.highlight()
+    } else if (e.key === 'ArrowRight' && cursorAtEnd && this.isPathInput() && this.selectedRow()?.kind === 'path' && (this.selectedRow() as { isDirectory: boolean }).isDirectory) {
+      e.preventDefault(); e.stopPropagation()
+      this.activateRow()
     } else if (e.key === 'ArrowRight' && emptyInput && this.selectedRow()?.kind === 'dir') {
       // Drill into the highlighted folder. Only when the input is empty, so
       // editing a query with the arrow keys still works.
       e.preventDefault(); e.stopPropagation()
       this.activateRow()
+    } else if ((e.key === 'ArrowLeft' || e.key === 'Backspace') && this.isPathInput() && this.pathCanClimb()) {
+      // In path mode Backspace at the end of the box walks up a directory
+      // instead of deleting one character at a time through a long path.
+      e.preventDefault(); e.stopPropagation()
+      this.climbPath()
     } else if ((e.key === 'ArrowLeft' || e.key === 'Backspace') && emptyInput && this.activeTab === 'folders' && scope) {
       // Backspace / ← at an empty prompt walks up a directory, like a shell.
       e.preventDefault(); e.stopPropagation()
@@ -2704,6 +2940,10 @@ export default class QuickOpenPlugin extends Plugin {
         return
       case 'content':
         this.openFileByPath(row.match.absPath)
+        return
+      case 'path':
+        if (row.isDirectory) this.enterPathDir(row.name)
+        else this.openFileByPath(row.absPath)
         return
       case 'dir':
         this.enterDir(row.path)
@@ -2849,7 +3089,7 @@ export default class QuickOpenPlugin extends Plugin {
       content: '搜索文件内容…',
     }
     this.inputEl.placeholder = placeholders[this.activeTab]
-    this.inputEl.title = '支持 type: 与 scope: 过滤'
+    this.inputEl.title = '支持 type: 与 scope: 过滤；顶格输入 / 按路径浏览（// 为文件系统根，~/ 为主目录）'
   }
 
   // -------------------------------------------------------------------------
@@ -2869,6 +3109,26 @@ export default class QuickOpenPlugin extends Plugin {
   private refreshCompletions(): void {
     const input = this.inputEl
     if (!input || !this.completionsEl) { this.completions = []; return }
+    const typed = this.typedText(input.value)
+    if (isPathQuery(typed)) {
+      // Tab advances by the shared prefix of every match, so it can never
+      // commit to the wrong entry; a lone match completes all the way.
+      const { candidates, ghost } = completePath(typed, this.pathEntries)
+      const slash = typed.lastIndexOf('/')
+      const leafStart = slash + 1
+      this.completions = candidates.map(candidate => ({
+        label: candidate.label,
+        insert: candidate.insert,
+        cursor: candidate.insert.length,
+      }))
+      if (ghost && this.completions.length > 1) {
+        // Put the common-prefix step first so Tab takes the safe advance.
+        const shared = typed.slice(0, leafStart) + typed.slice(leafStart) + ghost
+        this.completions.unshift({ label: shared.slice(leafStart), insert: shared, cursor: shared.length })
+      }
+      this.renderCompletions()
+      return
+    }
     const cursor = input.selectionStart ?? input.value.length
     this.completions = completeQuery(input.value, cursor, this.cachedDirs).candidates
     this.renderCompletions()
