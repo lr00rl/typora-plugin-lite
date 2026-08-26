@@ -194,3 +194,59 @@ test('multiple links in one paragraph all render and preserve the text', async (
     await teardownDom(saved)
   }
 })
+
+test('a document that arrives after attach still gets decorated', async () => {
+  const { saved, flushFrame } = await setupDom()
+  try {
+    const { InlineRenderer } = await import('../plugins/note-assistant/src/inline.ts')
+    const write = makeWrite()
+    // Typora loads the plugin before it renders the file, so #write is empty
+    // at attach time and every block arrives as an addedNode of #write itself.
+    const renderer = new InlineRenderer(stubStore() as any, () => {})
+    renderer.attach(write)
+    assert.equal(renderer.linkCount, 0)
+
+    const paragraph = document.createElement('p')
+    paragraph.setAttribute('cid', 'p1')
+    paragraph.textContent = '相关笔记：[[Harness/TheAnatomyofanAgentHarness|Harness 的解剖]]。'
+    write.appendChild(paragraph)
+
+    await new Promise(resolve => setTimeout(resolve, 10))
+    flushFrame()
+
+    assert.equal(write.querySelectorAll('.tpl-wl').length, 1, 'blocks added after attach are decorated')
+    assert.equal(
+      write.querySelector('.tpl-wl-title')?.textContent,
+      'Harness 的解剖',
+    )
+    renderer.detach()
+  } finally {
+    await teardownDom(saved)
+  }
+})
+
+test('switching notes repaints instead of reusing the old document state', async () => {
+  const { saved, flushFrame } = await setupDom()
+  try {
+    const { InlineRenderer } = await import('../plugins/note-assistant/src/inline.ts')
+    const write = makeWrite()
+    ;(globalThis as any).window.File = { filePath: '/v/first.md' }
+    write.innerHTML = `<p cid="p1">第一篇 [[a/one|甲]]</p>`
+
+    const renderer = new InlineRenderer(stubStore() as any, () => {})
+    renderer.attach(write)
+    assert.equal(renderer.linkCount, 1)
+
+    ;(globalThis as any).window.File = { filePath: '/v/second.md' }
+    write.innerHTML = `<p cid="p2">第二篇 [[b/two|乙]] 和 [[c/three|丙]]</p>`
+
+    await new Promise(resolve => setTimeout(resolve, 10))
+    flushFrame()
+
+    assert.equal(renderer.linkCount, 2, 'the new document is decorated')
+    assert.equal(write.querySelector('.tpl-wl-title')?.textContent, '乙')
+    renderer.detach()
+  } finally {
+    await teardownDom(saved)
+  }
+})

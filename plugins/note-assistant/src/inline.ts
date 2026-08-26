@@ -51,6 +51,8 @@ export class InlineRenderer {
   private rafId = 0
   private pending = new Set<HTMLElement>()
   private lastFocus: HTMLElement | null = null
+  private currentFile = ''
+  private needsFullPass = false
   private clickHandler: ((evt: MouseEvent) => void) | null = null
   /** Surfaced through `note-assistant:state` so the renderer can be proven live. */
   processCount = 0
@@ -73,10 +75,20 @@ export class InlineRenderer {
       let relevant = false
       for (const mutation of mutations) {
         if (this.isOwnMutation(mutation)) continue
+        // The target of a top-level insertion is #write itself, which owns no
+        // block; the new blocks are only reachable through addedNodes. Reading
+        // the target alone meant opening a document decorated nothing at all.
         const block = this.blockOf(mutation.target)
         if (block) {
           this.pending.add(block)
           relevant = true
+        }
+        for (const node of Array.from(mutation.addedNodes)) {
+          const added = this.blockOf(node)
+          if (added) {
+            this.pending.add(added)
+            relevant = true
+          }
         }
       }
       const focus = this.focusedBlock()
@@ -110,6 +122,8 @@ export class InlineRenderer {
   processAll(): void {
     const root = this.writeEl
     if (!root) return
+    this.currentFile = editor.getFilePath()
+    this.needsFullPass = false
     this.withObserverPaused(() => {
       this.processCount += 1
       this.lastFocus = this.focusedBlock()
@@ -127,6 +141,13 @@ export class InlineRenderer {
 
   private flush(): void {
     if (!this.writeEl) return
+    // Switching notes replaces every block; per-block bookkeeping from the
+    // previous document is meaningless, so repaint the whole thing.
+    if (this.needsFullPass || editor.getFilePath() !== this.currentFile) {
+      this.pending.clear()
+      this.processAll()
+      return
+    }
     const blocks = [...this.pending]
     this.pending.clear()
     if (!blocks.length) return
