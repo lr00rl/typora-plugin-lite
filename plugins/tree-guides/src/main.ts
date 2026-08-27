@@ -22,7 +22,9 @@ const CSS = /* css */ `
   position: fixed;
   pointer-events: none;
   z-index: 1;
-  overflow: visible;
+  /* Clipped to the tree's visible box: a group whose parent has scrolled away
+     must not trail a stroke up over the sidebar header or the title bar. */
+  overflow: hidden;
 }
 #tpl-tree-guides path {
   fill: none;
@@ -106,9 +108,9 @@ export default class TreeGuidesPlugin extends Plugin {
 
   private onScroll = (): void => this.schedule()
 
-  /** The tree scrolls inside some ancestor; find it once and follow it. */
+  /** The tree scrolls inside itself or an ancestor; find it once and follow it. */
   private attachScrollHost(tree: HTMLElement): void {
-    let node: HTMLElement | null = tree.parentElement
+    let node: HTMLElement | null = tree
     while (node && node !== document.body) {
       const overflow = getComputedStyle(node).overflowY
       if (overflow === 'auto' || overflow === 'scroll') break
@@ -160,8 +162,23 @@ export default class TreeGuidesPlugin extends Plugin {
     for (const container of containers) {
       const rect = container.getBoundingClientRect()
       if (rect.height < 4) continue
-      // Nothing on screen: skip the measuring entirely.
-      if (rect.bottom < box.top - 40 || rect.top > box.bottom + 40) continue
+      // Nothing on screen: skip the measuring entirely. A container on the
+      // open file's branch stays in: its rows may be pinned in view long
+      // after the container itself has scrolled past.
+      const onActiveBranch = !!active && container.contains(active)
+      if (!onActiveBranch && (rect.bottom < box.top - 40 || rect.top > box.bottom + 40)) continue
+
+      // The theme pins the ancestors of the open file to the top of the
+      // sidebar. A pinned folder row leaves its container behind, so the
+      // group starts at the row's current bottom, not at the container's.
+      const parentRow = container.parentElement?.querySelector<HTMLElement>(
+        ':scope > .file-node-content',
+      )
+      const parentBottom =
+        parentRow && parentRow.getClientRects().length
+          ? parentRow.getBoundingClientRect().bottom
+          : box.top
+      const top = Math.max(rect.top, parentBottom, box.top)
 
       const children = Array.from(container.children) as HTMLElement[]
       const arms: number[] = []
@@ -177,7 +194,7 @@ export default class TreeGuidesPlugin extends Plugin {
 
       groups.push({
         x: Math.round(rect.left - box.left) + 0.5,
-        top: Math.round(rect.top - box.top) + 0.5,
+        top: Math.round(top - box.top) + 0.5,
         arms,
         activeIndex,
       })

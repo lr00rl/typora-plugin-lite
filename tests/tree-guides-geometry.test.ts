@@ -48,3 +48,28 @@ test('an empty group is skipped instead of emitting a stray stroke', () => {
   assert.equal(base, '')
   assert.equal(lit, '')
 })
+
+test('rows behind the pinned ancestors are dropped, the rest keep their shape', () => {
+  // top: 120 is the bottom of a four-deep pinned breadcrumb; the first two
+  // rows have scrolled up behind it.
+  const { base } = buildGuidePaths([group({ top: 120, arms: [30, 60, 135, 165] })], METRICS)
+  assert.equal(base, 'M10,120L10,157Q10,165 18,165L24,165M10,135L24,135')
+  assert.doesNotMatch(base, /M10,30|M10,60/, 'nothing is drawn above the group top')
+})
+
+test('a group scrolled entirely behind the pinned stack draws nothing', () => {
+  const { base, lit } = buildGuidePaths(
+    [group({ top: 120, arms: [30, 60], activeIndex: 1 })],
+    METRICS,
+  )
+  assert.equal(base, '')
+  assert.equal(lit, '')
+})
+
+test('the lit branch stays off a row that has scrolled behind the pinned stack', () => {
+  const { lit } = buildGuidePaths(
+    [group({ top: 120, arms: [60, 165], activeIndex: 0 })],
+    METRICS,
+  )
+  assert.equal(lit, '', 'no trunk running back up over the breadcrumb')
+})
