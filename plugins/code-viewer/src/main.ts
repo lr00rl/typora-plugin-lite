@@ -27,6 +27,8 @@ interface CodeViewerSettings extends Record<string, unknown> {
   indentGuides: boolean
   /** Show non-Markdown text files in the sidebar file tree (opens read-only). */
   showInTree: boolean
+  /** Render HTML and SVG files as pages rather than showing their source. */
+  renderMarkup: boolean
   /**
    * Per-extension language overrides set via the header picker
    * (managed by the picker itself; not shown in the settings form).
@@ -41,6 +43,7 @@ const DEFAULT_SETTINGS: CodeViewerSettings = {
   showWhitespace: true,
   indentGuides: true,
   showInTree: true,
+  renderMarkup: true,
   langOverrides: {},
 }
 
@@ -164,6 +167,31 @@ const CSS = `
 /* Blank lines need height; generated ZWSP gives it without an uncopyable
    character ever entering the DOM text. */
 .tpl-cv-src:empty::after { content: '\\200b'; }
+/*
+ * Rendered mode. The pane stops scrolling and hands its remaining height to
+ * the frame, which does its own scrolling: a page pinned to the viewport, or
+ * laid out against its full height, has to see a real one rather than a box
+ * that grows to whatever it contains.
+ */
+#tpl-code-view-pane.tpl-cv-rendered { overflow: hidden; }
+#tpl-code-view-frame {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  border: 0;
+  background: #fff;
+}
+.tpl-cv-mode {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--code-border-color, rgba(128,128,128,0.3));
+  border-radius: 5px;
+  padding: 0 8px;
+  height: 20px;
+  cursor: pointer;
+}
+.tpl-cv-mode:hover { border-color: var(--active-file-border-color, currentColor); }
 #tpl-code-view-truncated {
   padding: 10px 16px;
   font-size: 12px;
@@ -210,6 +238,11 @@ export default class CodeViewerPlugin extends Plugin<CodeViewerSettings> {
         label: 'Show code files in the sidebar tree',
         description: 'List non-Markdown text files in the file tree and open them in the read-only viewer on click.',
       },
+      renderMarkup: {
+        kind: 'toggle',
+        label: 'Render HTML and SVG as pages',
+        description: 'Open .html, .htm, .xhtml and .svg as the page they describe instead of their source. The header switches between the two per file, and this is the state a file opens in. The page runs in a frame with no access to Typora.',
+      },
       maxBytes: {
         kind: 'number',
         label: 'Max file size (bytes)',
@@ -225,10 +258,12 @@ export default class CodeViewerPlugin extends Plugin<CodeViewerSettings> {
         max: 500_000,
       },
     },
-    order: ['enabled', 'showWhitespace', 'indentGuides', 'showInTree', 'maxBytes', 'maxLines'],
+    order: ['enabled', 'renderMarkup', 'showWhitespace', 'indentGuides', 'showInTree', 'maxBytes', 'maxLines'],
   }
 
   private activePath = ''
+  /** Per-file source/page choice, for as long as the window is open. */
+  private previewChoice = new Map<string, boolean>()
   private pane: HTMLElement | null = null
   private paneHeight = 0
   private restores: Array<() => void> = []
@@ -418,6 +453,16 @@ export default class CodeViewerPlugin extends Plugin<CodeViewerSettings> {
       return
     }
 
+    // A page is what the file is for; its source is the fallback view, not the
+    // other way round. The frame loads the file itself rather than its text, so
+    // the stylesheets, scripts and images it references beside it resolve the
+    // way they would anywhere else.
+    if (isRenderableMarkup(this.currentFileName()) && this.previewOn(path)) {
+      this.showRenderedPane(path)
+      this.activePath = path
+      return
+    }
+
     // Belt-and-suspenders: a code file should be a clean document (we never
     // write to it). Force-clean in case Typora's own round-trip dirtied it.
     // FORCED MODE EXCLUDED: there the live document is the user's markdown —
@@ -514,6 +559,7 @@ export default class CodeViewerPlugin extends Plugin<CodeViewerSettings> {
     this.hideWrite()
 
     while (pane.firstChild) pane.removeChild(pane.firstChild)
+    pane.classList.remove('tpl-cv-rendered')
 
     // Header: dot · filename · language picker · read-only badge
     const head = document.createElement('div')
@@ -522,7 +568,9 @@ export default class CodeViewerPlugin extends Plugin<CodeViewerSettings> {
     const name = document.createElement('span'); name.className = 'tpl-cv-name'; name.textContent = basename(path)
     const langSelect = this.buildLangSelect(path, lang)
     const ro = document.createElement('span'); ro.className = 'tpl-cv-ro'; ro.textContent = '只读'
-    head.append(dot, name, langSelect, ro)
+    head.append(dot, name, langSelect)
+    if (isRenderableMarkup(this.currentFileName())) head.append(this.buildModeToggle(path, false))
+    head.append(ro)
     pane.appendChild(head)
 
     if (message !== null) {
@@ -601,6 +649,52 @@ export default class CodeViewerPlugin extends Plugin<CodeViewerSettings> {
     this.fitPane()
   }
 
+  /** Whether this file opens rendered. Per file for the session, else the setting. */
+  private previewOn(path: string): boolean {
+    const chosen = this.previewChoice.get(path)
+    return chosen === undefined ? this.settings.get('renderMarkup') : chosen
+  }
+
+  /** The header's source/page switch, shown only for files that have both. */
+  private buildModeToggle(path: string, rendered: boolean): HTMLButtonElement {
+    const button = document.createElement('button')
+    button.className = 'tpl-cv-mode'
+    button.type = 'button'
+    button.textContent = rendered ? '源码' : '预览'
+    button.title = rendered ? '查看源码' : '渲染为页面'
+    button.addEventListener('click', () => {
+      this.previewChoice.set(path, !rendered)
+      void this.renderPane(path)
+    })
+    return button
+  }
+
+  private showRenderedPane(path: string): void {
+    const pane = this.ensurePane()
+    if (!pane) return
+    this.hideWrite()
+    while (pane.firstChild) pane.removeChild(pane.firstChild)
+    pane.classList.add('tpl-cv-rendered')
+
+    const head = document.createElement('div')
+    head.id = 'tpl-code-view-head'
+    const dot = document.createElement('span'); dot.className = 'tpl-cv-dot'
+    const name = document.createElement('span'); name.className = 'tpl-cv-name'; name.textContent = basename(path)
+    const ro = document.createElement('span'); ro.className = 'tpl-cv-ro'; ro.textContent = '只读'
+    head.append(dot, name, this.buildModeToggle(path, true), ro)
+    pane.appendChild(head)
+
+    const frame = document.createElement('iframe')
+    frame.id = 'tpl-code-view-frame'
+    frame.setAttribute('referrerpolicy', 'no-referrer')
+    // A plain child frame: it has no node integration and no handle on the
+    // editor, and Typora's own document is not involved either way, so the
+    // page can do whatever a page does without reaching anything of ours.
+    frame.src = fileUrl(path)
+    pane.appendChild(frame)
+    this.fitPane()
+  }
+
   private hidePane(): void {
     this.activePath = ''
     if (this.pane) { this.pane.remove(); this.pane = null }
@@ -613,6 +707,18 @@ export default class CodeViewerPlugin extends Plugin<CodeViewerSettings> {
   private markClean(): void {
     try { (window as any).File?.markSaved?.() } catch {}
   }
+}
+
+/** Files that describe a page, and so have a rendered view as well as a source. */
+function isRenderableMarkup(fileName: string): boolean {
+  return /\.(html?|xhtml|svg)$/i.test(fileName)
+}
+
+/** A file:// URL for a path, with every segment escaped (spaces, CJK, #, ?). */
+function fileUrl(path: string): string {
+  const normalized = path.replace(/\\/g, '/')
+  const rooted = normalized.startsWith('/') ? normalized : `/${normalized}`
+  return `file://${rooted.split('/').map(encodeURIComponent).join('/')}`
 }
 
 function basename(path: string): string {

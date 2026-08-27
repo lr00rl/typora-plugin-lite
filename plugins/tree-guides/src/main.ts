@@ -33,10 +33,12 @@ const CSS = /* css */ `
   stroke-linecap: round;
   shape-rendering: geometricPrecision;
 }
+/* Enough to find the branch at a glance, not enough to be the first thing
+   the sidebar says. */
 #tpl-tree-guides path.tpl-guide-lit {
   stroke: var(--accent-color, #a85d3b);
-  stroke-width: 1.4;
-  opacity: 0.85;
+  stroke-width: 1.3;
+  opacity: 0.45;
 }
 
 /* The theme's own connectors: one stroke replaces all of them. */
