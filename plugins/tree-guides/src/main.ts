@@ -33,12 +33,17 @@ const CSS = /* css */ `
   stroke-linecap: round;
   shape-rendering: geometricPrecision;
 }
-/* Enough to find the branch at a glance, not enough to be the first thing
-   the sidebar says. */
+/* Enough to find the branch at a glance, not enough to be the first thing the
+   sidebar says. The accent is pulled most of the way toward the muted ink
+   before it is faded, so it settles rather than glows. */
 #tpl-tree-guides path.tpl-guide-lit {
-  stroke: var(--accent-color, #a85d3b);
+  stroke: color-mix(
+    in srgb,
+    var(--accent-color, #a85d3b) 55%,
+    var(--ink-muted-color, #6f6b66)
+  );
   stroke-width: 1.3;
-  opacity: 0.45;
+  opacity: 0.42;
 }
 
 /* The theme's own connectors: one stroke replaces all of them. */
