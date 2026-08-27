@@ -1,0 +1,10 @@
+{
+  "id": "tree-guides",
+  "name": "Tree Guides",
+  "version": "0.1.0",
+  "description": "Draw the file tree's guide lines as one path per folder, and light the branch holding the open file",
+  "main": "main.js",
+  "loading": {
+    "startup": true
+  }
+}
