@@ -75,6 +75,8 @@ export default class TreeGuidesPlugin extends Plugin {
   private basePath: SVGPathElement | null = null
   private litPath: SVGPathElement | null = null
   private observer: MutationObserver | null = null
+  private resizeObserver: ResizeObserver | null = null
+  private resizeTargets = new Set<Element>()
   private scrollHost: HTMLElement | null = null
   private pending = 0
 
@@ -94,6 +96,18 @@ export default class TreeGuidesPlugin extends Plugin {
       attributeFilter: ['class'],
     })
     this.addDisposable(() => this.observer?.disconnect())
+
+    // Search is revealed with an expanding panel. Its class mutation can be
+    // delivered while the file pane still has its old top/height, so a draw
+    // triggered by MutationObserver alone can permanently keep the pre-search
+    // coordinate origin. Follow the actual geometry as the panel settles.
+    if (typeof ResizeObserver !== 'undefined') {
+      this.resizeObserver = new ResizeObserver(() => this.schedule())
+      this.addDisposable(() => {
+        this.resizeObserver?.disconnect()
+        this.resizeTargets.clear()
+      })
+    }
 
     this.schedule()
   }
@@ -127,6 +141,18 @@ export default class TreeGuidesPlugin extends Plugin {
   }
 
   private onScroll = (): void => this.schedule()
+
+  private syncResizeTargets(targets: Array<Element | null>): void {
+    if (!this.resizeObserver) return
+    const next = new Set(targets.filter((target): target is Element => !!target))
+    for (const target of this.resizeTargets) {
+      if (!next.has(target)) this.resizeObserver.unobserve(target)
+    }
+    for (const target of next) {
+      if (!this.resizeTargets.has(target)) this.resizeObserver.observe(target)
+    }
+    this.resizeTargets = next
+  }
 
   /** The tree scrolls inside itself or an ancestor; find it once and follow it. */
   private attachScrollHost(tree: HTMLElement): void {
@@ -166,9 +192,18 @@ export default class TreeGuidesPlugin extends Plugin {
     const tree = document.querySelector<HTMLElement>(TREE_SELECTOR)
     if (!tree || !tree.getClientRects().length) {
       if (this.svg) this.svg.style.display = 'none'
+      this.syncResizeTargets([])
       return
     }
     this.attachScrollHost(tree)
+
+    const sidebarContent = tree.closest<HTMLElement>('#sidebar-content')
+    this.syncResizeTargets([
+      tree,
+      this.scrollHost,
+      sidebarContent,
+      sidebarContent?.querySelector('#file-library-search') ?? null,
+    ])
 
     const svg = this.ensureSvg(tree)
     const box = (this.scrollHost ?? tree).getBoundingClientRect()
