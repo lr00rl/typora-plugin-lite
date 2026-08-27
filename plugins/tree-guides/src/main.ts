@@ -1,8 +1,15 @@
 import { Plugin } from '@typora-plugin-lite/core'
-import { buildGuidePaths, type GuideGroup, type GuideMetrics } from './geometry'
+import {
+  buildGuidePaths,
+  snapStrokeCenter,
+  type GuideGroup,
+  type GuideMetrics,
+} from './geometry'
 
 const SVG_NS = 'http://www.w3.org/2000/svg'
 const TREE_SELECTOR = '#file-library-tree'
+const BASE_STROKE_WIDTH = 1
+const LIT_STROKE_WIDTH = 1.3
 
 /** Typora's rows are 30px and its children containers indent by 20px. */
 const METRICS: GuideMetrics = { arm: 14, radius: 8 }
@@ -35,7 +42,7 @@ const CSS = /* css */ `
 #tpl-tree-guides path {
   fill: none;
   stroke: var(--tree-line-color, rgba(0, 0, 0, 0.12));
-  stroke-width: 1;
+  stroke-width: ${BASE_STROKE_WIDTH};
   stroke-linecap: round;
   shape-rendering: geometricPrecision;
 }
@@ -48,7 +55,7 @@ const CSS = /* css */ `
     var(--accent-color, #a85d3b) 55%,
     var(--ink-muted-color, #6f6b66)
   );
-  stroke-width: 1.3;
+  stroke-width: ${LIT_STROKE_WIDTH};
   opacity: 0.42;
 }
 
@@ -208,21 +215,29 @@ export default class TreeGuidesPlugin extends Plugin {
         const row = children[i]!.querySelector<HTMLElement>(':scope > .file-node-content')
         if (!row) continue
         const rowRect = row.getBoundingClientRect()
-        arms.push(Math.round(rowRect.top - box.top + rowRect.height / 2) + 0.5)
+        arms.push(rowRect.top - box.top + rowRect.height / 2)
         if (active && children[i]!.contains(active)) activeIndex = arms.length - 1
       }
       if (!arms.length) continue
 
       groups.push({
-        x: Math.round(rect.left - box.left) + 0.5,
-        top: Math.round(top - box.top) + 0.5,
+        x: rect.left - box.left,
+        top: top - box.top,
         arms,
         activeIndex,
       })
     }
 
-    const paths = buildGuidePaths(groups, METRICS)
-    this.basePath?.setAttribute('d', paths.base)
-    this.litPath?.setAttribute('d', paths.lit)
+    const dpr = window.devicePixelRatio || 1
+    const alignGroups = (strokeWidth: number): GuideGroup[] => groups.map(group => ({
+      ...group,
+      x: snapStrokeCenter(group.x, strokeWidth, dpr),
+      top: snapStrokeCenter(group.top, strokeWidth, dpr),
+      arms: group.arms.map(y => snapStrokeCenter(y, strokeWidth, dpr)),
+    }))
+    const base = buildGuidePaths(alignGroups(BASE_STROKE_WIDTH), METRICS).base
+    const lit = buildGuidePaths(alignGroups(LIT_STROKE_WIDTH), METRICS).lit
+    this.basePath?.setAttribute('d', base)
+    this.litPath?.setAttribute('d', lit)
   }
 }

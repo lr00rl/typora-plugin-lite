@@ -37,6 +37,24 @@ export interface GuidePaths {
   lit: string
 }
 
+/**
+ * Keep the legacy half-CSS-pixel placement at integer DPRs, where it already
+ * lands cleanly on the device grid. At fractional DPRs, move the stroke centre
+ * to the nearest device-pixel phase for its rendered width. This makes the
+ * coverage symmetric instead of letting a 1px line fall at (for example)
+ * 0.75 of a physical pixel at 150% Windows scaling.
+ */
+export function snapStrokeCenter(value: number, strokeWidth: number, dpr: number): number {
+  const legacy = Math.round(value) + 0.5
+  if (!Number.isFinite(dpr) || dpr <= 0 || Math.abs(dpr - Math.round(dpr)) < 1e-6) {
+    return legacy
+  }
+
+  const physicalWidth = Math.max(1, Math.round(strokeWidth * dpr))
+  const phase = physicalWidth % 2 === 0 ? 0 : 0.5
+  return (Math.round(legacy * dpr - phase) + phase) / dpr
+}
+
 function corner(x: number, top: number, y: number, radius: number, arm: number): string {
   const r = Math.min(radius, Math.max(0, y - top))
   return (

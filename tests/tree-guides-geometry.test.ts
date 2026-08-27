@@ -1,13 +1,38 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { buildGuidePaths, type GuideGroup } from '../plugins/tree-guides/src/geometry.ts'
+import {
+  buildGuidePaths,
+  snapStrokeCenter,
+  type GuideGroup,
+} from '../plugins/tree-guides/src/geometry.ts'
 
 const METRICS = { arm: 14, radius: 8 }
 
 function group(over: Partial<GuideGroup> = {}): GuideGroup {
   return { x: 10, top: 0, arms: [15, 45, 75], activeIndex: -1, ...over }
 }
+
+test('integer DPRs preserve the established half-CSS-pixel geometry', () => {
+  assert.equal(snapStrokeCenter(22.1, 1, 1), 22.5)
+  assert.equal(snapStrokeCenter(22.1, 1, 2), 22.5)
+  assert.equal(snapStrokeCenter(22.1, 1.3, 2), 22.5)
+})
+
+test('fractional DPRs put stroke centres on the nearest symmetric device-pixel phase', () => {
+  const baseAt150 = snapStrokeCenter(22.1, 1, 1.5) * 1.5
+  const litAt150 = snapStrokeCenter(22.1, 1.3, 1.5) * 1.5
+  const baseAt125 = snapStrokeCenter(22.1, 1, 1.25) * 1.25
+
+  assert.equal(baseAt150, Math.round(baseAt150), '1.5 physical px rounds to an even 2px phase')
+  assert.equal(litAt150, Math.round(litAt150), '1.95 physical px rounds to an even 2px phase')
+  assert.equal(baseAt125 % 1, 0.5, '1.25 physical px rounds to an odd 1px phase')
+})
+
+test('invalid DPR values safely retain the legacy placement', () => {
+  assert.equal(snapStrokeCenter(22.1, 1, 0), 22.5)
+  assert.equal(snapStrokeCenter(22.1, 1, Number.NaN), 22.5)
+})
 
 test('the trunk turns into the last row and every other row gets an arm', () => {
   const { base } = buildGuidePaths([group()], METRICS)
