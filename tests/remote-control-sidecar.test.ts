@@ -1,7 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
-import { createSidecarServer } from '../plugins/remote-control/src/sidecar/server.ts'
+import {
+  createSidecarServer,
+  isSidecarEntrypoint,
+} from '../plugins/remote-control/src/sidecar/server.ts'
 
 interface RpcEnvelope {
   jsonrpc?: string
@@ -80,6 +85,21 @@ function createRpcClient(ws: WebSocket) {
     },
   }
 }
+
+test('recognizes the sidecar entry path using platform-aware file URLs', () => {
+  const entryPath = resolve('dist/plugins/remote-control/bin/sidecar.mjs')
+  const moduleUrl = pathToFileURL(entryPath).href
+
+  assert.equal(isSidecarEntrypoint(moduleUrl, entryPath), true)
+  assert.equal(isSidecarEntrypoint(moduleUrl, undefined), false)
+  assert.equal(isSidecarEntrypoint(moduleUrl, `${entryPath}.other`), false)
+
+  if (process.platform === 'win32') {
+    // new URL('D:\\path', 'file://') treats the drive letter as a URL scheme,
+    // which was why the packaged sidecar exited silently on Windows.
+    assert.notEqual(new URL(entryPath, 'file://').href, moduleUrl)
+  }
+})
 
 test('rejects unauthenticated calls', async (t) => {
   const server = await createSidecarServer({ host: '127.0.0.1', port: 0, token: 'secret-token' })

@@ -3,6 +3,7 @@ import type { AddressInfo } from 'node:net'
 import { spawn, type ChildProcessByStdio } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import type { Readable } from 'node:stream'
+import { pathToFileURL } from 'node:url'
 
 import { JsonRpcPeer, JsonRpcRemoteError } from '../rpc/json-rpc.js'
 import { acceptWebSocket, type WebSocketServerConnection } from './websocket.js'
@@ -608,9 +609,14 @@ export async function runSidecarCli(argv = process.argv): Promise<void> {
   }
 }
 
+/** Compare the module URL with Node's entry path using platform-aware path conversion. */
+export function isSidecarEntrypoint(moduleUrl: string, entryPath: string | undefined): boolean {
+  return !!entryPath && moduleUrl === pathToFileURL(entryPath).href
+}
+
 const isEntrypoint = typeof process !== 'undefined'
   && typeof import.meta !== 'undefined'
-  && import.meta.url === new URL(process.argv[1] ?? '', 'file://').href
+  && isSidecarEntrypoint(import.meta.url, process.argv[1])
 
 if (isEntrypoint) {
   runSidecarCli().catch(error => {
