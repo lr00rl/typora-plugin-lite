@@ -110,7 +110,6 @@ export class JsonRpcPeer {
             reject(new JsonRpcRemoteError(-32001, `Request timed out after ${timeoutMs}ms: ${method}`))
           }, timeoutMs)
         : undefined
-      timer?.unref?.()
       this.pending.set(id, {
         resolve: value => resolve(value as T),
         reject,

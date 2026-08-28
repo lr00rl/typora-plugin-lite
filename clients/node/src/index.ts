@@ -193,7 +193,6 @@ export class TyporaRemoteControlClient {
         const timer = setTimeout(() => {
           finish(new Error(`Connection timed out after ${connectTimeoutMs}ms: ${options.url}`))
         }, connectTimeoutMs)
-        timer.unref?.()
         ws.addEventListener('open', onOpen, { once: true })
         ws.addEventListener('error', onError, { once: true })
       })
@@ -249,7 +248,6 @@ export class TyporaRemoteControlClient {
             ))
           }, timeoutMs)
         : undefined
-      timer?.unref?.()
       this.pending.set(id, {
         resolve: value => resolve(value as T),
         reject,
