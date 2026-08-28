@@ -73,3 +73,23 @@ test('the lit branch stays off a row that has scrolled behind the pinned stack',
   )
   assert.equal(lit, '', 'no trunk running back up over the breadcrumb')
 })
+
+test("a deep pinned stack keeps every group below it, not just the one it owns", () => {
+  // Seven ancestors pinned at 26px each: the list starts at 182, not at 0.
+  const FLOOR = 182
+  const groups: GuideGroup[] = [
+    // the group whose own parent is the lowest pinned row
+    { x: 10, top: FLOOR, arms: [195, 221, 247], activeIndex: 2 },
+    // a group whose parent scrolled away entirely: its container top is far
+    // above the stack, and clamping it to the scroll box would draw straight
+    // through the pinned rows
+    { x: 40, top: FLOOR, arms: [260, 286], activeIndex: -1 },
+  ]
+  const { base, lit } = buildGuidePaths(groups, METRICS)
+  for (const y of base.matchAll(/M\d+,(-?[\d.]+)/g)) {
+    assert.ok(Number(y[1]) >= FLOOR, `subpath starts at ${y[1]}, above the pinned stack at ${FLOOR}`)
+  }
+  for (const y of lit.matchAll(/M\d+,(-?[\d.]+)/g)) {
+    assert.ok(Number(y[1]) >= FLOOR, `lit subpath starts at ${y[1]}, above the pinned stack`)
+  }
+})

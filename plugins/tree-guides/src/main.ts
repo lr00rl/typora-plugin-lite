@@ -146,6 +146,39 @@ export default class TreeGuidesPlugin extends Plugin {
     return svg
   }
 
+  /**
+   * The bottom of the pinned breadcrumb, which is the real top of the list.
+   *
+   * The theme pins every ancestor row of the open file, each at its own offset,
+   * so the stack grows with depth. A row is currently stuck when it has been
+   * pushed down relative to the node it belongs to; the lowest such row's
+   * bottom edge is where drawing may begin.
+   */
+  private stickyFloor(tree: HTMLElement, active: Element | null, boxTop: number): number {
+    if (!active) return boxTop
+    let floor = boxTop
+    let node: Element | null = active
+    while (node && node !== tree) {
+      if (node.classList?.contains('file-tree-node')) {
+        // Ancestors are pinned by making their row sticky; the open file itself
+        // is pinned by making its whole node sticky, because a leaf has no
+        // subtree to slide under it. Both end up in the same stack.
+        const row = node.querySelector<HTMLElement>(':scope > .file-node-content')
+        const holder = node as HTMLElement
+        const nodeStuck =
+          getComputedStyle(holder).position === 'sticky' &&
+          holder.getBoundingClientRect().top > (holder.parentElement?.getBoundingClientRect().top ?? -Infinity) + 0.5
+        if (nodeStuck && row) floor = Math.max(floor, row.getBoundingClientRect().bottom)
+        else if (row && row.getClientRects().length && getComputedStyle(row).position === 'sticky') {
+          const r = row.getBoundingClientRect()
+          if (r.top > holder.getBoundingClientRect().top + 0.5) floor = Math.max(floor, r.bottom)
+        }
+      }
+      node = node.parentElement
+    }
+    return floor
+  }
+
   private draw(): void {
     const tree = document.querySelector<HTMLElement>(TREE_SELECTOR)
     if (!tree || !tree.getClientRects().length) {
@@ -163,6 +196,12 @@ export default class TreeGuidesPlugin extends Plugin {
     svg.style.height = `${box.height}px`
 
     const active = tree.querySelector('.file-tree-node.active')
+    // Where the scrollable content actually starts. The pinned breadcrumb sits
+    // on top of the list, so a group whose own parent has scrolled away must
+    // start below the stack rather than at the top of the box, or its trunk is
+    // drawn straight through the pinned rows. One pinned row was handled
+    // before; a seven-deep stack was not.
+    const floor = this.stickyFloor(tree, active, box.top)
     const groups: GuideGroup[] = []
 
     const containers = tree.querySelectorAll<HTMLElement>('.file-node-children')
@@ -185,7 +224,7 @@ export default class TreeGuidesPlugin extends Plugin {
         parentRow && parentRow.getClientRects().length
           ? parentRow.getBoundingClientRect().bottom
           : box.top
-      const top = Math.max(rect.top, parentBottom, box.top)
+      const top = Math.max(rect.top, parentBottom, floor)
 
       const children = Array.from(container.children) as HTMLElement[]
       const arms: number[] = []
