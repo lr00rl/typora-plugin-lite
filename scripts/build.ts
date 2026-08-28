@@ -145,6 +145,12 @@ const clientConfigs: esbuild.BuildOptions[] = [
     entryPoints: [join(ROOT, 'clients/node/src/index.ts')],
     outfile: join(DIST, 'clients', 'node', 'index.mjs'),
     format: 'esm' as const,
+    // `ws` is CommonJS internally and still requires Node built-ins such as
+    // `events`. Preserve the ESM public bundle while giving esbuild's CJS shim
+    // a real require function on Node 18+.
+    banner: {
+      js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);",
+    },
   },
 ]
 

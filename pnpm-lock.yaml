@@ -7,10 +7,17 @@ settings:
 importers:
 
   .:
+    dependencies:
+      ws:
+        specifier: ^8.20.0
+        version: 8.20.0
     devDependencies:
       '@types/node':
         specifier: ^25.5.0
         version: 25.5.0
+      '@types/ws':
+        specifier: ^8.18.1
+        version: 8.18.1
       esbuild:
         specifier: ^0.25.0
         version: 0.25.12
@@ -59,6 +66,18 @@ importers:
         version: link:../../packages/core
 
   plugins/title-shift:
+    dependencies:
+      '@typora-plugin-lite/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+
+  plugins/trail:
+    dependencies:
+      '@typora-plugin-lite/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+
+  plugins/tree-guides:
     dependencies:
       '@typora-plugin-lite/core':
         specifier: workspace:*

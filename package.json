@@ -22,8 +22,12 @@
   "bin": {
     "session-archive": "dist/tools/session-archive/index.mjs"
   },
+  "dependencies": {
+    "ws": "^8.20.0"
+  },
   "devDependencies": {
     "@types/node": "^25.5.0",
+    "@types/ws": "^8.18.1",
     "esbuild": "^0.25.0",
     "happy-dom": "^20.9.0",
     "tsx": "^4.19.0",

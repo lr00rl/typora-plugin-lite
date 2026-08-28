@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import WebSocket from 'ws'
 
 import { createSidecarServer } from '../plugins/remote-control/src/sidecar/server.ts'
 

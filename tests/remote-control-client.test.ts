@@ -1,10 +1,16 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
+import WebSocket from 'ws'
 
-import { TyporaRemoteControlClient, readLocalSettings } from '../clients/node/src/index.ts'
+import {
+  TyporaRemoteControlClient,
+  TyporaRemoteControlError,
+  getDefaultSettingsPaths,
+  readLocalSettings,
+} from '../clients/node/src/index.ts'
 import { createSidecarServer } from '../plugins/remote-control/src/sidecar/server.ts'
 
 function waitForOpen(ws: WebSocket): Promise<void> {
@@ -157,6 +163,7 @@ test('node client authenticates, runs commands, and consumes typora methods', as
     commandId: (params as { commandId: string }).commandId,
     result: { ok: true },
   }))
+  typora.handle('typora.getSelection', () => new Promise(() => {}))
 
   const client = await TyporaRemoteControlClient.connect({
     url: `ws://127.0.0.1:${server.port}/rpc`,
@@ -239,6 +246,18 @@ test('node client authenticates, runs commands, and consumes typora methods', as
     commandId: 'md-padding:format',
     result: { ok: true },
   })
+
+  await assert.rejects(
+    client.call('typora.getSelection', undefined, { timeoutMs: 20 }),
+    (error: unknown) =>
+      error instanceof TyporaRemoteControlError &&
+      error.code === -32001 &&
+      /typora\.getSelection/.test(error.message),
+  )
+
+  const pendingAtClose = client.call('typora.getSelection', undefined, { timeoutMs: 10_000 })
+  client.close()
+  await assert.rejects(pendingAtClose, /closed by client/)
 })
 
 test('reads local settings file for convenient connection bootstrap', async () => {
@@ -256,4 +275,13 @@ test('reads local settings file for convenient connection bootstrap', async () =
     port: 5619,
     token: 'abc',
   })
+})
+
+test('Windows settings discovery includes Typora userPath under the home directory', () => {
+  if (process.platform !== 'win32') return
+  assert.ok(
+    getDefaultSettingsPaths().includes(
+      join(homedir(), 'plugins', 'data', 'remote-control', 'settings.json'),
+    ),
+  )
 })

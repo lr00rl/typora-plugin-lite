@@ -1,6 +1,11 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { readFile } from 'node:fs/promises'
+import WebSocket from 'ws'
+
+export const DEFAULT_CONNECT_TIMEOUT_MS = 10_000
+export const DEFAULT_REQUEST_TIMEOUT_MS = 35_000
+const OPERATION_TIMEOUT_GRACE_MS = 5_000
 
 type NotificationHandler = (params: unknown) => void
 
@@ -13,13 +18,22 @@ interface JsonRpcEnvelope {
   error?: { code: number; message: string; data?: unknown }
 }
 
-interface ConnectionOptions {
+export interface ConnectionOptions {
   url: string
   token: string
   role?: 'client' | 'typora'
+  /** Time allowed for the TCP/WebSocket handshake and authentication. */
+  connectTimeoutMs?: number
+  /** Default transport timeout for each JSON-RPC request. Set 0 to disable. */
+  requestTimeoutMs?: number
 }
 
-interface LocalSettings {
+export interface RpcCallOptions {
+  /** Override the client's default transport timeout for this request. */
+  timeoutMs?: number
+}
+
+export interface LocalSettings {
   host: string
   port: number
   token: string
@@ -132,73 +146,130 @@ export class TyporaRemoteControlClient {
   private readonly pending = new Map<number, {
     resolve: (value: unknown) => void
     reject: (error: unknown) => void
+    timer?: ReturnType<typeof setTimeout>
   }>()
   private readonly handlers = new Map<string, Set<NotificationHandler>>()
+  private readonly requestTimeoutMs: number
   private closed = false
 
-  private constructor(ws: WebSocket) {
+  private constructor(ws: WebSocket, requestTimeoutMs: number) {
     this.ws = ws
+    this.requestTimeoutMs = requestTimeoutMs
     ws.addEventListener('message', event => {
       this.handleMessage(String(event.data))
     })
-    ws.addEventListener('close', () => {
+    ws.addEventListener('close', event => {
       this.closed = true
-      const error = new Error('Remote control socket closed')
-      for (const pending of this.pending.values()) {
-        pending.reject(error)
-      }
-      this.pending.clear()
+      const reason = event.reason ? `: ${event.reason}` : ''
+      this.failPending(new Error(`Remote control socket closed (${event.code})${reason}`))
+    })
+    ws.addEventListener('error', () => {
+      if (this.closed) return
+      this.closed = true
+      this.failPending(new Error('Remote control socket error'))
+      ws.close()
     })
   }
 
   static async connect(options: ConnectionOptions): Promise<TyporaRemoteControlClient> {
     const role = options.role ?? 'client'
+    const connectTimeoutMs = normalizeTimeout(options.connectTimeoutMs, DEFAULT_CONNECT_TIMEOUT_MS)
+    const requestTimeoutMs = normalizeTimeout(options.requestTimeoutMs, DEFAULT_REQUEST_TIMEOUT_MS)
     const ws = new WebSocket(options.url)
 
-    await new Promise<void>((resolve, reject) => {
-      ws.addEventListener('open', () => resolve(), { once: true })
-      ws.addEventListener('error', () => reject(new Error(`Failed to connect to ${options.url}`)), { once: true })
-    })
+    try {
+      await new Promise<void>((resolve, reject) => {
+        let settled = false
+        const finish = (error?: Error) => {
+          if (settled) return
+          settled = true
+          clearTimeout(timer)
+          ws.removeEventListener('open', onOpen)
+          ws.removeEventListener('error', onError)
+          error ? reject(error) : resolve()
+        }
+        const onOpen = () => finish()
+        const onError = () => finish(new Error(`Failed to connect to ${options.url}`))
+        const timer = setTimeout(() => {
+          finish(new Error(`Connection timed out after ${connectTimeoutMs}ms: ${options.url}`))
+        }, connectTimeoutMs)
+        timer.unref?.()
+        ws.addEventListener('open', onOpen, { once: true })
+        ws.addEventListener('error', onError, { once: true })
+      })
+    } catch (error) {
+      ws.terminate()
+      throw error
+    }
 
-    const client = new TyporaRemoteControlClient(ws)
-    await client.call('session.authenticate', {
-      token: options.token,
-      role,
-    })
-    return client
+    const client = new TyporaRemoteControlClient(ws, requestTimeoutMs)
+    try {
+      await client.call('session.authenticate', {
+        token: options.token,
+        role,
+      }, { timeoutMs: connectTimeoutMs })
+      return client
+    } catch (error) {
+      client.close()
+      throw error
+    }
   }
 
   static async connectFromLocalSettings(options: {
     settingsPath?: string
     role?: 'client' | 'typora'
+    connectTimeoutMs?: number
+    requestTimeoutMs?: number
   } = {}): Promise<TyporaRemoteControlClient> {
     const settings = await readLocalSettings(options.settingsPath)
     return await TyporaRemoteControlClient.connect({
       url: `ws://${settings.host}:${settings.port}/rpc`,
       token: settings.token,
       role: options.role,
+      connectTimeoutMs: options.connectTimeoutMs,
+      requestTimeoutMs: options.requestTimeoutMs,
     })
   }
 
-  async call<T>(method: string, params?: unknown): Promise<T> {
+  async call<T>(method: string, params?: unknown, options: RpcCallOptions = {}): Promise<T> {
     if (this.closed) {
       throw new Error('Remote control socket is closed')
     }
 
     const id = this.nextId++
     const response = new Promise<T>((resolve, reject) => {
+      const timeoutMs = options.timeoutMs ?? this.requestTimeoutMs
+      const timer = timeoutMs > 0
+        ? setTimeout(() => {
+            if (!this.pending.has(id)) return
+            this.pending.delete(id)
+            reject(new TyporaRemoteControlError(
+              -32001,
+              `Request timed out after ${timeoutMs}ms: ${method}`,
+            ))
+          }, timeoutMs)
+        : undefined
+      timer?.unref?.()
       this.pending.set(id, {
         resolve: value => resolve(value as T),
         reject,
+        timer,
       })
     })
 
-    this.ws.send(JSON.stringify({
-      jsonrpc: '2.0',
-      id,
-      method,
-      ...(params === undefined ? {} : { params }),
-    }))
+    try {
+      this.ws.send(JSON.stringify({
+        jsonrpc: '2.0',
+        id,
+        method,
+        ...(params === undefined ? {} : { params }),
+      }))
+    } catch (error) {
+      const pending = this.pending.get(id)
+      this.pending.delete(id)
+      if (pending?.timer) clearTimeout(pending.timer)
+      pending?.reject(error)
+    }
 
     return await response
   }
@@ -214,7 +285,9 @@ export class TyporaRemoteControlClient {
   }
 
   close(): void {
+    if (this.closed) return
     this.closed = true
+    this.failPending(new Error('Remote control socket closed by client'))
     this.ws.close()
   }
 
@@ -255,7 +328,7 @@ export class TyporaRemoteControlClient {
     return await this.call('exec.run', {
       command,
       ...options,
-    })
+    }, { timeoutMs: this.operationTimeout(options.timeoutMs) })
   }
 
   async start(command: string, options: {
@@ -301,7 +374,11 @@ export class TyporaRemoteControlClient {
    * snippet use `await`; `timeoutMs` bounds the wait.
    */
   async eval(code: string, options: { async?: boolean; timeoutMs?: number } = {}): Promise<TyporaEvalResult> {
-    return await this.call('typora.eval', { code, ...options })
+    return await this.call(
+      'typora.eval',
+      { code, ...options },
+      { timeoutMs: this.operationTimeout(options.timeoutMs) },
+    )
   }
 
   async setSourceMode(enabled: boolean): Promise<TyporaSourceModeState> {
@@ -397,7 +474,12 @@ export class TyporaRemoteControlClient {
   }
 
   private handleMessage(raw: string): void {
-    const message = JSON.parse(raw) as JsonRpcEnvelope
+    let message: JsonRpcEnvelope
+    try {
+      message = JSON.parse(raw) as JsonRpcEnvelope
+    } catch {
+      return
+    }
     if (message.jsonrpc !== '2.0') return
 
     if (typeof message.method === 'string' && message.id == null) {
@@ -414,6 +496,7 @@ export class TyporaRemoteControlClient {
     const pending = this.pending.get(Number(message.id))
     if (!pending) return
     this.pending.delete(Number(message.id))
+    if (pending.timer) clearTimeout(pending.timer)
 
     if (message.error) {
       pending.reject(new TyporaRemoteControlError(
@@ -426,27 +509,65 @@ export class TyporaRemoteControlClient {
 
     pending.resolve(message.result)
   }
+
+  private operationTimeout(operationTimeoutMs?: number): number {
+    return operationTimeoutMs && operationTimeoutMs > 0
+      ? Math.max(this.requestTimeoutMs, operationTimeoutMs + OPERATION_TIMEOUT_GRACE_MS)
+      : this.requestTimeoutMs
+  }
+
+  private failPending(error: Error): void {
+    for (const pending of this.pending.values()) {
+      if (pending.timer) clearTimeout(pending.timer)
+      pending.reject(error)
+    }
+    this.pending.clear()
+  }
 }
 
-export async function readLocalSettings(settingsPath = getDefaultSettingsPath()): Promise<LocalSettings> {
-  const raw = JSON.parse(await readFile(settingsPath, 'utf8')) as Partial<LocalSettings>
-  if (!raw.host || !raw.port || !raw.token) {
-    throw new Error(`Incomplete remote-control settings at ${settingsPath}`)
+export async function readLocalSettings(settingsPath?: string): Promise<LocalSettings> {
+  const candidates = settingsPath ? [settingsPath] : getDefaultSettingsPaths()
+  for (const candidate of candidates) {
+    try {
+      const raw = JSON.parse(await readFile(candidate, 'utf8')) as Partial<LocalSettings>
+      if (!raw.host || !raw.port || !raw.token) {
+        throw new Error(`Incomplete remote-control settings at ${candidate}`)
+      }
+      return {
+        host: raw.host,
+        port: raw.port,
+        token: raw.token,
+      }
+    } catch (error) {
+      if (isFileNotFound(error) && !settingsPath) continue
+      throw error
+    }
   }
-  return {
-    host: raw.host,
-    port: raw.port,
-    token: raw.token,
-  }
+  throw new Error(`Remote-control settings not found. Tried: ${candidates.join(', ')}`)
 }
 
 export function getDefaultSettingsPath(): string {
+  return getDefaultSettingsPaths()[0]!
+}
+
+export function getDefaultSettingsPaths(): string[] {
   if (process.platform === 'darwin') {
-    return join(homedir(), 'Library', 'Application Support', 'abnerworks.Typora', 'plugins', 'data', 'remote-control', 'settings.json')
+    return [join(homedir(), 'Library', 'Application Support', 'abnerworks.Typora', 'plugins', 'data', 'remote-control', 'settings.json')]
   }
   if (process.platform === 'win32') {
     const appData = process.env.APPDATA ?? join(homedir(), 'AppData', 'Roaming')
-    return join(appData, 'Typora', 'plugins', 'data', 'remote-control', 'settings.json')
+    return [
+      join(appData, 'Typora', 'plugins', 'data', 'remote-control', 'settings.json'),
+      join(homedir(), 'plugins', 'data', 'remote-control', 'settings.json'),
+    ]
   }
-  return join(homedir(), '.local', 'Typora', 'data', 'remote-control', 'settings.json')
+  return [join(homedir(), '.local', 'Typora', 'data', 'remote-control', 'settings.json')]
+}
+
+function normalizeTimeout(value: number | undefined, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : fallback
+}
+
+function isFileNotFound(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT'
 }

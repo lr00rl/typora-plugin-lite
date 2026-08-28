@@ -65,6 +65,40 @@ ss -tnp state all '( sport = :5619 or dport = :5619 )'
 #  ESTAB  ... 127.0.0.1:<X>  ↔ 127.0.0.1:5619  ← peer-side half (Typora or CLI)
 ```
 
+## Node client
+
+Use the bundled client for scripts and diagnostics instead of implementing a
+WebSocket receive loop by hand:
+
+```js
+import { TyporaRemoteControlClient } from './dist/clients/node/index.mjs'
+
+const client = await TyporaRemoteControlClient.connectFromLocalSettings()
+try {
+  console.log(await client.getInfo())
+  console.log(await client.eval('return document.title'))
+} finally {
+  client.close()
+}
+```
+
+The bundle carries its own `ws` transport, so it also works on Node 18 where
+`globalThis.WebSocket` is absent. Connection/authentication is bounded to 10s
+and JSON-RPC calls to 35s by default. A timeout, socket error, socket close, or
+explicit `client.close()` rejects and removes every affected pending request
+and clears its timer. Use `requestTimeoutMs: 0` only when an intentionally
+unbounded transport wait is required.
+
+On Windows, settings discovery checks both the conventional
+`%APPDATA%\Typora\plugins\data\remote-control\settings.json` path and Typora's
+`<userPath>\plugins\data\remote-control\settings.json` layout. Pass
+`settingsPath` explicitly only for a custom location.
+
+If a bespoke client is unavoidable, its receive loop must treat a WebSocket
+Close frame or a zero-byte receive as terminal, apply a cancellation timeout,
+and dispose each per-message buffer. Continuing after Close can become a tight
+allocation loop even though no RPC work remains.
+
 ### Role-based singleton trade-off
 
 Because the latest `authenticate(role: 'typora')` wins the `typoraSessionId`,
