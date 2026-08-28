@@ -149,10 +149,18 @@ export default class TreeGuidesPlugin extends Plugin {
   /**
    * The bottom of the pinned breadcrumb, which is the real top of the list.
    *
-   * The theme pins every ancestor row of the open file, each at its own offset,
-   * so the stack grows with depth. A row is currently stuck when it has been
-   * pushed down relative to the node it belongs to; the lowest such row's
-   * bottom edge is where drawing may begin.
+   * The theme pins every ancestor row of the open file, each at its own offset
+   * (0, 30, 60 ...), and pins the open file itself by making its whole node
+   * sticky, because a leaf has no subtree to slide under it. Only some of them
+   * are stuck at any moment: the rest are still sitting at their natural
+   * position further down.
+   *
+   * A sticky element is stuck exactly when it has come to rest on its own
+   * offset, so compare its top against the scroll box top plus that offset.
+   * The earlier test asked whether the element had been pushed down relative to
+   * its parent, which is true of any element that simply is not the first
+   * child: it declared the open file pinned while it sat in the middle of the
+   * list, put the floor under it, and erased every guide above.
    */
   private stickyFloor(tree: HTMLElement, active: Element | null, boxTop: number): number {
     if (!active) return boxTop
@@ -160,18 +168,15 @@ export default class TreeGuidesPlugin extends Plugin {
     let node: Element | null = active
     while (node && node !== tree) {
       if (node.classList?.contains('file-tree-node')) {
-        // Ancestors are pinned by making their row sticky; the open file itself
-        // is pinned by making its whole node sticky, because a leaf has no
-        // subtree to slide under it. Both end up in the same stack.
         const row = node.querySelector<HTMLElement>(':scope > .file-node-content')
-        const holder = node as HTMLElement
-        const nodeStuck =
-          getComputedStyle(holder).position === 'sticky' &&
-          holder.getBoundingClientRect().top > (holder.parentElement?.getBoundingClientRect().top ?? -Infinity) + 0.5
-        if (nodeStuck && row) floor = Math.max(floor, row.getBoundingClientRect().bottom)
-        else if (row && row.getClientRects().length && getComputedStyle(row).position === 'sticky') {
-          const r = row.getBoundingClientRect()
-          if (r.top > holder.getBoundingClientRect().top + 0.5) floor = Math.max(floor, r.bottom)
+        for (const el of [node as HTMLElement, row]) {
+          if (!el || !el.getClientRects().length) continue
+          const style = getComputedStyle(el)
+          if (style.position !== 'sticky') continue
+          const offset = Number.parseFloat(style.top)
+          if (!Number.isFinite(offset)) continue
+          const rect = el.getBoundingClientRect()
+          if (Math.abs(rect.top - (boxTop + offset)) < 1.5) floor = Math.max(floor, rect.bottom)
         }
       }
       node = node.parentElement
