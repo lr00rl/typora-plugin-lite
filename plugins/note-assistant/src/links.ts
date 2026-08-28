@@ -2,10 +2,12 @@
  * Path math for wiki-link targets and graph-relative resolution.
  *
  * Everything here is pure (no core imports) so the unit tests can load the
- * module directly. The algorithms are the ones the vault pipeline uses:
- * `wikiTargetFor` mirrors tools/note-assistant/lib.mjs `composeNoteAssistantBlock`
- * (target = block-relative path without the .md extension) so links inserted by
- * the palette parse and resolve identically to generated ones.
+ * module directly. `wikiTargetFor` writes the same shape the vault's own
+ * resolver reads back: a path relative to the current note, without the .md
+ * extension, so a link inserted from the palette resolves exactly like one
+ * typed by hand. The resolver it has to agree with is `Vault.resolve` in the
+ * vault repo's `.tools/vault.mjs`; it used to be described as mirroring a
+ * block generator that has since been retired along with the blocks.
  */
 
 export function normalizePath(input: string): string {
