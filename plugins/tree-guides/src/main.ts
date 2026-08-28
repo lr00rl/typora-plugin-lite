@@ -21,7 +21,13 @@ const CSS = /* css */ `
 #tpl-tree-guides {
   position: fixed;
   pointer-events: none;
-  z-index: 1;
+  /* Inside #file-library-tree and below its rows. The pinned breadcrumb rows
+     carry z-index 100+ and an opaque background, so they cover the guides
+     exactly where they overlap and nothing else does. Painting the overlay on
+     top of the sidebar was the whole reason the lines cut through the pinned
+     names, and every attempt to fix that by not drawing above a floor traded
+     one artefact for a worse one: the ancestor levels lost their verticals. */
+  z-index: 0;
   /* Clipped to the tree's visible box: a group whose parent has scrolled away
      must not trail a stroke up over the sidebar header or the title bar. */
   overflow: hidden;
@@ -131,8 +137,8 @@ export default class TreeGuidesPlugin extends Plugin {
     host.addEventListener('scroll', this.onScroll, { passive: true })
   }
 
-  private ensureSvg(): SVGSVGElement {
-    if (this.svg && this.svg.isConnected) return this.svg
+  private ensureSvg(tree: HTMLElement): SVGSVGElement {
+    if (this.svg && this.svg.isConnected && this.svg.parentElement === tree) return this.svg
     const svg = document.createElementNS(SVG_NS, 'svg') as SVGSVGElement
     svg.id = 'tpl-tree-guides'
     svg.setAttribute('aria-hidden', 'true')
@@ -141,47 +147,12 @@ export default class TreeGuidesPlugin extends Plugin {
     this.litPath.setAttribute('class', 'tpl-guide-lit')
     svg.appendChild(this.basePath)
     svg.appendChild(this.litPath)
-    document.body.appendChild(svg)
+    // First child of the tree: same stacking context as the rows, painted
+    // before them, so ordinary transparent rows let it through and pinned rows
+    // hide it.
+    tree.insertBefore(svg, tree.firstChild)
     this.svg = svg
     return svg
-  }
-
-  /**
-   * The bottom of the pinned breadcrumb, which is the real top of the list.
-   *
-   * The theme pins every ancestor row of the open file, each at its own offset
-   * (0, 30, 60 ...), and pins the open file itself by making its whole node
-   * sticky, because a leaf has no subtree to slide under it. Only some of them
-   * are stuck at any moment: the rest are still sitting at their natural
-   * position further down.
-   *
-   * A sticky element is stuck exactly when it has come to rest on its own
-   * offset, so compare its top against the scroll box top plus that offset.
-   * The earlier test asked whether the element had been pushed down relative to
-   * its parent, which is true of any element that simply is not the first
-   * child: it declared the open file pinned while it sat in the middle of the
-   * list, put the floor under it, and erased every guide above.
-   */
-  private stickyFloor(tree: HTMLElement, active: Element | null, boxTop: number): number {
-    if (!active) return boxTop
-    let floor = boxTop
-    let node: Element | null = active
-    while (node && node !== tree) {
-      if (node.classList?.contains('file-tree-node')) {
-        const row = node.querySelector<HTMLElement>(':scope > .file-node-content')
-        for (const el of [node as HTMLElement, row]) {
-          if (!el || !el.getClientRects().length) continue
-          const style = getComputedStyle(el)
-          if (style.position !== 'sticky') continue
-          const offset = Number.parseFloat(style.top)
-          if (!Number.isFinite(offset)) continue
-          const rect = el.getBoundingClientRect()
-          if (Math.abs(rect.top - (boxTop + offset)) < 1.5) floor = Math.max(floor, rect.bottom)
-        }
-      }
-      node = node.parentElement
-    }
-    return floor
   }
 
   private draw(): void {
@@ -192,7 +163,7 @@ export default class TreeGuidesPlugin extends Plugin {
     }
     this.attachScrollHost(tree)
 
-    const svg = this.ensureSvg()
+    const svg = this.ensureSvg(tree)
     const box = (this.scrollHost ?? tree).getBoundingClientRect()
     svg.style.display = ''
     svg.style.left = `${box.left}px`
@@ -201,12 +172,6 @@ export default class TreeGuidesPlugin extends Plugin {
     svg.style.height = `${box.height}px`
 
     const active = tree.querySelector('.file-tree-node.active')
-    // Where the scrollable content actually starts. The pinned breadcrumb sits
-    // on top of the list, so a group whose own parent has scrolled away must
-    // start below the stack rather than at the top of the box, or its trunk is
-    // drawn straight through the pinned rows. One pinned row was handled
-    // before; a seven-deep stack was not.
-    const floor = this.stickyFloor(tree, active, box.top)
     const groups: GuideGroup[] = []
 
     const containers = tree.querySelectorAll<HTMLElement>('.file-node-children')
@@ -229,7 +194,12 @@ export default class TreeGuidesPlugin extends Plugin {
         parentRow && parentRow.getClientRects().length
           ? parentRow.getBoundingClientRect().bottom
           : box.top
-      const top = Math.max(rect.top, parentBottom, floor)
+      // A pinned folder row leaves its container behind, so the group starts
+      // at the row's current bottom rather than the container's top. Nothing
+      // clamps this to the visible area any more: a line that runs up into the
+      // breadcrumb is hidden by the breadcrumb, which is what should have been
+      // happening all along.
+      const top = Math.max(rect.top, parentBottom)
 
       const children = Array.from(container.children) as HTMLElement[]
       const arms: number[] = []
