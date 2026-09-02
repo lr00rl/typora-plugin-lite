@@ -188,3 +188,70 @@ test('proxies typora-scoped requests through the authenticated typora session', 
   )
   assert.equal(documentState.filePath, '/tmp/example.md')
 })
+
+/** Poll until `check` holds, or fail after `timeoutMs`. */
+async function until(check: () => Promise<boolean>, timeoutMs = 2000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (await check()) return
+    await new Promise(resolve => setTimeout(resolve, 20))
+  }
+  throw new Error('condition not met in time')
+}
+
+/** A Typora window: authenticated as one, answering getDocument with its own file. */
+async function connectWindow(t: { after: (fn: () => void) => void }, port: number, filePath: string) {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/rpc`)
+  await waitForOpen(ws)
+  t.after(() => ws.close())
+  const rpc = createRpcClient(ws)
+  await rpc.call('session.authenticate', { token: 'secret-token', role: 'typora' })
+  rpc.handle('typora.getDocument', () => ({ markdown: '# window', filePath, fileName: 'window.md' }))
+  return { ws, rpc }
+}
+
+async function connectClient(t: { after: (fn: () => void) => void }, port: number) {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/rpc`)
+  await waitForOpen(ws)
+  t.after(() => ws.close())
+  const rpc = createRpcClient(ws)
+  await rpc.call('session.authenticate', { token: 'secret-token', role: 'client' })
+  return rpc
+}
+
+test('falls back to another window when the active typora session closes', async (t) => {
+  const server = await createSidecarServer({ host: '127.0.0.1', port: 0, token: 'secret-token' })
+  t.after(async () => {
+    await server.close()
+  })
+  await connectWindow(t, server.port, '/tmp/first.md')
+  const second = await connectWindow(t, server.port, '/tmp/second.md')
+  const client = await connectClient(t, server.port)
+
+  const served = async () => (await client.call<{ filePath: string }>('typora.getDocument')).filePath
+  assert.equal(await served(), '/tmp/second.md')
+  assert.equal((await client.call<{ typoraSessions: number }>('system.getInfo')).typoraSessions, 2)
+
+  second.ws.close()
+  await until(async () => (await client.call<{ typoraSessions: number }>('system.getInfo')).typoraSessions === 1)
+  assert.equal((await client.call<{ typoraConnected: boolean }>('system.getInfo')).typoraConnected, true)
+  assert.equal(await served(), '/tmp/first.md')
+})
+
+test('the window in front claims the typora slot', async (t) => {
+  const server = await createSidecarServer({ host: '127.0.0.1', port: 0, token: 'secret-token' })
+  t.after(async () => {
+    await server.close()
+  })
+  const first = await connectWindow(t, server.port, '/tmp/first.md')
+  await connectWindow(t, server.port, '/tmp/second.md')
+  const client = await connectClient(t, server.port)
+
+  const served = async () => (await client.call<{ filePath: string }>('typora.getDocument')).filePath
+  assert.equal(await served(), '/tmp/second.md')
+  await first.rpc.call('session.claimTypora')
+  assert.equal(await served(), '/tmp/first.md')
+
+  const denied = await client.call<unknown>('session.claimTypora').then(() => null, (error: unknown) => error)
+  assert.ok(denied !== null, 'a client session cannot claim the slot')
+})

@@ -55,6 +55,9 @@ const COPY_URL_CMD = 'remote-control:copy-url'
  */
 const RESTART_KEYS = new Set(['allowExec', 'allowEval', 'host', 'port', 'token'])
 const RESTART_DEBOUNCE_MS = 500
+/** A dropped socket is retried at this pace, doubling to the ceiling. */
+const RECONNECT_MIN_MS = 1000
+const RECONNECT_MAX_MS = 15000
 
 export default class RemoteControlPlugin extends Plugin<RemoteControlSettings> {
   static settingsSchema: SettingsSchema<RemoteControlSettings> = {
@@ -154,9 +157,17 @@ export default class RemoteControlPlugin extends Plugin<RemoteControlSettings> {
       this.scheduleRestart()
     }))
 
+    // The window in front is the one typora.* calls should reach. Every
+    // window runs this plugin and connects; the sidecar targets the last to
+    // authenticate, which is whichever window opened last, not the one the
+    // user is working in. A focused window says so.
+    const onFocus = () => this.claimWindow()
+    window.addEventListener('focus', onFocus)
+    this.addDisposable(() => window.removeEventListener('focus', onFocus))
     void this.enableService().catch(error => {
       console.error('[tpl:remote-control]', error)
       this.showNotice(error instanceof Error ? error.message : 'Remote control failed to start', 6000)
+      this.scheduleReconnect()
     })
   }
 
@@ -165,6 +176,7 @@ export default class RemoteControlPlugin extends Plugin<RemoteControlSettings> {
       window.clearTimeout(this.restartTimer)
       this.restartTimer = null
     }
+    this.clearReconnect()
     void this.stopService({
       persistEnabled: false,
       showNotice: false,
@@ -172,6 +184,10 @@ export default class RemoteControlPlugin extends Plugin<RemoteControlSettings> {
   }
 
   private restartTimer: number | null = null
+  private reconnectTimer: number | null = null
+  private reconnectDelayMs = RECONNECT_MIN_MS
+  /** Set while the service is being stopped on purpose, so a closing socket is not chased. */
+  private stopping = false
 
   /** Debounce rapid settings edits then bounce the sidecar. */
   private scheduleRestart(): void {
@@ -229,6 +245,8 @@ export default class RemoteControlPlugin extends Plugin<RemoteControlSettings> {
   }
 
   private async enableService(): Promise<void> {
+    this.stopping = false
+    this.clearReconnect()
     this.settings.set('enabled', true)
     await this.settings.save()
     await this.ensureSidecar()
@@ -247,6 +265,8 @@ export default class RemoteControlPlugin extends Plugin<RemoteControlSettings> {
     persistEnabled: boolean
     showNotice: boolean
   }): Promise<void> {
+    this.stopping = true
+    this.clearReconnect()
     if (options.persistEnabled) {
       this.settings.set('enabled', false)
       await this.settings.save()
@@ -394,8 +414,13 @@ export default class RemoteControlPlugin extends Plugin<RemoteControlSettings> {
       rpc.handleMessage(String(event.data))
     })
     socket.addEventListener('close', () => {
-      this.state.socketConnected = false
       rpc.failPending(new Error('Remote control socket closed'))
+      // A socket this plugin closes on purpose is let go of before it closes;
+      // any other close is the sidecar going away or dropping this window,
+      // while the service is meant to be on. It comes back on its own.
+      if (this.socket !== socket) return
+      this.state.socketConnected = false
+      if (!this.stopping && this.settings.get('enabled')) this.scheduleReconnect()
     })
 
     await rpc.request('session.authenticate', {
@@ -520,14 +545,55 @@ export default class RemoteControlPlugin extends Plugin<RemoteControlSettings> {
     this.socket = socket
     this.rpc = rpc
     this.state.socketConnected = true
+    this.reconnectDelayMs = RECONNECT_MIN_MS
+    if (document.hasFocus()) this.claimWindow()
+  }
+
+  /** Tell the sidecar this window is the one typora.* calls should reach. */
+  private claimWindow(): void {
+    if (!this.rpc || !this.state.socketConnected) return
+    this.rpc.notify('session.claimTypora')
+  }
+
+  private scheduleReconnect(): void {
+    if (this.stopping || !this.settings.get('enabled')) return
+    if (this.reconnectTimer !== null) return
+    const delay = this.reconnectDelayMs
+    this.reconnectDelayMs = Math.min(this.reconnectDelayMs * 2, RECONNECT_MAX_MS)
+    this.reconnectTimer = window.setTimeout(() => {
+      this.reconnectTimer = null
+      void this.reconnect()
+    }, delay)
+  }
+
+  private clearReconnect(): void {
+    if (this.reconnectTimer !== null) {
+      window.clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
+    }
+    this.reconnectDelayMs = RECONNECT_MIN_MS
+  }
+
+  private async reconnect(): Promise<void> {
+    if (this.stopping || !this.settings.get('enabled')) return
+    try {
+      await this.ensureSidecar()
+      await this.connectRpc()
+    } catch (error) {
+      console.warn('[tpl:remote-control] reconnect failed, will retry:', error)
+      this.scheduleReconnect()
+    }
   }
 
   private disconnect(): void {
-    this.state.socketConnected = false
-    this.rpc?.failPending(new Error('Remote control disconnected'))
-    this.rpc = null
-    this.socket?.close()
+    const socket = this.socket
+    const rpc = this.rpc
+    // Let go first: the close that follows must not read as a drop.
     this.socket = null
+    this.rpc = null
+    this.state.socketConnected = false
+    rpc?.failPending(new Error('Remote control disconnected'))
+    socket?.close()
   }
 
   private async pingSidecar(): Promise<boolean> {

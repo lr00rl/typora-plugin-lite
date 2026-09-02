@@ -1,5 +1,14 @@
 # Changelog
 
+## 未发布
+
+### Remote Control：多窗口下不再"断线即失联"
+
+- sidecar 原本只记一个 Typora 会话（最后认证的那个窗口），它一断开就报 "Typora session is unavailable"，其他窗口明明都连着也不用。现在记住所有 Typora 窗口的会话，当前目标断开时回退到最近活跃的那个。
+- 新增 `session.claimTypora`：插件在窗口获得焦点时认领，`typora.*` 调用总是落到正在使用的窗口，而不是最后打开的窗口。
+- 插件侧 socket 被动断开后不再只是把状态标成 disconnected：服务处于开启状态时按 1s 起步、最长 15s 的退避自动重连（包括必要时重新拉起 sidecar）。手动停止服务时不会重连。
+- `system.getInfo` 增加 `typoraSessions` 字段。
+
 ## v0.1.3 — 2026-08-11
 
 `v0.1.2` 只修正了 macOS Quick Open 面板中 `Ctrl+Tab` 的提示；`v0.1.3` 是一次完整的插件运行时、导航、代码阅读和响应式体验升级。

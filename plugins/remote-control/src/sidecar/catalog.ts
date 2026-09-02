@@ -46,6 +46,7 @@ export interface MethodInfo extends MethodSpec {
 
 export const METHOD_SPECS: readonly MethodSpec[] = [
   { name: 'session.authenticate', tier: 'open', summary: 'Authenticate a session with the bearer token.', params: '{ token, role?: "client" | "typora" }' },
+  { name: 'session.claimTypora', tier: 'auth', summary: 'Make this Typora window the one typora.* calls reach. A window calls it when it comes to the front; without a claim the last window to authenticate is the target.' },
   { name: 'system.ping', tier: 'auth', summary: 'Liveness probe. Returns "pong".' },
   { name: 'system.getInfo', tier: 'auth', summary: 'Sidecar pid, bound host/port, session and exec counts, Typora connectivity.' },
   { name: 'system.listMethods', tier: 'auth', summary: 'This catalog: every method, its tier, and whether it is reachable now.' },

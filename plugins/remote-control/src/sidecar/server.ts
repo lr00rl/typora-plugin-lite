@@ -192,7 +192,25 @@ export async function createSidecarServer(options: SidecarServerOptions): Promis
   const server = createServer()
   const sessions = new Map<string, Session>()
   const processes = new Map<string, RunningExec>()
+  // Every window of Typora runs the plugin and every one of them connects.
+  // One is the target of typora.* calls: the last to authenticate, or the
+  // one whose window last came to the front and said so. When it goes, the
+  // most recent of the others takes over rather than the service going dark.
+  const typoraSessions: string[] = []
   let typoraSessionId: string | null = null
+  const activateTypora = (sessionId: string) => {
+    const index = typoraSessions.indexOf(sessionId)
+    if (index !== -1) typoraSessions.splice(index, 1)
+    typoraSessions.push(sessionId)
+    typoraSessionId = sessionId
+  }
+  const forgetTypora = (sessionId: string) => {
+    const index = typoraSessions.indexOf(sessionId)
+    if (index !== -1) typoraSessions.splice(index, 1)
+    if (typoraSessionId === sessionId) {
+      typoraSessionId = typoraSessions.length > 0 ? typoraSessions[typoraSessions.length - 1] : null
+    }
+  }
 
   const cleanupSessionProcesses = (sessionId: string) => {
     for (const running of [...processes.values()]) {
@@ -239,9 +257,7 @@ export async function createSidecarServer(options: SidecarServerOptions): Promis
 
     connection.onClose(() => {
       sessions.delete(session.id)
-      if (typoraSessionId === session.id) {
-        typoraSessionId = null
-      }
+      forgetTypora(session.id)
       peer.failPending(new Error('WebSocket session closed'))
       cleanupSessionProcesses(session.id)
     })
@@ -262,7 +278,7 @@ export async function createSidecarServer(options: SidecarServerOptions): Promis
       session.authenticated = true
       session.role = role
       if (role === 'typora') {
-        typoraSessionId = session.id
+        activateTypora(session.id)
       }
 
       return {
@@ -272,6 +288,14 @@ export async function createSidecarServer(options: SidecarServerOptions): Promis
       }
     })
 
+    peer.registerMethod('session.claimTypora', () => {
+      requireAuth(session)
+      if (session.role !== 'typora') {
+        throw new JsonRpcRemoteError(403, 'Only a Typora session can claim the Typora slot')
+      }
+      activateTypora(session.id)
+      return { active: true, sessionId: session.id }
+    })
     peer.registerMethod('system.ping', () => {
       requireAuth(session)
       return 'pong'
@@ -284,6 +308,7 @@ export async function createSidecarServer(options: SidecarServerOptions): Promis
         host: options.host,
         port: (server.address() as AddressInfo).port,
         typoraConnected: !!typoraSessionId,
+        typoraSessions: typoraSessions.length,
         sessionCount: sessions.size,
         execCount: processes.size,
       }
@@ -414,7 +439,7 @@ export async function createSidecarServer(options: SidecarServerOptions): Promis
       }
       const target = sessions.get(typoraSessionId)
       if (!target) {
-        typoraSessionId = null
+        forgetTypora(typoraSessionId)
         throw new JsonRpcRemoteError(503, 'Typora session is unavailable')
       }
       // Safety net against a connected-but-wedged renderer: bound every forward
