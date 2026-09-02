@@ -58,6 +58,8 @@ export interface SidecarServerOptions {
 export interface SidecarServer {
   readonly host: string
   readonly port: number
+  /** Whether a Typora window is connected right now. */
+  hasTyporaSession(): boolean
   close(): Promise<void>
 }
 
@@ -501,6 +503,7 @@ export async function createSidecarServer(options: SidecarServerOptions): Promis
   return {
     host: options.host,
     port: address.port,
+    hasTyporaSession: () => typoraSessions.length > 0,
     close: closeServer,
   }
 }
@@ -512,11 +515,18 @@ function getArgValue(argv: string[], name: string): string | undefined {
 }
 
 /**
- * Poll a parent PID every `intervalMs` and invoke `onDead()` the first time
- * the parent is gone. Uses `process.kill(pid, 0)` for cross-platform presence
- * detection (Node docs guarantee signal 0 is an existence check on all
- * platforms). Silently skips invalid / init pids so a sidecar launched
- * without `--parent-pid` never triggers a false positive.
+ * Poll a parent PID every `intervalMs` and invoke `onDead()` once the parent
+ * is gone and nothing is still using this sidecar. Uses `process.kill(pid, 0)`
+ * for cross-platform presence detection (Node docs guarantee signal 0 is an
+ * existence check on all platforms). Silently skips invalid / init pids so a
+ * sidecar launched without `--parent-pid` never triggers a false positive.
+ *
+ * `stillNeeded` is the safety catch. The pid this watcher is given is only as
+ * good as what the renderer could work out about its own host, and on macOS
+ * that is through a shell rather than a process table. A pid that is wrong,
+ * or that names something short-lived, would otherwise take down a sidecar
+ * that Typora is in the middle of using. A live Typora session outranks the
+ * pid: while one is connected the sidecar stays up whatever the pid says.
  *
  * Exported so unit tests can exercise the watcher without fork()ing.
  */
@@ -524,6 +534,7 @@ export function watchParentOrExit(
   parentPid: number,
   onDead: () => void,
   intervalMs = 5_000,
+  stillNeeded: () => boolean = () => false,
 ): (() => void) {
   if (!Number.isFinite(parentPid) || parentPid <= 1) {
     return () => {}
@@ -536,6 +547,7 @@ export function watchParentOrExit(
       const code = (err as NodeJS.ErrnoException | undefined)?.code
       if (code === 'ESRCH' || code === 'ENOENT') {
         if (fired) return
+        if (stillNeeded()) return
         fired = true
         clearInterval(timer)
         onDead()
@@ -624,7 +636,7 @@ export async function runSidecarCli(argv = process.argv): Promise<void> {
   watchParentOrExit(parentPid, () => {
     console.log(`[tpl:remote-control:sidecar] parent pid ${parentPid} gone — exiting`)
     shutdown()
-  })
+  }, 5_000, () => server.hasTyporaSession())
 
   for (const sig of ['SIGTERM', 'SIGINT'] as const) {
     process.on(sig, () => {

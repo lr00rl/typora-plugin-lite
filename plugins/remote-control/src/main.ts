@@ -374,8 +374,13 @@ export default class RemoteControlPlugin extends Plugin<RemoteControlSettings> {
         platform.shell.escape(String(port)),
         '--token',
         platform.shell.escape(token),
+        // The shell is run by the host app itself (Typora's own bridge runs it),
+        // so its parent is the process whose lifetime the sidecar should follow.
+        // The renderer cannot see that pid on this platform: there is no
+        // `window.process` outside Electron, which is how a sidecar came to be
+        // started with pid 0 and outlive every Typora it was meant to serve.
         '--parent-pid',
-        platform.shell.escape(String(parentPid)),
+        parentPid > 1 ? platform.shell.escape(String(parentPid)) : '"$PPID"',
         '--allow-exec',
         allowExec,
         '--allow-eval',

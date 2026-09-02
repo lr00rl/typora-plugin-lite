@@ -7,6 +7,7 @@ import WebSocket from 'ws'
 import {
   createSidecarServer,
   isSidecarEntrypoint,
+  watchParentOrExit,
 } from '../plugins/remote-control/src/sidecar/server.ts'
 
 interface RpcEnvelope {
@@ -254,4 +255,32 @@ test('the window in front claims the typora slot', async (t) => {
 
   const denied = await client.call<unknown>('session.claimTypora').then(() => null, (error: unknown) => error)
   assert.ok(denied !== null, 'a client session cannot claim the slot')
+})
+
+test('the parent watchdog defers to a live typora session', async () => {
+  // A pid that cannot exist: the watcher must see it as gone.
+  const dead = 2 ** 30
+  let exited = false
+  let needed = true
+  const stop = watchParentOrExit(dead, () => { exited = true }, 5, () => needed)
+  await new Promise(resolve => setTimeout(resolve, 40))
+  assert.equal(exited, false, 'a sidecar Typora is using must not be taken down by a stale pid')
+  needed = false
+  await new Promise(resolve => setTimeout(resolve, 40))
+  assert.equal(exited, true, 'with nothing using it and the parent gone, it exits')
+  stop()
+})
+
+test('a server reports whether a typora window is connected', async (t) => {
+  const server = await createSidecarServer({ host: '127.0.0.1', port: 0, token: 'secret-token' })
+  t.after(async () => {
+    await server.close()
+  })
+  assert.equal(server.hasTyporaSession(), false)
+  const window = await connectWindow(t, server.port, '/tmp/one.md')
+  const client = await connectClient(t, server.port)
+  await until(async () => server.hasTyporaSession())
+  window.ws.close()
+  await until(async () => !server.hasTyporaSession())
+  assert.equal((await client.call<{ typoraConnected: boolean }>('system.getInfo')).typoraConnected, false)
 })
