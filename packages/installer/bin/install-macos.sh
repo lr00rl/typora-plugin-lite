@@ -193,6 +193,7 @@ cmd_install() {
   copy_dist
   inject_script
   codesign_app
+  seed_theme_pack "$INSTALLER_DIR/lib/seed-theme-pack.mjs"
   echo ""
   ok "Installation complete! Restart Typora to activate."
   info "Runtime: $HTML_DIR/tpl/"
@@ -204,6 +205,7 @@ cmd_repair() {
   copy_dist
   inject_script
   codesign_app
+  seed_theme_pack "$INSTALLER_DIR/lib/seed-theme-pack.mjs"
   ok "Repair complete!"
 }
 

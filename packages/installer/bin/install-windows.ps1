@@ -202,6 +202,23 @@ Get-ChildItem $PluginsDir -Directory -ErrorAction SilentlyContinue | ForEach-Obj
 }
 Write-Ok "Plugin files copied to $TplDir"
 
+function Invoke-ThemePackSeed {
+    $seedScript = Join-Path (Split-Path -Parent $ScriptDir) 'lib\seed-theme-pack.mjs'
+    $node = Get-Command node -ErrorAction SilentlyContinue
+    if (-not $node -or -not (Test-Path $seedScript -PathType Leaf)) {
+        Write-Warn "theme pack seed skipped (node or seed script missing); plugin will fetch on first launch"
+        return
+    }
+    & $node.Source $seedScript
+    if ($LASTEXITCODE -eq 0) {
+        Write-Ok "Theme pack seeded into Typora themes folder"
+    } else {
+        Write-Warn "theme pack seed failed; plugin will fetch on first launch"
+    }
+}
+
+Invoke-ThemePackSeed
+
 # --- Done -------------------------------------------------------------------
 Write-Host ""
 Write-Ok "typora-plugin-lite installed successfully!"

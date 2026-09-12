@@ -67,7 +67,7 @@
 - Error: State the failed operation and recovery step; do not render a success state for partial or failed work.
 - Success: Announce only after persistence or host action is confirmed.
 - Disabled: Preserve configuration and clearly distinguish disabled from not yet loaded.
-- Offline/slow network, if applicable: Local plugins do not depend on network; slow filesystem/index operations remain cancellable by closing the surface and cannot overwrite newer render results.
+- Offline/slow network, if applicable: Most local plugins do not depend on network. `theme-pack` may fetch CSS from GitHub on install and startup, then keeps working from the files already in Typora's themes folder if the network is down. It never switches the user off the current theme.
 
 ## Content voice
 - Tone: Direct, calm, and operational.

@@ -1,0 +1,10 @@
+{
+  "id": "theme-pack",
+  "name": "Theme Pack",
+  "version": "0.1.0",
+  "description": "Keep a GitHub Typora theme pack in the official themes folder without switching the current theme",
+  "main": "main.js",
+  "loading": {
+    "startup": true
+  }
+}

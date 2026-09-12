@@ -54,7 +54,28 @@ Plugins never touch low-level APIs directly. They use `platform.fs`, `platform.s
 | `fuzzy-search` | M | `hotkey` | Quick-open with fzf-style ranking, relative-path matching, and rg/fallback indexing; a leading `/` browses by path (`//` reaches the filesystem root). |
 | `note-assistant` | M | `hotkey` | Keyboard-first related-notes palette (Mod+;); Alt+Enter inserts a wiki-link; renders `[[wiki-links]]` inline anywhere in the body, and generated `00_索引` directory-index sections read-only. |
 | `trail` | S | `startup` | Bounded back/forward navigation (up to 3 each way) across recently visited notes, with quiet floating buttons. |
+| `theme-pack` | M | `startup` | Keep a GitHub Typora theme pack in the official themes folder. Adds choices; does not switch the current theme. |
 | `remote-control` | L | `startup` | Loopback JSON-RPC surface for external agents / CLIs. See [plugin README](./plugins/remote-control/README.md). |
+
+### `theme-pack`
+
+The installer writes the default pack CSS into Typora's official themes folder (`~/Library/Application Support/abnerworks.Typora/themes` on macOS, `~/.config/Typora/themes` on Linux, `%APPDATA%\Typora\themes` on Windows) so the first restart after install already has those files for Typora's own Themes menu. On later launches the plugin fetches only what `theme-pack.json` lists. It does not clone the repo and it does not change the current theme. Built-in themes stay selectable. If a destination file is already a symlink, it is left alone.
+
+The source must be a GitHub repository whose root contains a bootloader:
+
+```json
+{
+  "typ": "typora-plugin-lite-theme-pack",
+  "version": 1,
+  "name": "Claude Like",
+  "files": [
+    { "path": "claude-like.css" },
+    { "path": "claude-like-dark.css" }
+  ]
+}
+```
+
+A repo without that file is rejected. Default source is `https://github.com/lr00rl/Typora_Claude-Like_Theme`. Point Plugin Center at another GitHub URL or `owner/repo` (optional git ref) and run `Theme Pack: Sync now`. If the active theme is one of those files and GitHub has a newer CSS, Typora's `#theme_css` link is cache-busted so the open window follows the file.
 
 ### `fuzzy-search` path navigation
 

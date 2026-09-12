@@ -12,6 +12,7 @@ warn()  { printf "${YELLOW}[warn]${NC}  %s\n" "$1"; }
 err()   { printf "${RED}[error]${NC} %s\n" "$1" >&2; }
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+INSTALLER_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 DIST_DIR="$REPO_ROOT/dist"
 PLUGINS_SRC="$REPO_ROOT/plugins"
@@ -163,6 +164,12 @@ overlay_plugin_manifests "$TPL_DIR" "$PLUGINS_SRC" "$SUDO"
 write_builtin_plugins_json "$TPL_DIR" "$PLUGINS_SRC" "$SUDO"
 assert_installed_plugin_manifests "$TPL_DIR/plugins" || exit 1
 ok "Plugin files copied to $TPL_DIR"
+
+if [[ -n "${SUDO_USER:-}" && "$SUDO_USER" != "root" ]]; then
+  seed_theme_pack "$INSTALLER_DIR/lib/seed-theme-pack.mjs" "$SUDO_USER"
+else
+  seed_theme_pack "$INSTALLER_DIR/lib/seed-theme-pack.mjs"
+fi
 
 # --- done -------------------------------------------------------------------
 echo ""

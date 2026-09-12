@@ -47,3 +47,33 @@ assert_installed_plugin_manifests() {
   done
   return "$missing"
 }
+
+# Write the default theme pack into Typora's official themes folder as the
+# real user (never as root). Missing node or a network error is a warning.
+seed_theme_pack() {
+  local script="$1"
+  local as_user="${2-}"
+  local node_bin=""
+  if [[ -n "$as_user" && "$as_user" != "root" ]]; then
+    node_bin=$(sudo -u "$as_user" -H bash -lc 'command -v node' 2>/dev/null || true)
+  else
+    node_bin=$(command -v node || true)
+  fi
+  if [[ -z "$node_bin" || ! -f "$script" ]]; then
+    warn "theme pack seed skipped (node or seed script missing); plugin will fetch on first launch"
+    return 0
+  fi
+  if [[ -n "$as_user" && "$as_user" != "root" ]]; then
+    if sudo -u "$as_user" -H "$node_bin" "$script"; then
+      ok "Theme pack seeded into Typora themes folder"
+    else
+      warn "theme pack seed failed; plugin will fetch on first launch"
+    fi
+    return 0
+  fi
+  if "$node_bin" "$script"; then
+    ok "Theme pack seeded into Typora themes folder"
+  else
+    warn "theme pack seed failed; plugin will fetch on first launch"
+  fi
+}
