@@ -170,8 +170,30 @@ const toolConfigs: esbuild.BuildOptions[] = [
   },
 ]
 
+function copyPluginArtifacts(): void {
+  for (const p of pluginEntries) {
+    const src = join(PLUGINS_DIR, p.name, 'manifest.json')
+    if (!existsSync(src)) {
+      throw new Error(`plugin ${p.name} is missing manifest.json`)
+    }
+    const destDir = join(DIST, 'plugins', p.name)
+    mkdirSync(destDir, { recursive: true })
+    copyFileSync(src, join(destDir, 'manifest.json'))
+
+    const binDir = join(PLUGINS_DIR, p.name, 'bin')
+    if (existsSync(binDir)) {
+      cpSync(binDir, join(destDir, 'bin'), { recursive: true })
+    }
+  }
+  writeFileSync(
+    join(DIST, 'builtin-plugins.json'),
+    JSON.stringify(pluginEntries.map(p => p.name), null, 2) + '\n',
+  )
+}
+
 async function build() {
   if (isWatch) {
+    copyPluginArtifacts()
     const contexts = await Promise.all([
       esbuild.context(loaderConfig),
       esbuild.context(coreConfig),
@@ -181,7 +203,7 @@ async function build() {
       ...toolConfigs.map(c => esbuild.context(c)),
     ])
     await Promise.all(contexts.map(ctx => ctx.watch()))
-    console.log('Watching for changes...')
+    console.log(`Watching for changes (${pluginEntries.length} plugins, manifests copied)...`)
   } else {
     await Promise.all([
       esbuild.build(loaderConfig),
@@ -191,27 +213,7 @@ async function build() {
       ...clientConfigs.map(c => esbuild.build(c)),
       ...toolConfigs.map(c => esbuild.build(c)),
     ])
-    // Copy plugin manifests to dist
-    for (const p of pluginEntries) {
-      const src = join(PLUGINS_DIR, p.name, 'manifest.json')
-      if (existsSync(src)) {
-        const destDir = join(DIST, 'plugins', p.name)
-        mkdirSync(destDir, { recursive: true })
-        copyFileSync(src, join(destDir, 'manifest.json'))
-      }
-
-      const binDir = join(PLUGINS_DIR, p.name, 'bin')
-      if (existsSync(binDir)) {
-        const destDir = join(DIST, 'plugins', p.name, 'bin')
-        mkdirSync(join(DIST, 'plugins', p.name), { recursive: true })
-        cpSync(binDir, destDir, { recursive: true })
-      }
-    }
-    // Write builtin plugin manifest for installer to know which plugins to clean
-    writeFileSync(
-      join(DIST, 'builtin-plugins.json'),
-      JSON.stringify(pluginEntries.map(p => p.name), null, 2) + '\n',
-    )
+    copyPluginArtifacts()
     for (const config of toolConfigs) {
       if (config.outfile) chmodSync(config.outfile, 0o755)
     }

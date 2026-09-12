@@ -12,7 +12,11 @@ warn()  { printf "${YELLOW}[warn]${NC}  %s\n" "$1"; }
 err()   { printf "${RED}[error]${NC} %s\n" "$1" >&2; }
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-DIST_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)/dist"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+DIST_DIR="$REPO_ROOT/dist"
+PLUGINS_SRC="$REPO_ROOT/plugins"
+# shellcheck source=../lib/plugin-artifacts.sh
+source "$SCRIPT_DIR/../lib/plugin-artifacts.sh"
 TYPORA_PATH=""
 SILENT=false
 
@@ -155,6 +159,9 @@ $SUDO cp "$DIST_DIR/core.js.map"   "$TPL_DIR/" 2>/dev/null || true
 if [[ -d "$DIST_DIR/plugins" ]]; then
   $SUDO cp -R "$DIST_DIR/plugins/"* "$TPL_DIR/plugins/" 2>/dev/null || true
 fi
+overlay_plugin_manifests "$TPL_DIR" "$PLUGINS_SRC" "$SUDO"
+write_builtin_plugins_json "$TPL_DIR" "$PLUGINS_SRC" "$SUDO"
+assert_installed_plugin_manifests "$TPL_DIR/plugins" || exit 1
 ok "Plugin files copied to $TPL_DIR"
 
 # --- done -------------------------------------------------------------------

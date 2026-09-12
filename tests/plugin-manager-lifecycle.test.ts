@@ -49,7 +49,7 @@ class TestPlugin extends Plugin {
   onload(): void {}
 }
 
-function createHarness(manifests: PluginManifest[]) {
+function createHarness(manifests: PluginManifest[], extraFolders: string[] = []) {
   const files = new Map<string, string>()
   const writes: string[] = []
   for (const item of manifests) {
@@ -68,7 +68,9 @@ function createHarness(manifests: PluginManifest[]) {
       stat: async () => { throw new Error('unused') },
       isDirectory: async () => false,
       mkdir: async () => {},
-      list: async (dir: string) => dir === '/plugins' ? manifests.map(item => item.id) : [],
+      list: async (dir: string) => dir === '/plugins'
+        ? [...manifests.map(item => item.id), ...extraFolders]
+        : [],
       walkDir: async () => [],
       readText: async (file: string) => {
         const value = files.get(file)
@@ -291,4 +293,12 @@ test('enable then disable during an in-flight load ends disabled and unloaded', 
   await Promise.all([enable, disable])
   assert.equal(manager.isEnabled('racy-plugin'), false)
   assert.equal(manager.isLoaded('racy-plugin'), false)
+})
+
+test('scan skips plugin folders that have no manifest.json', async () => {
+  const harness = createHarness([manifest('wider', { startup: true })], ['trail', 'tree-guides'])
+  const { manager } = harness.makeManager()
+  await manager.scanAndLoad()
+  assert.deepEqual(manager.getManifests().map(item => item.id), ['wider'])
+  assert.equal(manager.isLoaded('wider'), true)
 })

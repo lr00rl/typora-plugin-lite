@@ -16,6 +16,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 INSTALLER_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 DIST_DIR="$(cd "$INSTALLER_DIR/../../dist" 2>/dev/null && pwd || echo "")"
 PLUGINS_SRC="$(cd "$INSTALLER_DIR/../../plugins" 2>/dev/null && pwd || echo "")"
+# shellcheck source=../lib/plugin-artifacts.sh
+source "$SCRIPT_DIR/../lib/plugin-artifacts.sh"
 DATA_DIR="$HOME/Library/Application Support/abnerworks.Typora/plugins"
 
 TYPORA_PATH=""
@@ -174,18 +176,9 @@ copy_dist() {
   if [[ -d "$DIST_DIR/plugins" ]]; then
     cp -R "$DIST_DIR/plugins/"* "$tpl/plugins/" 2>/dev/null || true
   fi
-
-  # Copy manifest files from source plugins
-  if [[ -n "$PLUGINS_SRC" ]] && [[ -d "$PLUGINS_SRC" ]]; then
-    for pd in "$PLUGINS_SRC"/*/; do
-      local name; name=$(basename "$pd")
-      local mf="$pd/manifest.json"
-      if [[ -f "$mf" ]]; then
-        mkdir -p "$tpl/plugins/$name"
-        cp "$mf" "$tpl/plugins/$name/"
-      fi
-    done
-  fi
+  overlay_plugin_manifests "$tpl" "$PLUGINS_SRC"
+  write_builtin_plugins_json "$tpl" "$PLUGINS_SRC"
+  assert_installed_plugin_manifests "$tpl/plugins" || exit 1
 
   ok "Plugin files copied to $tpl"
 

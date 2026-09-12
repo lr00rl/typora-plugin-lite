@@ -21,7 +21,9 @@ function Write-Warn  { param($m) Write-Host "[warn]  $m" -ForegroundColor Yellow
 function Write-Err   { param($m) Write-Host "[error] $m" -ForegroundColor Red }
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$DistDir   = Join-Path (Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $ScriptDir))) 'dist'
+$RepoRoot  = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $ScriptDir))
+$DistDir   = Join-Path $RepoRoot 'dist'
+$PluginsSrc = Join-Path $RepoRoot 'plugins'
 
 # --- Check admin ------------------------------------------------------------
 $isAdmin = ([Security.Principal.WindowsPrincipal] `
@@ -171,6 +173,31 @@ $DistPlugins = Join-Path $DistDir 'plugins'
 if (Test-Path $DistPlugins) {
     Get-ChildItem $DistPlugins -Directory | ForEach-Object {
         Copy-Item $_.FullName -Destination $PluginsDir -Recurse -Force
+    }
+}
+
+if (Test-Path $PluginsSrc -PathType Container) {
+    Get-ChildItem $PluginsSrc -Directory | ForEach-Object {
+        $manifestFile = Join-Path $_.FullName 'manifest.json'
+        if (Test-Path $manifestFile -PathType Leaf) {
+            $dest = Join-Path $PluginsDir $_.Name
+            if (-not (Test-Path $dest)) { New-Item -ItemType Directory -Path $dest | Out-Null }
+            Copy-Item $manifestFile -Destination $dest -Force
+        }
+    }
+    $builtinNames = @(
+        Get-ChildItem $PluginsSrc -Directory |
+            Where-Object { Test-Path (Join-Path $_.FullName 'manifest.json') } |
+            ForEach-Object { $_.Name }
+    )
+    $builtinJson = ConvertTo-Json -InputObject $builtinNames
+    Set-Content -Path (Join-Path $TplDir 'builtin-plugins.json') -Value $builtinJson -Encoding UTF8
+}
+
+Get-ChildItem $PluginsDir -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+    if (-not (Test-Path (Join-Path $_.FullName 'manifest.json'))) {
+        Write-Err "plugin $($_.Name) has no manifest.json"
+        exit 1
     }
 }
 Write-Ok "Plugin files copied to $TplDir"
