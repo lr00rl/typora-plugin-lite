@@ -17,10 +17,16 @@ import type { GraphFile, GraphNote } from './types.js'
 
 const GRAPH_DIR = '.note-assistant'
 const GRAPH_FILE = 'graph.json'
-const BUILD_SCRIPT = 'tools/note-assistant/build-graph.mjs'
+// Vault tools live under `.tools/` after the 2026-08 rename. Keep the old
+// `tools/` path as a fallback for vaults that never moved.
+const BUILD_SCRIPTS = [
+  '.tools/note-assistant/build-graph.mjs',
+  'tools/note-assistant/build-graph.mjs',
+]
+const BUILD_TIMEOUT_MS = 600_000
 
 /** Bumped per deploy so `note-assistant:state` reveals which bundle is live. */
-export const BUILD_MARKER = 'palette-2026-08-22a'
+export const BUILD_MARKER = 'palette-2026-09-11a'
 
 export interface CurrentNoteRef {
   currentFile: string
@@ -212,10 +218,14 @@ export class GraphStore {
     // two concurrent builds through the fs.exists walk and tear graph.json.
     this.rebuildInFlight = true
     try {
-      const located = await this.findUpwardsForFile(BUILD_SCRIPT)
+      let located: { root: string; absPath: string } | null = null
+      for (const script of BUILD_SCRIPTS) {
+        located = await this.findUpwardsForFile(script)
+        if (located) break
+      }
       if (!located) return false
       const cmd = `node ${platform.shell.escape(located.absPath)} --root ${platform.shell.escape(located.root)} --allow-heuristic-blocks`
-      await platform.shell.run(cmd, { cwd: located.root, timeout: 120_000 })
+      await platform.shell.run(cmd, { cwd: located.root, timeout: BUILD_TIMEOUT_MS })
       await this.load(true)
       return true
     } catch (err) {
