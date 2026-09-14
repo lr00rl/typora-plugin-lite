@@ -70,7 +70,7 @@ CSS:     所有视觉效果（上标编号 ¹²³、右侧浮动、响应式布�
 | 仅插件 | 上标编号 + 右侧边栏浮动（插件内置样式） | 无特殊样式 |
 | 仅主题 | 无效果（CSS 无法识别编辑器内的 sidenote） | 旁注浮在右侧 |
 
-推荐搭配 [Claude-like Theme](https://github.com/lr00rl/Typora_Claude-Like_Theme) 使用——主题 CSS 同时包含导出样式和编辑器样式规则，插件负责识别旁注并添加 CSS 可用的 class，两者互补。
+推荐搭配孪生项目 [typora-claude-like-theme](https://github.com/lr00rl/typora-claude-like-theme) 使用。主题 CSS 同时包含导出样式和编辑器样式规则，插件负责识别旁注并添加 CSS 可用的 class，两者互补。
 
 ## 技术细节
 

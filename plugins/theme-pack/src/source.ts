@@ -1,4 +1,4 @@
-export const DEFAULT_THEME_SOURCE = 'https://github.com/lr00rl/Typora_Claude-Like_Theme'
+export const DEFAULT_THEME_SOURCE = 'https://github.com/lr00rl/typora-claude-like-theme'
 export const DEFAULT_THEME_REF = 'main'
 export const PACK_MANIFEST = 'theme-pack.json'
 
@@ -73,6 +73,13 @@ export function githubRawUrl(source: GitHubSource, path: string): string {
   return `https://raw.githubusercontent.com/${source.owner}/${source.repo}/${ref}/${file}`
 }
 
+// The default pack moved to a new repo and the old one was deleted, so GitHub
+// serves no redirect. Settings saved before the move still name the old repo.
+const RENAMED_REPOS: Readonly<Record<string, string>> = {
+  'lr00rl/typora_claude-like_theme': 'typora-claude-like-theme',
+}
+
 function github(owner: string, repo: string, ref: string): GitHubSource {
-  return { kind: 'github', owner, repo: repo.replace(/\.git$/i, ''), ref }
+  const name = repo.replace(/\.git$/i, '')
+  return { kind: 'github', owner, repo: RENAMED_REPOS[`${owner}/${name}`.toLowerCase()] ?? name, ref }
 }

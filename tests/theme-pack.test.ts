@@ -34,36 +34,45 @@ function packJson(files: string[], extra: Record<string, unknown> = {}): string 
 test('parses GitHub repos, blob URLs, short names, and local folders', () => {
   const homedir = '/Users/cdcd'
   assert.deepEqual(
-    parseThemeSource('https://github.com/lr00rl/Typora_Claude-Like_Theme', { homedir, ref: 'main' }),
-    { kind: 'github', owner: 'lr00rl', repo: 'Typora_Claude-Like_Theme', ref: 'main' },
+    parseThemeSource('https://github.com/lr00rl/typora-claude-like-theme', { homedir, ref: 'main' }),
+    { kind: 'github', owner: 'lr00rl', repo: 'typora-claude-like-theme', ref: 'main' },
   )
   assert.deepEqual(
-    parseThemeSource('lr00rl/Typora_Claude-Like_Theme.git', { homedir, ref: 'main' }),
-    { kind: 'github', owner: 'lr00rl', repo: 'Typora_Claude-Like_Theme', ref: 'main' },
+    parseThemeSource('lr00rl/typora-claude-like-theme.git', { homedir, ref: 'main' }),
+    { kind: 'github', owner: 'lr00rl', repo: 'typora-claude-like-theme', ref: 'main' },
   )
   assert.deepEqual(
-    parseThemeSource('https://github.com/lr00rl/Typora_Claude-Like_Theme/tree/v1.2.2', { homedir }),
-    { kind: 'github', owner: 'lr00rl', repo: 'Typora_Claude-Like_Theme', ref: 'v1.2.2' },
+    parseThemeSource('https://github.com/lr00rl/typora-claude-like-theme/tree/v1.2.2', { homedir }),
+    { kind: 'github', owner: 'lr00rl', repo: 'typora-claude-like-theme', ref: 'v1.2.2' },
   )
   assert.deepEqual(
-    parseThemeSource('https://github.com/lr00rl/Typora_Claude-Like_Theme/blob/main/claude-like.css', { homedir }),
-    { kind: 'github', owner: 'lr00rl', repo: 'Typora_Claude-Like_Theme', ref: 'main' },
+    parseThemeSource('https://github.com/lr00rl/typora-claude-like-theme/blob/main/claude-like.css', { homedir }),
+    { kind: 'github', owner: 'lr00rl', repo: 'typora-claude-like-theme', ref: 'main' },
   )
   assert.deepEqual(
-    parseThemeSource('https://raw.githubusercontent.com/lr00rl/Typora_Claude-Like_Theme/main/claude-like-dark.css', { homedir }),
-    { kind: 'github', owner: 'lr00rl', repo: 'Typora_Claude-Like_Theme', ref: 'main' },
+    parseThemeSource('https://raw.githubusercontent.com/lr00rl/typora-claude-like-theme/main/claude-like-dark.css', { homedir }),
+    { kind: 'github', owner: 'lr00rl', repo: 'typora-claude-like-theme', ref: 'main' },
   )
   assert.deepEqual(
-    parseThemeSource('~/roobli/lr00rl/Typora_Claude-Like_Theme', { homedir }),
-    { kind: 'local', dir: '/Users/cdcd/roobli/lr00rl/Typora_Claude-Like_Theme' },
+    parseThemeSource('~/roobli/lr00rl/typora-claude-like-theme', { homedir }),
+    { kind: 'local', dir: '/Users/cdcd/roobli/lr00rl/typora-claude-like-theme' },
   )
   assert.deepEqual(
-    parseThemeSource('C:/Users/cdcd/Typora_Claude-Like_Theme', { homedir: 'C:/Users/cdcd' }),
-    { kind: 'local', dir: 'C:/Users/cdcd/Typora_Claude-Like_Theme' },
+    parseThemeSource('C:/Users/cdcd/typora-claude-like-theme', { homedir: 'C:/Users/cdcd' }),
+    { kind: 'local', dir: 'C:/Users/cdcd/typora-claude-like-theme' },
   )
   assert.equal(
     parseThemeSource('', { homedir }).kind,
     'github',
+  )
+  // Settings saved before the theme repo was renamed still name the old repo.
+  assert.deepEqual(
+    parseThemeSource('https://github.com/lr00rl/Typora_Claude-Like_Theme', { homedir, ref: 'main' }),
+    { kind: 'github', owner: 'lr00rl', repo: 'typora-claude-like-theme', ref: 'main' },
+  )
+  assert.deepEqual(
+    parseThemeSource('lr00rl/Typora_Claude-Like_Theme.git', { homedir, ref: 'v1.2.2' }),
+    { kind: 'github', owner: 'lr00rl', repo: 'typora-claude-like-theme', ref: 'v1.2.2' },
   )
   assert.throws(() => parseThemeSource('javascript:alert(1)', { homedir }))
   assert.throws(
@@ -215,7 +224,7 @@ test('sync writes new CSS, skips 304, and never overwrites a symlink', async () 
 
   files.set('/themes/keep.css', 'old')
   const remote = await syncThemePack(
-    { kind: 'github', owner: 'lr00rl', repo: 'Typora_Claude-Like_Theme', ref: 'main' },
+    { kind: 'github', owner: 'lr00rl', repo: 'typora-claude-like-theme', ref: 'main' },
     '/themes',
     {
       ...deps,
@@ -237,7 +246,7 @@ test('remote sync honors If-None-Match 304 and refuses a missing bootloader', as
   ])
   let sawEtag = ''
   const result = await syncThemePack(
-    { kind: 'github', owner: 'lr00rl', repo: 'Typora_Claude-Like_Theme', ref: 'main' },
+    { kind: 'github', owner: 'lr00rl', repo: 'typora-claude-like-theme', ref: 'main' },
     '/themes',
     {
       join: (...parts: string[]) => parts.join('/'),
@@ -258,7 +267,7 @@ test('remote sync honors If-None-Match 304 and refuses a missing bootloader', as
       },
     },
     {
-      source: 'https://github.com/lr00rl/Typora_Claude-Like_Theme',
+      source: 'https://github.com/lr00rl/typora-claude-like-theme',
       ref: 'main',
       files: { 'claude-like.css': { etag: '"abc"', kind: 'written' } },
       checkedAt: 1,

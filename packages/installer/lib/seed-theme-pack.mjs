@@ -10,7 +10,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 const OWNER = 'lr00rl'
-const REPO = 'Typora_Claude-Like_Theme'
+const REPO = 'typora-claude-like-theme'
 const REF = 'main'
 const BOOTLOADER_TYPE = 'typora-plugin-lite-theme-pack'
 const BOOTLOADER_VERSION = 1

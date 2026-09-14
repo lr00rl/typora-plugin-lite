@@ -320,7 +320,7 @@ Codex 标题数据库读取属于尽力而为的增强。数据库缺失、正�
 
 ## 6. 安装配套 Typora 主题
 
-主题位于独立仓库 `Typora_Claude-Like_Theme`，提供：
+主题位于孪生仓库 [typora-claude-like-theme](https://github.com/lr00rl/typora-claude-like-theme)，提供：
 
 - `Claude-like Session`
 - `Claude-like Session Dark`
@@ -348,7 +348,7 @@ session/agent-session.css
 示例：
 
 ```bash
-theme_repo=/absolute/path/to/Typora_Claude-Like_Theme
+theme_repo=/absolute/path/to/typora-claude-like-theme
 theme_dir="$HOME/Library/Application Support/abnerworks.Typora/themes"
 
 mkdir -p "$theme_dir/session"

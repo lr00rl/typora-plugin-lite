@@ -88,7 +88,7 @@ npm run session:archive -- codex <session-id> -o session.md
 
 分卷只在生成器控制的标题/事件边界发生。单个超大工具结果会先拆成多个各自闭合的代码围栏，因此不会生成跨文件断裂的 Markdown。索引和每一卷都使用私有 `0600` 权限；重新发布仍需显式 `--force`。
 
-配套主题位于 `Typora_Claude-Like_Theme`：
+配套主题位于孪生仓库 [typora-claude-like-theme](https://github.com/lr00rl/typora-claude-like-theme)：
 
 - `Claude-like Session`
 - `Claude-like Session Dark`

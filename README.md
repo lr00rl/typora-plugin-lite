@@ -7,6 +7,9 @@ It is designed to solve the cross-platform compatibility issues of existing plug
 > [!WARNING]
 > **Under active development.** Use at your own risk. The architecture and APIs are subject to change without notice.
 
+> [!TIP]
+> **Twin project:** [typora-claude-like-theme](https://github.com/lr00rl/typora-claude-like-theme) is the Typora theme developed alongside this repo. [`theme-pack`](#theme-pack) installs and syncs it by default, and its CSS styles what `sidenote`, `wider`, and `fence-enhance` render in the editor. Each works on its own; together they give the complete experience.
+
 ---
 
 ## 🚀 Key Features
@@ -75,7 +78,7 @@ The source must be a GitHub repository whose root contains a bootloader:
 }
 ```
 
-A repo without that file is rejected. Default source is `https://github.com/lr00rl/Typora_Claude-Like_Theme`. Point Plugin Center at another GitHub URL or `owner/repo` (optional git ref) and run `Theme Pack: Sync now`. If the active theme is one of those files and GitHub has a newer CSS, Typora's `#theme_css` link is cache-busted so the open window follows the file.
+A repo without that file is rejected. Default source is the twin theme repo [lr00rl/typora-claude-like-theme](https://github.com/lr00rl/typora-claude-like-theme); settings saved with its old name `lr00rl/Typora_Claude-Like_Theme` resolve to it. Point Plugin Center at another GitHub URL or `owner/repo` (optional git ref) and run `Theme Pack: Sync now`. If the active theme is one of those files and GitHub has a newer CSS, Typora's `#theme_css` link is cache-busted so the open window follows the file.
 
 ### `fuzzy-search` path navigation
 
