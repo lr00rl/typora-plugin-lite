@@ -11,6 +11,12 @@
  * `[[` + `a/b|` + `Title` + `]]` with the first, second and fourth parts
  * hidden, so the reader sees `Title` while the model still sees the full link.
  *
+ * Underscores are the other host fight. Typora turns `_…_` into hidden
+ * `.md-meta` plus `<em>` before this plugin runs. A closer `_` on a later
+ * wiki-link can swallow `]]…[[`, so a single text node never contains a
+ * complete `[[…]]`. Those links are wrapped across the split nodes instead;
+ * textContent still round-trips, and the visible label is a CSS `::after`.
+ *
  * The caret is the other constraint. A decorated block reverts to raw markdown
  * the moment it takes focus, which is how Typora treats its own inline syntax,
  * so editing a link is exactly as it was before. Reprocessing is scoped to the
@@ -21,6 +27,14 @@
 import { editor } from '@typora-plugin-lite/core'
 
 import type { GraphStore } from './graph.js'
+import type { WikiMatch } from './wiki-dom.js'
+import {
+  displayLabel,
+  flattenMarkdownText,
+  matchCrossesTextNodes,
+  wikiMatchesIn,
+  wrapMappedRange,
+} from './wiki-dom.js'
 import { WIKI_INLINE_RE } from './wiki-line.js'
 
 /** Global variant; the shared one is non-global so `.match` keeps working. */
@@ -180,6 +194,7 @@ export class InlineRenderer {
   private decorate(block: HTMLElement): void {
     if (block.closest(SKIP_SELECTOR)) return
     const currentFile = editor.getFilePath()
+    this.wrapCrossNodeLinks(block, currentFile)
     const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT, {
       acceptNode: (node: Node) => {
         const parent = node.parentElement
@@ -198,6 +213,50 @@ export class InlineRenderer {
 
     for (const textNode of targets) {
       this.replaceInTextNode(textNode, currentFile)
+    }
+  }
+
+  /**
+   * Wiki-links that Typora split with `_italic_` live in several text nodes
+   * (hidden `.md-meta` underscores plus `<em>`). Wrap those first; leftover
+   * whole links in a single text node still go through replaceInTextNode.
+   */
+  private wrapCrossNodeLinks(block: HTMLElement, currentFile: string): void {
+    const { text, map } = flattenMarkdownText(block, SKIP_SELECTOR)
+    const matches = wikiMatchesIn(text).filter(match => matchCrossesTextNodes(map, match))
+    for (let i = matches.length - 1; i >= 0; i--) {
+      const match = matches[i]
+      const slice = map.slice(match.index, match.index + match.whole.length)
+      const wrapper = wrapMappedRange(slice)
+      if (!wrapper) continue
+      this.stampAcrossLink(wrapper, match, currentFile)
+    }
+  }
+
+  private stampAcrossLink(wrapper: HTMLElement, match: WikiMatch, currentFile: string): void {
+    const src = document.createElement('span')
+    src.className = 'tpl-wl-src'
+    while (wrapper.firstChild) src.appendChild(wrapper.firstChild)
+    wrapper.appendChild(src)
+    if (wrapper.textContent !== match.whole) {
+      while (src.firstChild) wrapper.insertBefore(src.firstChild, src)
+      src.remove()
+      const parent = wrapper.parentNode
+      if (parent) {
+        while (wrapper.firstChild) parent.insertBefore(wrapper.firstChild, wrapper)
+        parent.removeChild(wrapper)
+      }
+      return
+    }
+    wrapper.className = 'tpl-wl tpl-wl-across'
+    wrapper.dataset.tplWlTarget = match.target
+    wrapper.dataset.tplWlLabel = displayLabel(match)
+    wrapper.title = match.target
+    if (match.target && currentFile && this.store.isLoaded) {
+      if (this.store.probeNoteTarget(match.target, currentFile) === 'unknown') {
+        wrapper.classList.add('tpl-wl-missing')
+        wrapper.title = `${match.target}（索引里找不到，可能已移动或需要重建索引）`
+      }
     }
   }
 
@@ -271,7 +330,14 @@ export class InlineRenderer {
     for (const link of Array.from(links)) {
       const parent = link.parentNode
       if (!parent) continue
-      parent.replaceChild(document.createTextNode(link.textContent || ''), link)
+      if (link.classList.contains('tpl-wl-across')) {
+        const src = link.querySelector(':scope > .tpl-wl-src')
+        const nodes = src ? Array.from(src.childNodes) : Array.from(link.childNodes)
+        for (const node of nodes) parent.insertBefore(node, link)
+        parent.removeChild(link)
+      } else {
+        parent.replaceChild(document.createTextNode(link.textContent || ''), link)
+      }
       if (parent instanceof HTMLElement || parent instanceof DocumentFragment) {
         (parent as Element).normalize?.()
       }
@@ -344,7 +410,9 @@ export class InlineRenderer {
     if (!nodes.length) return false
     return nodes.every(node => {
       if (node instanceof HTMLElement) {
-        return node.classList.contains('tpl-wl') || !!node.closest('.tpl-wl')
+        return node.classList.contains('tpl-wl')
+          || node.classList.contains('tpl-wl-src')
+          || !!node.closest('.tpl-wl')
       }
       return node.parentElement?.closest('.tpl-wl') != null
     })

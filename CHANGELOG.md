@@ -2,6 +2,11 @@
 
 ## 未发布
 
+### Note Assistant：wiki-link 不再被 Typora 斜体拆开
+
+- Typora 会把日期文件名里的下划线收成斜体，`[[Done_2026_08_31_…]]` 被拆到多个文本节点后，原先按单节点扫描就会漏掉。现在跨节点拼出完整 `[[…]]` 再包一层，源码仍是原来的 wiki-link。
+- 两段 wiki-link 之间被斜体吃进去的括号说明会恢复成正体。
+
 ### Remote Control：多窗口下不再"断线即失联"
 
 - sidecar 原本只记一个 Typora 会话（最后认证的那个窗口），它一断开就报 "Typora session is unavailable"，其他窗口明明都连着也不用。现在记住所有 Typora 窗口的会话，当前目标断开时回退到最近活跃的那个。

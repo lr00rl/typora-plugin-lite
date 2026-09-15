@@ -446,6 +446,37 @@ export const CSS = `
 #write .tpl-wl {
   cursor: pointer;
   border-radius: 3px;
+  font-style: normal;
+}
+#write .tpl-wl em {
+  font-style: inherit;
+}
+#write .tpl-wl-across .tpl-wl-src {
+  display: inline-block;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  font-size: 0;
+  line-height: 0;
+  color: transparent;
+  vertical-align: top;
+}
+#write .tpl-wl-across::after {
+  content: attr(data-tpl-wl-label);
+  color: var(--tpl-ui-accent, var(--accent-color, #0e7c74));
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--tpl-ui-accent, var(--accent-color, #0e7c74)) 30%, transparent);
+  padding-bottom: 1px;
+}
+/* A closer underscore pair that spanned two wiki-links leaves an em husk. */
+#write [md-inline="em"]:not(:has(.md-meta)) em {
+  font-style: inherit;
+}
+@media (hover: hover) and (pointer: fine) {
+  #write .tpl-wl-across:hover::after {
+    border-bottom-color: var(--tpl-ui-accent, var(--accent-color, #0e7c74));
+    background: var(--tpl-ui-surface-subtle, rgba(128, 128, 128, 0.06));
+  }
 }
 #write .tpl-wl-title {
   color: var(--tpl-ui-accent, var(--accent-color, #0e7c74));
@@ -460,6 +491,12 @@ export const CSS = `
   }
 }
 #write .tpl-wl-missing .tpl-wl-title {
+  color: var(--tpl-ui-muted, var(--text-color, inherit));
+  opacity: 0.75;
+  border-bottom-style: dashed;
+  border-bottom-color: color-mix(in srgb, currentColor 45%, transparent);
+}
+#write .tpl-wl-missing.tpl-wl-across::after {
   color: var(--tpl-ui-muted, var(--text-color, inherit));
   opacity: 0.75;
   border-bottom-style: dashed;

@@ -250,3 +250,73 @@ test('switching notes repaints instead of reusing the old document state', async
     await teardownDom(saved)
   }
 })
+
+/** Live Typora HTML: one `_…_` pair swallowed two dated wiki-links. */
+const TYPORA_EMPHASIS_HTML = '<span md-inline="plain" class="md-plain">关联：[[unlock联系方式统筹]]（供应商能力与实测）、[[Done_2026_08_31</span><span md-inline="em" class="md-pair-s"><span class="md-meta md-before">_</span><em><span md-inline="plain" class="md-plain">对齐模型后端所有解锁的接口]]（招聘端现在怎么调）、[[2026_08_28</span></em><span class="md-meta md-after">_</span></span><span md-inline="plain" class="md-plain">补充people-unlock]]（mira-api 隐藏路由）。</span>'
+
+test('flattening Typora emphasis DOM recovers the original wiki-link source', async () => {
+  const { saved } = await setupDom()
+  try {
+    const { flattenMarkdownText, wikiMatchesIn, matchCrossesTextNodes } = await import('../plugins/note-assistant/src/wiki-dom.ts')
+    const write = makeWrite()
+    const paragraph = document.createElement('p')
+    paragraph.innerHTML = TYPORA_EMPHASIS_HTML
+    write.appendChild(paragraph)
+
+    const { text, map } = flattenMarkdownText(paragraph, 'code, pre, .tpl-wl')
+    assert.equal(
+      text,
+      '关联：[[unlock联系方式统筹]]（供应商能力与实测）、[[Done_2026_08_31_对齐模型后端所有解锁的接口]]（招聘端现在怎么调）、[[2026_08_28_补充people-unlock]]（mira-api 隐藏路由）。',
+    )
+    const matches = wikiMatchesIn(text)
+    assert.deepEqual(matches.map(item => item.target), [
+      'unlock联系方式统筹',
+      'Done_2026_08_31_对齐模型后端所有解锁的接口',
+      '2026_08_28_补充people-unlock',
+    ])
+    assert.equal(matchCrossesTextNodes(map, matches[0]!), false)
+    assert.equal(matchCrossesTextNodes(map, matches[1]!), true)
+    assert.equal(matchCrossesTextNodes(map, matches[2]!), true)
+  } finally {
+    await teardownDom(saved)
+  }
+})
+
+test('wiki-links split by Typora _italic_ still decorate and keep textContent', async () => {
+  const { saved } = await setupDom()
+  try {
+    const { InlineRenderer } = await import('../plugins/note-assistant/src/inline.ts')
+    const write = makeWrite()
+    const paragraph = document.createElement('p')
+    paragraph.setAttribute('cid', 'p1')
+    paragraph.innerHTML = TYPORA_EMPHASIS_HTML
+    const original = paragraph.textContent
+    write.appendChild(paragraph)
+
+    const renderer = new InlineRenderer(stubStore() as any, () => {})
+    renderer.attach(write)
+
+    assert.equal(paragraph.textContent, original, 'emphasis wrap must not add or drop characters')
+    const links = [...write.querySelectorAll<HTMLElement>('.tpl-wl')]
+    assert.equal(links.length, 3)
+    assert.deepEqual(
+      links.map(link => link.dataset.tplWlTarget),
+      [
+        'unlock联系方式统筹',
+        'Done_2026_08_31_对齐模型后端所有解锁的接口',
+        '2026_08_28_补充people-unlock',
+      ],
+    )
+    assert.equal(write.querySelectorAll('.tpl-wl-across').length, 2)
+    assert.equal(
+      write.querySelector('.tpl-wl-across')?.getAttribute('data-tpl-wl-label'),
+      'Done_2026_08_31_对齐模型后端所有解锁的接口',
+    )
+
+    renderer.detach()
+    assert.equal(write.querySelector('.tpl-wl'), null)
+    assert.equal(paragraph.textContent, original)
+  } finally {
+    await teardownDom(saved)
+  }
+})
