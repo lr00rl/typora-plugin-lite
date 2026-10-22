@@ -32,7 +32,7 @@ function packJson(files: string[], extra: Record<string, unknown> = {}): string 
 }
 
 test('parses GitHub repos, blob URLs, short names, and local folders', () => {
-  const homedir = '/Users/cdcd'
+  const homedir = '/Users/alex'
   assert.deepEqual(
     parseThemeSource('https://github.com/lr00rl/typora-claude-like-theme', { homedir, ref: 'main' }),
     { kind: 'github', owner: 'lr00rl', repo: 'typora-claude-like-theme', ref: 'main' },
@@ -54,12 +54,12 @@ test('parses GitHub repos, blob URLs, short names, and local folders', () => {
     { kind: 'github', owner: 'lr00rl', repo: 'typora-claude-like-theme', ref: 'main' },
   )
   assert.deepEqual(
-    parseThemeSource('~/roobli/lr00rl/typora-claude-like-theme', { homedir }),
-    { kind: 'local', dir: '/Users/cdcd/roobli/lr00rl/typora-claude-like-theme' },
+    parseThemeSource('~/src/typora-claude-like-theme', { homedir }),
+    { kind: 'local', dir: '/Users/alex/src/typora-claude-like-theme' },
   )
   assert.deepEqual(
-    parseThemeSource('C:/Users/cdcd/typora-claude-like-theme', { homedir: 'C:/Users/cdcd' }),
-    { kind: 'local', dir: 'C:/Users/cdcd/typora-claude-like-theme' },
+    parseThemeSource('C:/Users/alex/typora-claude-like-theme', { homedir: 'C:/Users/alex' }),
+    { kind: 'local', dir: 'C:/Users/alex/typora-claude-like-theme' },
   )
   assert.equal(
     parseThemeSource('', { homedir }).kind,
@@ -100,47 +100,47 @@ test('theme-pack.json requires the bootloader and only root-level css files', ()
 
 test('resolves the official Typora themes folder per OS', () => {
   assert.equal(
-    resolveThemesDir({ isMac: true, homedir: '/Users/cdcd' }),
-    '/Users/cdcd/Library/Application Support/abnerworks.Typora/themes',
+    resolveThemesDir({ isMac: true, homedir: '/Users/alex' }),
+    '/Users/alex/Library/Application Support/abnerworks.Typora/themes',
   )
   assert.equal(
-    resolveThemesDir({ isMac: false, homedir: '/home/cdcd', nodePlatform: 'linux' }),
-    '/home/cdcd/.config/Typora/themes',
+    resolveThemesDir({ isMac: false, homedir: '/home/alex', nodePlatform: 'linux' }),
+    '/home/alex/.config/Typora/themes',
   )
   assert.equal(
     resolveThemesDir({
       isMac: false,
-      homedir: '/home/cdcd',
-      userPath: '/home/cdcd/.config/Typora',
+      homedir: '/home/alex',
+      userPath: '/home/alex/.config/Typora',
       nodePlatform: 'linux',
     }),
-    '/home/cdcd/.config/Typora/themes',
+    '/home/alex/.config/Typora/themes',
   )
   assert.equal(
     resolveThemesDir({
       isMac: false,
-      homedir: 'C:/Users/cdcd',
+      homedir: 'C:/Users/alex',
       nodePlatform: 'win32',
-      appData: 'C:/Users/cdcd/AppData/Roaming',
+      appData: 'C:/Users/alex/AppData/Roaming',
     }),
-    'C:/Users/cdcd/AppData/Roaming/Typora/themes',
+    'C:/Users/alex/AppData/Roaming/Typora/themes',
   )
   assert.equal(
     resolveThemesDir({
       isMac: false,
-      homedir: 'C:/Users/cdcd',
-      userDataPath: 'C:/Users/cdcd/AppData/Roaming/Typora',
+      homedir: 'C:/Users/alex',
+      userDataPath: 'C:/Users/alex/AppData/Roaming/Typora',
       nodePlatform: 'win32',
     }),
-    'C:/Users/cdcd/AppData/Roaming/Typora/themes',
+    'C:/Users/alex/AppData/Roaming/Typora/themes',
   )
   assert.equal(
-    pathToFileUrl('/Users/cdcd/Library/Application Support/abnerworks.Typora/themes/claude-like.css'),
-    'file:///Users/cdcd/Library/Application%20Support/abnerworks.Typora/themes/claude-like.css',
+    pathToFileUrl('/Users/alex/Library/Application Support/abnerworks.Typora/themes/claude-like.css'),
+    'file:///Users/alex/Library/Application%20Support/abnerworks.Typora/themes/claude-like.css',
   )
   assert.equal(
-    pathToFileUrl('C:/Users/cdcd/AppData/Roaming/Typora/themes/claude-like.css'),
-    'file:///C:/Users/cdcd/AppData/Roaming/Typora/themes/claude-like.css',
+    pathToFileUrl('C:/Users/alex/AppData/Roaming/Typora/themes/claude-like.css'),
+    'file:///C:/Users/alex/AppData/Roaming/Typora/themes/claude-like.css',
   )
 })
 
