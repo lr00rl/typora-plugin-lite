@@ -32,11 +32,11 @@ test('Windows separators and drive letters normalize before math', () => {
 
 test('wikiTargetFor strips the extension and keeps CJK and spaces raw', () => {
   const target = wikiTargetFor(
-    'A000_Theoretical_Knowledge/A200_Algorithm/A2001_DistributedSystem/raft.md',
-    '/Users/me/vault/A000_Theoretical_Knowledge/A400_Softer/读书笔记.md',
+    'Theory/Algorithms/Distributed Systems/raft.md',
+    '/Users/me/vault/Theory/Reading/读书笔记.md',
     '/Users/me/vault',
   )
-  assert.equal(target, '../A200_Algorithm/A2001_DistributedSystem/raft')
+  assert.equal(target, '../Algorithms/Distributed Systems/raft')
 })
 
 test('wikiTargetFor for a same-directory note is the bare name', () => {
