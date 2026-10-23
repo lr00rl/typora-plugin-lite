@@ -541,7 +541,11 @@ export async function readLocalSettings(settingsPath?: string): Promise<LocalSet
       throw error
     }
   }
-  throw new Error(`Remote-control settings not found. Tried: ${candidates.join(', ')}`)
+  // Callers tell "Typora has not written its settings yet" apart from a
+  // broken file by this code, as they did when the raw fs error surfaced here.
+  throw Object.assign(new Error(`Remote-control settings not found. Tried: ${candidates.join(', ')}`), {
+    code: 'ENOENT',
+  })
 }
 
 export function getDefaultSettingsPath(): string {
